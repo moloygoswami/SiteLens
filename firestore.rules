@@ -1,0 +1,146 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // --- Helper Functions ---
+    function isAuthenticated() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function getMemberDoc(siteId) {
+      return get(/databases/$(database)/documents/sites/$(siteId)/members/$(request.auth.uid));
+    }
+
+    function isSiteMember(siteId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/sites/$(siteId)/members/$(request.auth.uid)) &&
+        getMemberDoc(siteId).data.status == 'active';
+    }
+
+    function isSiteAdmin(siteId) {
+      return isSiteMember(siteId) && getMemberDoc(siteId).data.role == 'admin';
+    }
+
+    function isValidSiteId(siteId) {
+      // Must be a standard 20-character base62 unpredictable Firestore auto-ID
+      return siteId.matches('^[a-zA-Z0-9]{20}$');
+    }
+
+    // --- User Profiles ---
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow write: if isOwner(userId);
+    }
+
+    // --- Sites & Subcollections ---
+    match /sites/{siteId} {
+      allow read: if isSiteMember(siteId);
+      allow create: if isAuthenticated()
+                   && isValidSiteId(siteId)
+                   && request.resource.data.creator_id == request.auth.uid
+                   && (!('id' in request.resource.data) || request.resource.data.id == siteId)
+                   && !exists(/databases/$(database)/documents/sites/$(siteId))
+                   && existsAfter(/databases/$(database)/documents/sites/$(siteId)/members/$(request.auth.uid))
+                   && getAfter(/databases/$(database)/documents/sites/$(siteId)/members/$(request.auth.uid)).data.role == 'admin'
+                   && getAfter(/databases/$(database)/documents/sites/$(siteId)/members/$(request.auth.uid)).data.status == 'active'
+                   && getAfter(/databases/$(database)/documents/sites/$(siteId)/members/$(request.auth.uid)).data.user_id == request.auth.uid;
+      allow update: if isSiteAdmin(siteId);
+      allow delete: if false;
+
+      // Site Members Roster
+      match /members/{memberId} {
+        allow read: if isSiteMember(siteId) || isOwner(memberId);
+
+        // Bootstrap creation strictly during atomic site creation OR invitation by existing site admin
+        allow create: if isAuthenticated() && (
+          (isOwner(memberId) &&
+           request.resource.data.role == 'admin' &&
+           request.resource.data.status == 'active' &&
+           request.resource.data.user_id == memberId &&
+           !exists(/databases/$(database)/documents/sites/$(siteId)) &&
+           existsAfter(/databases/$(database)/documents/sites/$(siteId)) &&
+           getAfter(/databases/$(database)/documents/sites/$(siteId)).data.creator_id == request.auth.uid)
+          ||
+          (isSiteAdmin(siteId) && request.resource.data.user_id == memberId)
+        );
+
+        allow update: if isSiteAdmin(siteId) && (
+          memberId != request.auth.uid ||
+          (request.resource.data.role == 'admin' && request.resource.data.status == 'active')
+        );
+        allow delete: if isSiteAdmin(siteId) && memberId != request.auth.uid;
+      }
+
+      // Evidence Media Metadata Collection (SiteLens Forensic Evidence)
+      match /media/{mediaId} {
+        // Read Evidence: Scoped strictly to site admin OR original document creator (vuln-0004)
+        allow read: if isSiteAdmin(siteId)
+                     || (isSiteMember(siteId) && (resource == null || resource.data.creator_id == request.auth.uid));
+
+        // Create Evidence: Active site member, caller is creator_id, strict forensic validation & canonical schema allowlist (vuln-0002)
+        allow create: if isSiteMember(siteId)
+                     && request.resource.data.keys().hasOnly([
+                          'id', 'site_id', 'creator_id',
+                          'storage_original_path', 'storage_thumbnail_path',
+                          'type', 'lat', 'lon', 'accuracy_m', 'low_accuracy',
+                          'altitude', 'activity_tag', 'observation_type', 'linked_media_id',
+                          'note', 'captured_at', 'sha256_hash', 'evidence_sha256_hash',
+                          'captured_address', 'is_deleted', 'created_at', 'updated_at', 'originalUri'
+                        ])
+                     && request.resource.data.id == mediaId
+                     && request.resource.data.site_id == siteId
+                     && request.resource.data.creator_id == request.auth.uid
+                     && request.resource.data.sha256_hash is string
+                     && request.resource.data.sha256_hash.matches('^[a-fA-F0-9]{64}$')
+                     && request.resource.data.evidence_sha256_hash is string
+                     && request.resource.data.evidence_sha256_hash.matches('^[a-fA-F0-9]{64}$')
+                     && request.resource.data.lat is number
+                     && request.resource.data.lat >= -90.0 && request.resource.data.lat <= 90.0
+                     && request.resource.data.lon is number
+                     && request.resource.data.lon >= -180.0 && request.resource.data.lon <= 180.0
+                     && (!('accuracy_m' in request.resource.data) || request.resource.data.accuracy_m == null || (request.resource.data.accuracy_m is number && request.resource.data.accuracy_m >= 0.0 && request.resource.data.accuracy_m <= 500.0))
+                     && request.resource.data.low_accuracy is bool
+                     && (!('altitude' in request.resource.data) || request.resource.data.altitude == null || (request.resource.data.altitude is number && request.resource.data.altitude >= -500.0 && request.resource.data.altitude <= 10000.0))
+                     && (!('captured_at' in request.resource.data) || (request.resource.data.captured_at is string && request.resource.data.captured_at.matches('^20[2-9][0-9]-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})?$') && request.resource.data.captured_at.size() <= 40))
+                     && (!('captured_address' in request.resource.data) || request.resource.data.captured_address == null || (request.resource.data.captured_address is string && request.resource.data.captured_address.size() <= 500))
+                     && (!('note' in request.resource.data) || request.resource.data.note == null || (request.resource.data.note is string && request.resource.data.note.size() <= 2000))
+                     && (!('activity_tag' in request.resource.data) || request.resource.data.activity_tag == null || (request.resource.data.activity_tag is string && request.resource.data.activity_tag.size() <= 100))
+                     && (!('linked_media_id' in request.resource.data) || request.resource.data.linked_media_id == null || (request.resource.data.linked_media_id is string && request.resource.data.linked_media_id.matches('^[a-zA-Z0-9_-]{1,64}$')))
+                     && request.resource.data.type in ['photo', 'video']
+                     && request.resource.data.is_deleted == false
+                     && (!('observation_type' in request.resource.data) || request.resource.data.observation_type in ['progress', 'nonConformity', 'closed', 'material', 'general'])
+                     && request.resource.data.storage_original_path is string
+                     && request.resource.data.storage_original_path == 'sites/' + siteId + '/media/' + mediaId + '/original'
+                     && request.resource.data.storage_thumbnail_path is string
+                     && request.resource.data.storage_thumbnail_path == 'sites/' + siteId + '/media/' + mediaId + '/thumbnail'
+                     && (!('originalUri' in request.resource.data) || (request.resource.data.originalUri is string && request.resource.data.originalUri.matches('media/orig_[a-zA-Z0-9_-]+\\.(jpg|mp4)')));
+
+        // Update Evidence: Only allowed mutable workflow fields via explicit diff()
+        // Gated strictly by site admin OR original document creator (fixes vuln-0007 BOLA)
+        // Validates observation_type against client ObservationType enum (vuln-0001)
+        allow update: if isSiteMember(siteId)
+                     && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+                          ['note', 'activity_tag', 'observation_type', 'linked_media_id', 'is_deleted', 'updated_at']
+                        )
+                     && (!('observation_type' in request.resource.data) || request.resource.data.observation_type in ['progress', 'nonConformity', 'closed', 'material', 'general'])
+                     && (!('note' in request.resource.data) || request.resource.data.note == null || (request.resource.data.note is string && request.resource.data.note.size() <= 2000))
+                     && (!('activity_tag' in request.resource.data) || request.resource.data.activity_tag == null || (request.resource.data.activity_tag is string && request.resource.data.activity_tag.size() <= 100))
+                     && (!('linked_media_id' in request.resource.data) || request.resource.data.linked_media_id == null || (request.resource.data.linked_media_id is string && request.resource.data.linked_media_id.matches('^[a-zA-Z0-9_-]{1,64}$')))
+                     && (
+                          isSiteAdmin(siteId)
+                          || (resource.data.creator_id == request.auth.uid &&
+                              (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['is_deleted'])
+                               || resource.data.is_deleted == false))
+                        );
+
+        // Physical Deletion Prohibited (Forensic Immutability)
+        allow delete: if false;
+      }
+    }
+  }
+}

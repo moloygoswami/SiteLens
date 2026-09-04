@@ -1,0 +1,19 @@
+{
+  "name": "sitelens-functions",
+  "version": "1.0.0",
+  "description": "SiteLens Firebase 2nd-gen Cloud Functions Backend",
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.0.0",
+    "firebase-functions": "^5.0.0"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
+  }
+}

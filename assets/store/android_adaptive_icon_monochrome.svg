@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 432 432" width="432" height="432">
+  <!-- Scaled Monochromatic Tinting Layer for Material You Android 13+ -->
+  <!-- Target: 60-65% container scale -->
+
+  <!-- Outer Ring -->
+  <circle cx="216" cy="216" r="126" fill="none" stroke="#000000" stroke-width="4.5" />
+  <circle cx="216" cy="216" r="114" fill="none" stroke="#000000" stroke-width="2.4" stroke-dasharray="6, 6" />
+
+  <!-- Crosshair Ticks -->
+  <g stroke="#000000" stroke-width="3.5" stroke-linecap="round">
+    <line x1="216" y1="94" x2="216" y2="110" />
+    <line x1="216" y1="322" x2="216" y2="338" />
+    <line x1="94" y1="216" x2="110" y2="216" />
+    <line x1="322" y1="216" x2="338" y2="216" />
+  </g>
+
+  <!-- Scaled Aperture Blades -->
+  <g fill="#000000">
+    <path d="M 216.0 124.0 L 287.9 158.6 L 229.9 187.2 Z" opacity="0.98" />
+    <path d="M 287.9 158.6 L 305.7 236.5 L 247.2 208.9 Z" opacity="0.88" />
+    <path d="M 305.7 236.5 L 255.9 298.9 L 241.0 236.0 Z" opacity="0.98" />
+    <path d="M 255.9 298.9 L 176.1 298.9 L 216.0 248.0 Z" opacity="0.88" />
+    <path d="M 176.1 298.9 L 126.3 236.5 L 191.0 236.0 Z" opacity="0.98" />
+    <path d="M 126.3 236.5 L 144.1 158.6 L 184.8 208.9 Z" opacity="0.88" />
+    <path d="M 144.1 158.6 L 216.0 124.0 L 202.1 187.2 Z" opacity="0.98" />
+  </g>
+
+  <!-- Corner Alignment Framing Brackets -->
+  <g stroke="#000000" stroke-width="3.5" fill="none">
+    <path d="M 148 168 L 148 148 L 168 148" />
+    <path d="M 284 168 L 284 148 L 264 148" />
+    <path d="M 148 264 L 148 284 L 168 284" />
+    <path d="M 284 264 L 284 284 L 264 284" />
+  </g>
+
+  <!-- Center Core -->
+  <circle cx="216" cy="216" r="20" fill="#000000" />
+  <circle cx="216" cy="216" r="8" fill="#FFFFFF" />
+</svg>

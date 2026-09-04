@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 432 432" width="432" height="432">
+  <defs>
+    <!-- Enhanced High-Contrast Aperture Blade Gradient -->
+    <linearGradient id="bladeGradAdaptive" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFA84A" />
+      <stop offset="45%" stop-color="#F27A1A" />
+      <stop offset="100%" stop-color="#D96309" />
+    </linearGradient>
+
+    <!-- Subtle Depth Filter for Aperture Core -->
+    <filter id="coreShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.6" />
+    </filter>
+  </defs>
+
+  <!-- Central Safe Zone: (84, 84) to (348, 348) -> 264x264 px -->
+  <!-- Target: Inner logo occupies 60–65% of 288px squircle container (173–187px diameter) -->
+  <!-- Center is (216, 216) -->
+
+  <!-- Outer Tactile Lens Chassis Ring -->
+  <circle cx="216" cy="216" r="126" fill="#1C1E23" stroke="#3E424B" stroke-width="4" />
+  <circle cx="216" cy="216" r="114" fill="none" stroke="#F27A1A" stroke-width="2.4" stroke-dasharray="6, 6" opacity="0.9" />
+  <circle cx="216" cy="216" r="102" fill="#141518" stroke="#2B2D33" stroke-width="4.5" />
+
+  <!-- Tactical Reticle Crosshair Ticks -->
+  <g stroke="#FFFFFF" stroke-width="3.5" stroke-linecap="round" opacity="0.9">
+    <!-- Top -->
+    <line x1="216" y1="94" x2="216" y2="110" />
+    <!-- Bottom -->
+    <line x1="216" y1="322" x2="216" y2="338" />
+    <!-- Left -->
+    <line x1="94" y1="216" x2="110" y2="216" />
+    <!-- Right -->
+    <line x1="322" y1="216" x2="338" y2="216" />
+  </g>
+
+  <!-- Corner Alignment Framing Brackets (Scaled & Crisp) -->
+  <g stroke="#F27A1A" stroke-width="3.5" fill="none" stroke-linecap="square">
+    <path d="M 148 168 L 148 148 L 168 148" />
+    <path d="M 284 168 L 284 148 L 264 148" />
+    <path d="M 148 264 L 148 284 L 168 284" />
+    <path d="M 284 264 L 284 284 L 264 284" />
+  </g>
+
+  <!-- Scaled Forensic Aperture Blades (Occupies ~64% of container) -->
+  <g id="apertureAdaptive" filter="url(#coreShadow)">
+    <!-- Blade 1 -->
+    <path d="M 216.0 124.0 L 287.9 158.6 L 229.9 187.2 Z" fill="url(#bladeGradAdaptive)" opacity="0.98" />
+    <!-- Blade 2 -->
+    <path d="M 287.9 158.6 L 305.7 236.5 L 247.2 208.9 Z" fill="url(#bladeGradAdaptive)" opacity="0.92" />
+    <!-- Blade 3 -->
+    <path d="M 305.7 236.5 L 255.9 298.9 L 241.0 236.0 Z" fill="url(#bladeGradAdaptive)" opacity="0.98" />
+    <!-- Blade 4 -->
+    <path d="M 255.9 298.9 L 176.1 298.9 L 216.0 248.0 Z" fill="url(#bladeGradAdaptive)" opacity="0.92" />
+    <!-- Blade 5 -->
+    <path d="M 176.1 298.9 L 126.3 236.5 L 191.0 236.0 Z" fill="url(#bladeGradAdaptive)" opacity="0.98" />
+    <!-- Blade 6 -->
+    <path d="M 126.3 236.5 L 144.1 158.6 L 184.8 208.9 Z" fill="url(#bladeGradAdaptive)" opacity="0.92" />
+    <!-- Blade 7 -->
+    <path d="M 144.1 158.6 L 216.0 124.0 L 202.1 187.2 Z" fill="url(#bladeGradAdaptive)" opacity="0.98" />
+  </g>
+
+  <!-- Central Optical Core Dot (Enlarged for Legibility) -->
+  <circle cx="216" cy="216" r="22" fill="#0E0F10" stroke="#F27A1A" stroke-width="3.5" />
+  <circle cx="216" cy="216" r="8" fill="#FFFFFF" opacity="0.95" />
+</svg>

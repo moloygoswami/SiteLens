@@ -1,0 +1,86 @@
+plugins {
+    id "com.android.application"
+    // START: FlutterFire Configuration
+    id 'com.google.gms.google-services'
+    // END: FlutterFire Configuration
+    id "kotlin-android"
+    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withReader('UTF-8') { reader ->
+        localProperties.load(reader)
+    }
+}
+def mapsApiKey = localProperties.getProperty('MAPS_API_KEY') ?: System.getenv('MAPS_API_KEY') ?: ''
+
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file('key.properties')
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withReader('UTF-8') { reader ->
+        keystoreProperties.load(reader)
+    }
+}
+
+def releaseKeyFile = keystoreProperties.getProperty('storeFile') ?: System.getenv('ANDROID_KEYSTORE_PATH') ?: System.getenv('KEYSTORE_PATH')
+def releaseStorePassword = keystoreProperties.getProperty('storePassword') ?: System.getenv('ANDROID_KEYSTORE_PASSWORD') ?: System.getenv('KEYSTORE_PASSWORD')
+def releaseKeyAlias = keystoreProperties.getProperty('keyAlias') ?: System.getenv('ANDROID_KEY_ALIAS') ?: System.getenv('KEY_ALIAS')
+def releaseKeyPassword = keystoreProperties.getProperty('keyPassword') ?: System.getenv('ANDROID_KEY_PASSWORD') ?: System.getenv('KEY_PASSWORD')
+
+android {
+    namespace = "com.sitelens.app"
+    compileSdk = flutter.compileSdkVersion
+    ndkVersion = flutter.ndkVersion
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    defaultConfig {
+        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
+        applicationId = "com.sitelens.app"
+        // You can update the following values to match your application needs.
+        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        minSdk = flutter.minSdkVersion
+        targetSdk = flutter.targetSdkVersion
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+
+        manifestPlaceholders += [
+            MAPS_API_KEY: mapsApiKey
+        ]
+    }
+
+    signingConfigs {
+        release {
+            if (releaseKeyFile != null && releaseStorePassword != null && releaseKeyAlias != null && releaseKeyPassword != null) {
+                def resolvedKeyFile = file(releaseKeyFile)
+                if (!resolvedKeyFile.exists()) {
+                    resolvedKeyFile = rootProject.file(releaseKeyFile)
+                }
+                storeFile resolvedKeyFile
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig = signingConfigs.release
+        }
+    }
+}
+
+flutter {
+    source = "../.."
+}

@@ -1,0 +1,109 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ / Android Studio
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# VS Code
+.vscode/
+
+# Flutter / Dart / Pub
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+
+# Symbolication & Obfuscation
+app.*.symbols
+app.*.map.json
+
+# Android Studio & Gradle build outputs
+/android/app/debug
+/android/app/profile
+/android/app/release
+/android/build/
+/android/.gradle/
+.gradle/
+
+# -----------------------------------------------------------------------------
+# SECURITY & SECRETS PROTECTION
+# -----------------------------------------------------------------------------
+# Environment & Secret Configurations
+*.env
+*.env.*
+*.local
+
+# Signing Keystores & Android Properties
+*.keystore
+*.jks
+key.properties
+local.properties
+
+# Firebase Configuration & Credentials
+**/android/app/google-services.json
+**/ios/Runner/GoogleService-Info.plist
+**/macos/Runner/GoogleService-Info.plist
+lib/firebase_options.dart
+.firebaserc
+firebase.json
+firestore.indexes.json
+
+# Local Storage, SQLite DBs & Media Cache
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.sqlite
+media/
+app_flutter/
+
+# -----------------------------------------------------------------------------
+# INTERNAL DOCUMENTATION & DESIGN ASSETS
+# -----------------------------------------------------------------------------
+docs/*
+!docs/handover/
+design.md
+design-reference-*.png
+.stitch/
+
+# Node.js dependencies
+**/node_modules/
+
+# Local IDE, agent & tool configs
+.agents/
+.commandcode/
+.design_review/
+.impeccable/
+.claude/
+.opencode/
+devtools_options.yaml
+graphify-out/
+strix_runs/
+skills-lock.json
+strix-sitelens-instructions.md
+design-plans/
+
+# Root screenshot and scratch images
+/*.png
+/*.jpg
+/*.jpeg
+
+
