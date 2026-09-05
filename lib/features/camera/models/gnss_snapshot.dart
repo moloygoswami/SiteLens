@@ -181,3 +181,31 @@ class GnssSnapshot {
   String toString() =>
       'GnssSnapshot(supported: $isSupported, available: $isAvailable, satellites: $satelliteCount, usedInFix: $satellitesUsedInFix, constellations: ${constellations.keys.join(",")})';
 }
+
+/// Lightweight telemetry object capturing native Android MSL/WGS84 altitude state.
+@immutable
+class AltitudeTelemetry {
+  final bool hasMslAltitude;
+  final double? mslAltitudeMeters;
+  final double? wgs84AltitudeMeters;
+
+  const AltitudeTelemetry({
+    required this.hasMslAltitude,
+    this.mslAltitudeMeters,
+    this.wgs84AltitudeMeters,
+  });
+
+  factory AltitudeTelemetry.fromMap(Map<dynamic, dynamic> map) {
+    return AltitudeTelemetry(
+      hasMslAltitude: map['hasMslAltitude'] as bool? ?? false,
+      mslAltitudeMeters: (map['mslAltitudeMeters'] as num?)?.toDouble(),
+      wgs84AltitudeMeters: (map['wgs84AltitudeMeters'] as num?)?.toDouble(),
+    );
+  }
+
+  static const AltitudeTelemetry unavailable = AltitudeTelemetry(
+    hasMslAltitude: false,
+    mslAltitudeMeters: null,
+    wgs84AltitudeMeters: null,
+  );
+}

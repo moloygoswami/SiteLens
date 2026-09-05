@@ -395,7 +395,9 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with WidgetsBinding
             ? gpsHardware.copyWith(
                 latitude: bestPos.latitude,
                 longitude: bestPos.longitude,
-                altitudeMeters: bestPos.altitude,
+                altitudeMeters: (gpsHardware.isAltitudeMsl && gpsHardware.altitudeMeters != null)
+                    ? gpsHardware.altitudeMeters
+                    : bestPos.altitude,
                 accuracyMeters: bestPos.accuracy,
                 timestampUtc: bestPos.timestamp.toUtc(),
               )
@@ -591,7 +593,9 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with WidgetsBinding
         ? gpsHardware.copyWith(
             latitude: bestPos.latitude,
             longitude: bestPos.longitude,
-            altitudeMeters: bestPos.altitude,
+            altitudeMeters: (gpsHardware.isAltitudeMsl && gpsHardware.altitudeMeters != null)
+                ? gpsHardware.altitudeMeters
+                : bestPos.altitude,
             accuracyMeters: bestPos.accuracy,
             timestampUtc: bestPos.timestamp.toUtc(),
           )
@@ -606,10 +610,16 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with WidgetsBinding
       lowAccuracyThresholdMeters: gpsSettings.lowAccuracyThresholdMeters,
     );
 
+    final currentMapType = ref.read(mapTypeSettingsProvider);
+
     // 2. Trigger real hardware photo capture and initiate live map snapshot concurrently at T0
     final liveSnapshotFuture = ref
         .read(mapThumbnailControllerProvider.notifier)
-        .takeLiveSnapshotForEvidence();
+        .takeLiveSnapshotForEvidence(
+          lat: effectiveGps.latitude,
+          lon: effectiveGps.longitude,
+          mapType: currentMapType,
+        );
     final capturedFile = await ref.read(cameraHardwareProvider.notifier).takePhoto();
 
     if (!mounted) return;
@@ -630,14 +640,16 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with WidgetsBinding
         // the cache satisfies strict freshness guards (matching mapType, age <= 5 min,
         // distance <= 20m).
         final mapThumbnailState = ref.read(mapThumbnailControllerProvider);
-        final currentMapType = ref.read(mapTypeSettingsProvider);
         Uint8List? mapTileBytes;
 
         final liveSnapshot = await liveSnapshotFuture;
         if (liveSnapshot != null && liveSnapshot.isNotEmpty) {
           mapTileBytes = liveSnapshot;
         } else {
-          final hasValidCachedFile = mapThumbnailState.cachedTile != null &&
+          final isTransitioning =
+              ref.read(mapThumbnailControllerProvider.notifier).isMapTypeTransitioning;
+          final hasValidCachedFile = !isTransitioning &&
+              mapThumbnailState.cachedTile != null &&
               mapThumbnailState.cachedTile!.existsSync() &&
               mapThumbnailState.mapType == currentMapType;
 
@@ -661,7 +673,9 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with WidgetsBinding
 
           if (isCacheFresh) {
             mapTileBytes = await mapThumbnailState.cachedTile!.readAsBytes();
-          } else if (gpsHardware.latitude != null && gpsHardware.longitude != null) {
+          } else if (!isTransitioning &&
+              gpsHardware.latitude != null &&
+              gpsHardware.longitude != null) {
             // Check local disk cache for existing imagery strictly matching the canonical state
             try {
               final service = ref.read(mapThumbnailServiceProvider);
@@ -791,6 +805,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with WidgetsBinding
       latitude: gpsHardware.hasValidFix ? (gpsHardware.latitude ?? 0.0) : 0.0,
       longitude: gpsHardware.hasValidFix ? (gpsHardware.longitude ?? 0.0) : 0.0,
       altitudeMeters: gpsHardware.hasValidFix ? (gpsHardware.altitudeMeters ?? 0.0) : 0.0,
+      isAltitudeMsl: gpsHardware.isAltitudeMsl,
       headingDegrees: gpsHardware.hasValidFix ? gpsHardware.headingDegrees : null,
       timestampUtc: gpsHardware.timestampUtcDisplay,
       sectorName: gpsHardware.resolvedLocationName ??

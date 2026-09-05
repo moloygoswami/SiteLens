@@ -155,6 +155,7 @@ class GpsUiFixture {
   final double latitude;
   final double longitude;
   final double altitudeMeters;
+  final bool isAltitudeMsl;
   final double? headingDegrees;
   final String timestampUtc;
   final String sectorName;
@@ -171,6 +172,7 @@ class GpsUiFixture {
     required this.latitude,
     required this.longitude,
     required this.altitudeMeters,
+    this.isAltitudeMsl = true,
     this.headingDegrees,
     required this.timestampUtc,
     this.sectorName = '',
@@ -220,7 +222,7 @@ class GpsUiFixture {
     return '${latitude.abs().toStringAsFixed(5)}° $latDir, ${longitude.abs().toStringAsFixed(5)}° $lonDir';
   }
 
-  String get altitudeDisplay => GPSUtils.formatAltitude(altitudeMeters);
+  String get altitudeDisplay => GPSUtils.formatAltitude(altitudeMeters, isMsl: isAltitudeMsl);
   String get accuracyDisplay => accuracyMeters != null ? '${accuracyMeters!.toStringAsFixed(1)} m' : '—';
 
   // --- Static design/test fixtures (sentinel values — never used in production) ---

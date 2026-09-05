@@ -25,6 +25,7 @@ class GpsHardwareState {
   final double? resolvedLocationLat;
   final double? resolvedLocationLon;
   final GnssSnapshot? gnssSnapshot;
+  final bool isAltitudeMsl;
 
   const GpsHardwareState({
     this.fixStatus = GPSFixStatus.searching,
@@ -32,6 +33,7 @@ class GpsHardwareState {
     this.latitude,
     this.longitude,
     this.altitudeMeters,
+    this.isAltitudeMsl = true,
     this.accuracyMeters,
     this.headingDegrees,
     this.timestampUtc,
@@ -82,7 +84,7 @@ class GpsHardwareState {
 
   String get altitudeDisplay {
     if (!hasValidFix) return '—';
-    return GPSUtils.formatAltitude(altitudeMeters);
+    return GPSUtils.formatAltitude(altitudeMeters, isMsl: isAltitudeMsl);
   }
 
   String get timestampUtcDisplay {
@@ -108,6 +110,7 @@ class GpsHardwareState {
     double? latitude,
     double? longitude,
     double? altitudeMeters,
+    bool? isAltitudeMsl,
     bool clearAltitude = false,
     double? accuracyMeters,
     double? headingDegrees,
@@ -132,6 +135,7 @@ class GpsHardwareState {
       latitude: clearFix ? null : (latitude ?? this.latitude),
       longitude: clearFix ? null : (longitude ?? this.longitude),
       altitudeMeters: clearFix || clearAltitude ? null : (altitudeMeters ?? this.altitudeMeters),
+      isAltitudeMsl: isAltitudeMsl ?? this.isAltitudeMsl,
       accuracyMeters: clearFix ? null : (accuracyMeters ?? this.accuracyMeters),
       headingDegrees: clearFix || clearHeading ? null : (headingDegrees ?? this.headingDegrees),
       timestampUtc: clearFix ? null : (timestampUtc ?? this.timestampUtc),

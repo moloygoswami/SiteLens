@@ -93,26 +93,33 @@ class GPSUtils {
     return 'LAT: $latStr  LON: $lonStr';
   }
 
-  /// Formats Altitude with clean positive (+) or negative (-) sign
-  /// e.g. "+18.4 m ASL" or "-43.4 m ASL" or "—" if unavailable
-  static String formatAltitude(double? altitudeMeters) {
+  /// Formats Altitude with clean positive (+) or negative (-) sign and truthful datum label:
+  /// e.g. "+18.4 m ASL" (when MSL is established) or "-43.4 m (WGS84)" (when ellipsoidal),
+  /// or "—" if unavailable.
+  static String formatAltitude(
+    double? altitudeMeters, {
+    bool isMsl = true,
+  }) {
     if (altitudeMeters == null) return '—';
     final sign = altitudeMeters >= 0 ? '+' : '';
-    return '$sign${altitudeMeters.toStringAsFixed(1)} m ASL';
+    final datumSuffix = isMsl ? 'm ASL' : 'm (WGS84)';
+    return '$sign${altitudeMeters.toStringAsFixed(1)} $datumSuffix';
   }
 
   /// Formats full inspection coordinates with elevation:
-  /// e.g. "Lat 22.562865° N  Long 88.300896° E (Alt: -36.8 m ASL)"
+  /// e.g. "Lat 22.562865° N  Long 88.300896° E (Alt: +14.7 m ASL)"
+  /// or   "Lat 22.562865° N  Long 88.300896° E (Alt: -42.4 m (WGS84))"
   static String formatInspectionCoordinates(
     double lat,
     double lon, {
     double? altitudeMeters,
     String? altitudeDisplay,
+    bool isMsl = true,
     int decimals = coordinateDecimalPrecision,
   }) {
     final latStr = formatSingleCoordinate(lat, isLatitude: true, decimals: decimals);
     final lonStr = formatSingleCoordinate(lon, isLatitude: false, decimals: decimals);
-    final alt = altitudeDisplay ?? (altitudeMeters != null ? formatAltitude(altitudeMeters) : '—');
+    final alt = altitudeDisplay ?? (altitudeMeters != null ? formatAltitude(altitudeMeters, isMsl: isMsl) : '—');
     final altSuffix = (alt != '—' && alt.isNotEmpty) ? ' (Alt: $alt)' : '';
     return 'Lat $latStr  Long $lonStr$altSuffix';
   }

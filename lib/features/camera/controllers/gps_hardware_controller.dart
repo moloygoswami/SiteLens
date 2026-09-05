@@ -133,7 +133,7 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
     );
   }
 
-  void _processPosition(Position position, {bool isInitial = false}) {
+  Future<void> _processPosition(Position position, {bool isInitial = false}) async {
     if (!mounted) return;
 
     final now = clock.now();
@@ -162,12 +162,33 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
       );
     }
 
+    // Determine truthful altitude and datum
+    double altitudeMeters = position.altitude;
+    bool isAltitudeMsl = false;
+
+    if (defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.macOS) {
+      isAltitudeMsl = true;
+    } else {
+      final telemetry = await _service.getAltitudeTelemetry();
+      if (telemetry.hasMslAltitude && telemetry.mslAltitudeMeters != null) {
+        altitudeMeters = telemetry.mslAltitudeMeters!;
+        isAltitudeMsl = true;
+      } else {
+        altitudeMeters = telemetry.wgs84AltitudeMeters ?? position.altitude;
+        isAltitudeMsl = false;
+      }
+    }
+
+    if (!mounted) return;
+
     state = state.copyWith(
       fixStatus: fixStatus,
       hasValidFix: true,
       latitude: position.latitude,
       longitude: position.longitude,
-      altitudeMeters: position.altitude,
+      altitudeMeters: altitudeMeters,
+      isAltitudeMsl: isAltitudeMsl,
       accuracyMeters: position.accuracy,
       headingDegrees: (position.heading >= 0.0 && position.heading <= 360.0) ? position.heading : null,
       timestampUtc: position.timestamp.toUtc(),

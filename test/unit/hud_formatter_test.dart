@@ -112,5 +112,13 @@ void main() {
       final scale2 = HudLayoutSpec.calculateFontScale(100.0, 1.0);
       expect(scale2, 0.82);
     });
+
+    test('formatCoordinates formats MSL vs WGS84 truthfully', () {
+      final (_, _, mslSuffix) = HudFormatter.formatCoordinates(22.56, 88.30, 14.66, isMsl: true);
+      expect(mslSuffix, ' (Alt: +14.7m)');
+
+      final (_, _, wgsSuffix) = HudFormatter.formatCoordinates(22.56, 88.30, -42.41, isMsl: false);
+      expect(wgsSuffix, ' (Alt: -42.4m WGS84)');
+    });
   });
 }

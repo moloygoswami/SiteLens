@@ -1256,8 +1256,9 @@ class WatermarkDrawer {
     final flagSuffix = GPSUtils.countryFlagForAddress(snapshot.resolvedAddress);
     final fullHeadline = '$headline$flagSuffix';
 
+    final altDatum = snapshot.isAltitudeMsl ? 'm' : 'm WGS84';
     final altDisplay = snapshot.altitudeMeters != null
-        ? '${snapshot.altitudeMeters! >= 0 ? "+" : ""}${snapshot.altitudeMeters!.toStringAsFixed(1)}m'
+        ? '${snapshot.altitudeMeters! >= 0 ? "+" : ""}${snapshot.altitudeMeters!.toStringAsFixed(1)}$altDatum'
         : null;
 
     final coordinatesLine = GPSUtils.formatInspectionCoordinates(

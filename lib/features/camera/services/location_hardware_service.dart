@@ -30,6 +30,7 @@ class LocationHardwareService {
         forceLocationManager: false,
         intervalDuration: const Duration(milliseconds: 500),
         timeLimit: timeLimit,
+        useMSLAltitude: true,
       );
     } else if (defaultTargetPlatform == TargetPlatform.iOS ||
         defaultTargetPlatform == TargetPlatform.macOS) {
@@ -62,6 +63,22 @@ class LocationHardwareService {
     return Geolocator.getPositionStream(
       locationSettings: locationSettings ?? _buildHighAccuracySettings(),
     );
+  }
+
+  /// Fetches native altitude telemetry (MSL availability and values) from Android layer.
+  Future<AltitudeTelemetry> getAltitudeTelemetry() async {
+    if (defaultTargetPlatform != TargetPlatform.android) {
+      return AltitudeTelemetry.unavailable;
+    }
+    try {
+      final res = await _gnssChannel.invokeMapMethod<dynamic, dynamic>('getAltitudeTelemetry');
+      if (res != null) {
+        return AltitudeTelemetry.fromMap(res);
+      }
+      return AltitudeTelemetry.unavailable;
+    } catch (_) {
+      return AltitudeTelemetry.unavailable;
+    }
   }
 
   /// Fetches the latest GNSS status from the native Android layer.

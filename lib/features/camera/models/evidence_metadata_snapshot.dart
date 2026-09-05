@@ -12,6 +12,7 @@ class EvidenceMetadataSnapshot {
   final double latitude;
   final double longitude;
   final double? altitudeMeters;
+  final bool isAltitudeMsl;
   final double? accuracyMeters;
   final double? headingDegrees;
   final bool lowAccuracy;
@@ -38,6 +39,7 @@ class EvidenceMetadataSnapshot {
     required this.latitude,
     required this.longitude,
     this.altitudeMeters,
+    this.isAltitudeMsl = true,
     this.accuracyMeters,
     this.headingDegrees,
     required this.lowAccuracy,
@@ -100,6 +102,7 @@ class EvidenceMetadataSnapshot {
       latitude: gpsState.latitude ?? 0.0,
       longitude: gpsState.longitude ?? 0.0,
       altitudeMeters: gpsState.altitudeMeters,
+      isAltitudeMsl: gpsState.isAltitudeMsl,
       accuracyMeters: accuracy,
       headingDegrees: gpsState.headingDegrees,
       lowAccuracy: isLowAcc,
@@ -117,7 +120,7 @@ class EvidenceMetadataSnapshot {
   String get coordinatesDisplay =>
       GPSUtils.formatCoordinates(latitude, longitude);
 
-  String get altitudeDisplay => GPSUtils.formatAltitude(altitudeMeters);
+  String get altitudeDisplay => GPSUtils.formatAltitude(altitudeMeters, isMsl: isAltitudeMsl);
 
   String get accuracyDisplay => accuracyMeters != null
       ? '±${accuracyMeters!.toStringAsFixed(1)}m'

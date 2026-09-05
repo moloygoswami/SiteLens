@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -112,22 +113,25 @@ class MapThumbnailNotifier extends StateNotifier<MapThumbnailState> {
       }
     }
 
-    // When map type changes (Normal ↔ Satellite), immediately clear the stale cached image
-    // so a roadmap tile is never served when satellite is active (and vice versa).
+    // When map type changes (Normal ↔ Satellite), immediately invalidate all cached snapshots
+    // and disk cache for the target mapType bucket, incrementing the generation token.
     if (isMapTypeChanged) {
-      state = state.copyWith(
-        mapType: mapType,
-        clearCachedImage: true,
-        tier: MapThumbnailTier.live,
+      invalidateCachesOnMapTypeChange(
+        mapType,
+        lat: newLat,
+        lon: newLon,
       );
     }
 
-    // Check disk cache for static map image matching the NEW mapType
-    final cached = await _service.getCachedImage(
-      lat: newLat,
-      lon: newLon,
-      mapType: mapType.staticMapParam,
-    );
+    // Check disk cache for static map image matching the NEW mapType only if not actively transitioning
+    File? cached;
+    if (!isMapTypeChanged && _transitionTargetMapType == null) {
+      cached = await _service.getCachedImage(
+        lat: newLat,
+        lon: newLon,
+        mapType: mapType.staticMapParam,
+      );
+    }
 
     // If previously failed, recover to LIVE tier strictly upon significant spatial movement (>=20m)
     MapThumbnailTier targetTier = state.tier;
@@ -150,7 +154,7 @@ class MapThumbnailNotifier extends StateNotifier<MapThumbnailState> {
     );
 
     // Opportunistically pre-fetch/cache static map image for this coordinate bucket and mapType
-    if (cached == null) {
+    if (cached == null && _transitionTargetMapType == null) {
       _fetchStaticImageInBackground(newLat, newLon, mapType);
     }
   }
@@ -177,42 +181,276 @@ class MapThumbnailNotifier extends StateNotifier<MapThumbnailState> {
     }
   }
 
+  /// Monotonically increasing generation counter for map-type transitions.
+  int _mapTypeGeneration = 0;
+  int get mapTypeGeneration => _mapTypeGeneration;
+
+  /// Active map-type transition state tracking.
+  AppMapType? _transitionTargetMapType;
+  int? _transitionGeneration;
+  DateTime? _transitionStartTime;
+
+  /// Returns true if a map-type transition is actively settling.
+  bool get isMapTypeTransitioning => _transitionTargetMapType != null;
+  AppMapType? get transitionTargetMapType => _transitionTargetMapType;
+
+  /// Clears in-memory live snapshot provenance and invalidates target mapType disk cache.
+  void invalidateCachesOnMapTypeChange(
+    AppMapType newMapType, {
+    double? lat,
+    double? lon,
+  }) {
+    _mapTypeGeneration++;
+    _transitionTargetMapType = newMapType;
+    _transitionGeneration = _mapTypeGeneration;
+    _transitionStartTime = DateTime.now();
+
+    _latestLiveSnapshotBytes = null;
+    _latestLiveSnapshotTimestamp = null;
+    _latestLiveSnapshotLat = null;
+    _latestLiveSnapshotLon = null;
+    _latestLiveSnapshotMapType = null;
+
+    if (lat != null && lon != null && (lat != 0.0 || lon != 0.0)) {
+      unawaited(_service.invalidateCachedImage(
+        lat: lat,
+        lon: lon,
+        mapType: newMapType.staticMapParam,
+      ));
+    }
+
+    state = state.copyWith(
+      mapType: newMapType,
+      clearCachedImage: true,
+      tier: MapThumbnailTier.live,
+    );
+  }
+
   /// Optional live snapshot provider registered by the GpsMapThumbnail widget.
   /// Returns the current native GoogleMap frame (PNG bytes) or null when the
   /// live map is not available.
   Future<Uint8List?> Function()? _liveSnapshotProvider;
+
+  /// In-memory pre-cache of the latest authentic live map snapshot.
+  Uint8List? _latestLiveSnapshotBytes;
+  DateTime? _latestLiveSnapshotTimestamp;
+  double? _latestLiveSnapshotLat;
+  double? _latestLiveSnapshotLon;
+  AppMapType? _latestLiveSnapshotMapType;
 
   /// Registers (or clears, with null) the live map snapshot provider.
   void registerLiveSnapshotProvider(Future<Uint8List?> Function()? provider) {
     _liveSnapshotProvider = provider;
   }
 
-  /// Captures the current native live map frame for evidence compositing so the
-  /// baked watermark matches exactly what the user sees (Normal or Satellite).
-  /// Returns null when the live map is unavailable or fails.
-  Future<Uint8List?> takeLiveSnapshotForEvidence() async {
-    final provider = _liveSnapshotProvider;
-    if (provider == null) return null;
-    try {
-      final Future<Uint8List?> snapshotFuture = Future<Uint8List?>.value(provider());
-      return await snapshotFuture.timeout(
-        const Duration(milliseconds: 3500),
-        onTimeout: () => null,
-      );
-    } catch (_) {
+  /// Returns the latest in-memory live map snapshot if it satisfies the strict
+  /// freshness (<= 5 minutes), proximity (<= 20 meters), and mapType parity rules.
+  Uint8List? getValidCachedSnapshotBytes({
+    required double lat,
+    required double lon,
+    required AppMapType mapType,
+  }) {
+    if (_transitionTargetMapType != null ||
+        _latestLiveSnapshotBytes == null ||
+        _latestLiveSnapshotTimestamp == null ||
+        _latestLiveSnapshotLat == null ||
+        _latestLiveSnapshotLon == null ||
+        _latestLiveSnapshotMapType != mapType) {
       return null;
     }
+
+    final age = DateTime.now().difference(_latestLiveSnapshotTimestamp!);
+    if (age > const Duration(minutes: 5)) {
+      return null;
+    }
+
+    final distance = MapThumbnailService.haversineDistanceMeters(
+      _latestLiveSnapshotLat!,
+      _latestLiveSnapshotLon!,
+      lat,
+      lon,
+    );
+    if (distance > MapThumbnailPolicy.movementThresholdMeters) {
+      return null;
+    }
+
+    return _latestLiveSnapshotBytes;
   }
 
-  /// Persists the live GoogleMap bitmap snapshot into the disk static map cache.
+  void _cacheLiveSnapshot(
+    Uint8List bytes, {
+    required double lat,
+    required double lon,
+    required AppMapType mapType,
+  }) {
+    _latestLiveSnapshotBytes = bytes;
+    _latestLiveSnapshotTimestamp = DateTime.now();
+    _latestLiveSnapshotLat = lat;
+    _latestLiveSnapshotLon = lon;
+    _latestLiveSnapshotMapType = mapType;
+  }
+
+  /// Captures the current native live map frame for evidence compositing so the
+  /// baked watermark matches what the user sees (Normal or Satellite).
+  ///
+  /// Execution order:
+  /// 1. Bounded layer transition settling guard: if a map-type transition is actively settling,
+  ///    waits up to layerTransitionSettlingDuration (1500ms) for native OpenGL tiles to commit.
+  /// 2. Preferred primary attempt: captures live snapshot from provider (2200ms timeout).
+  /// 3. Bounded retry: if primary attempt threw or timed out, waits 150ms and retries once (1000ms timeout).
+  /// 4. Verified recent fallback: if both live attempts fail or time out and NO transition is active,
+  ///    returns the most recent valid pre-cached authentic snapshot provided it satisfies strict
+  ///    freshness (<= 5m), proximity (<= 20m), and mapType match.
+  /// 5. Returns null if no authentic map source satisfies the validation rules.
+  Future<Uint8List?> takeLiveSnapshotForEvidence({
+    double? lat,
+    double? lon,
+    AppMapType? mapType,
+  }) async {
+    final expectedMapType = mapType ?? state.mapType;
+    final int captureGeneration = _mapTypeGeneration;
+
+    // If map transition is active for this mapType, allow bounded settling window
+    if (_transitionTargetMapType == expectedMapType && _transitionStartTime != null) {
+      final elapsed = DateTime.now().difference(_transitionStartTime!);
+      final remainingSettling = MapThumbnailPolicy.layerTransitionSettlingDuration - elapsed;
+      if (remainingSettling > Duration.zero) {
+        final waitDuration = remainingSettling > MapThumbnailPolicy.layerTransitionSettlingDuration
+            ? MapThumbnailPolicy.layerTransitionSettlingDuration
+            : remainingSettling;
+        await Future.delayed(waitDuration);
+      }
+      if (_mapTypeGeneration != captureGeneration) {
+        return null;
+      }
+    }
+
+    final provider = _liveSnapshotProvider;
+    if (provider != null) {
+      // 1. Primary live capture attempt
+      try {
+        final Future<Uint8List?> snapshotFuture = Future<Uint8List?>.value(provider());
+        final result = await snapshotFuture.timeout(
+          const Duration(milliseconds: 2200),
+          onTimeout: () => null,
+        );
+        if (result != null && result.isNotEmpty && _mapTypeGeneration == captureGeneration) {
+          _transitionTargetMapType = null;
+          _transitionGeneration = null;
+          _transitionStartTime = null;
+
+          if (lat != null && lon != null) {
+            _cacheLiveSnapshot(result, lat: lat, lon: lon, mapType: expectedMapType);
+            unawaited(updateLiveSnapshot(
+              result,
+              lat: lat,
+              lon: lon,
+              mapType: expectedMapType,
+              captureGeneration: captureGeneration,
+            ));
+          }
+          return result;
+        }
+      } catch (_) {
+        // Fall through to bounded retry
+      }
+
+      // 2. Bounded retry: transient platform-view contention or brief frame drop
+      try {
+        await Future.delayed(const Duration(milliseconds: 150));
+        if (_mapTypeGeneration != captureGeneration) return null;
+        final Future<Uint8List?> retryFuture = Future<Uint8List?>.value(provider());
+        final retryResult = await retryFuture.timeout(
+          const Duration(milliseconds: 1000),
+          onTimeout: () => null,
+        );
+        if (retryResult != null && retryResult.isNotEmpty && _mapTypeGeneration == captureGeneration) {
+          _transitionTargetMapType = null;
+          _transitionGeneration = null;
+          _transitionStartTime = null;
+
+          if (lat != null && lon != null) {
+            _cacheLiveSnapshot(retryResult, lat: lat, lon: lon, mapType: expectedMapType);
+            unawaited(updateLiveSnapshot(
+              retryResult,
+              lat: lat,
+              lon: lon,
+              mapType: expectedMapType,
+              captureGeneration: captureGeneration,
+            ));
+          }
+          return retryResult;
+        }
+      } catch (_) {
+        // Retry failed, fall through to verified fallback
+      }
+    }
+
+    // 3. Verified pre-cached fallback (only if not transitioning and matches validation)
+    if (_transitionTargetMapType == null && lat != null && lon != null) {
+      final validRecentBytes = getValidCachedSnapshotBytes(
+        lat: lat,
+        lon: lon,
+        mapType: expectedMapType,
+      );
+      if (validRecentBytes != null) {
+        debugPrint('[MapThumbnailNotifier] Shutter used verified recent authentic map snapshot fallback');
+        return validRecentBytes;
+      }
+    }
+
+    return null;
+  }
+
+  /// Persists the live GoogleMap bitmap snapshot into the disk static map cache
+  /// and updates both in-memory cache and controller state with the latest coordinates and timestamp.
+  /// Discards stale asynchronous writes if captureGeneration does not match the current generation.
   Future<void> updateLiveSnapshot(
     Uint8List snapshotBytes, {
     required double lat,
     required double lon,
     AppMapType mapType = AppMapType.satellite,
+    int? captureGeneration,
   }) async {
+    // 1. Generation & mapType guard: Stale asynchronous snapshots must be discarded
+    if (captureGeneration != null && captureGeneration != _mapTypeGeneration) {
+      debugPrint('[MapThumbnailNotifier] Discarding stale snapshot write (captureGen=$captureGeneration != currentGen=$_mapTypeGeneration)');
+      return;
+    }
+    if (state.mapType != mapType) {
+      debugPrint('[MapThumbnailNotifier] Discarding mismatched snapshot write (state=${state.mapType} != snapshot=$mapType)');
+      return;
+    }
+
+    // 2. Transition guard: If transitioning, do not accept until settled
+    if (_transitionTargetMapType != null) {
+      if (_transitionTargetMapType != mapType || _transitionGeneration != _mapTypeGeneration) {
+        return;
+      }
+      final elapsed = _transitionStartTime == null
+          ? Duration.zero
+          : DateTime.now().difference(_transitionStartTime!);
+      if (elapsed < MapThumbnailPolicy.layerTransitionSettlingDuration) {
+        // Still within settling window: do not accept premature snapshot into verified cache
+        return;
+      }
+      // Settling duration has elapsed; transition is now settled!
+      _transitionTargetMapType = null;
+      _transitionGeneration = null;
+      _transitionStartTime = null;
+    }
+
+    _cacheLiveSnapshot(snapshotBytes, lat: lat, lon: lon, mapType: mapType);
     try {
       final cacheDir = await _service.getCacheDirectory();
+      // Double check before writing to disk
+      if (captureGeneration != null && captureGeneration != _mapTypeGeneration) {
+        return;
+      }
+      if (state.mapType != mapType) {
+        return;
+      }
+
       final cacheKey = MapThumbnailService.computeCacheKey(
         lat: lat,
         lon: lon,
@@ -220,8 +458,14 @@ class MapThumbnailNotifier extends StateNotifier<MapThumbnailState> {
       );
       final file = File('${cacheDir.path}/$cacheKey.png');
       await file.writeAsBytes(snapshotBytes, flush: true);
-      if (mounted) {
-        state = state.copyWith(cachedImage: file, mapType: mapType);
+      if (mounted && (captureGeneration == null || captureGeneration == _mapTypeGeneration) && state.mapType == mapType) {
+        state = state.copyWith(
+          cachedImage: file,
+          mapType: mapType,
+          lat: lat,
+          lon: lon,
+          lastUpdate: DateTime.now(),
+        );
       }
     } catch (e) {
       debugPrint('[MapThumbnailNotifier] Failed to persist live map snapshot: $e');

@@ -21,6 +21,8 @@ class MainActivity: FlutterActivity() {
     private var latestGnssStatus: GnssStatus? = null
     private var lastGnssTimestamp: Long = 0L
     private var isCallbackRegistered: Boolean = false
+    private var locationListener: android.location.LocationListener? = null
+    private var latestLocation: android.location.Location? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -39,6 +41,9 @@ class MainActivity: FlutterActivity() {
                     stopGnssUpdates()
                     result.success(true)
                 }
+                "getAltitudeTelemetry" -> {
+                    handleGetAltitudeTelemetry(result)
+                }
                 else -> {
                     result.notImplemented()
                 }
@@ -50,11 +55,36 @@ class MainActivity: FlutterActivity() {
     }
 
     private fun startGnssUpdates() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
-        if (isCallbackRegistered) return
-
         val permission = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
         if (permission != PackageManager.PERMISSION_GRANTED) return
+
+        if (locationListener == null) {
+            locationListener = android.location.LocationListener { loc ->
+                latestLocation = loc
+            }
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    locationManager?.requestLocationUpdates(
+                        LocationManager.FUSED_PROVIDER,
+                        1000L,
+                        0f,
+                        locationListener!!,
+                        Looper.getMainLooper()
+                    )
+                } else {
+                    locationManager?.requestLocationUpdates(
+                        LocationManager.GPS_PROVIDER,
+                        1000L,
+                        0f,
+                        locationListener!!,
+                        Looper.getMainLooper()
+                    )
+                }
+            } catch (_: Exception) {}
+        }
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        if (isCallbackRegistered) return
 
         if (gnssCallback == null) {
             gnssCallback = object : GnssStatus.Callback() {
@@ -78,6 +108,13 @@ class MainActivity: FlutterActivity() {
     }
 
     private fun stopGnssUpdates() {
+        locationListener?.let {
+            try {
+                locationManager?.removeUpdates(it)
+            } catch (_: Exception) {}
+        }
+        locationListener = null
+
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
         if (!isCallbackRegistered) return
 
@@ -166,6 +203,63 @@ class MainActivity: FlutterActivity() {
             }
         } else {
             "unknown"
+        }
+    }
+
+    private fun handleGetAltitudeTelemetry(result: MethodChannel.Result) {
+        val permission = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+        if (permission != PackageManager.PERMISSION_GRANTED) {
+            result.success(mapOf(
+                "hasMslAltitude" to false,
+                "mslAltitudeMeters" to null,
+                "wgs84AltitudeMeters" to null
+            ))
+            return
+        }
+
+        try {
+            val loc = latestLocation
+                ?: (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    locationManager?.getLastKnownLocation(LocationManager.FUSED_PROVIDER)
+                        ?: locationManager?.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                } else {
+                    locationManager?.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                })
+
+            if (loc == null) {
+                result.success(mapOf(
+                    "hasMslAltitude" to false,
+                    "mslAltitudeMeters" to null,
+                    "wgs84AltitudeMeters" to null
+                ))
+                return
+            }
+
+            val hasMsl = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                loc.hasMslAltitude()
+            } else {
+                false
+            }
+
+            val mslAltitude = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && hasMsl) {
+                loc.mslAltitudeMeters
+            } else {
+                null
+            }
+
+            val wgs84Altitude = if (loc.hasAltitude()) loc.altitude else null
+
+            result.success(mapOf(
+                "hasMslAltitude" to hasMsl,
+                "mslAltitudeMeters" to mslAltitude,
+                "wgs84AltitudeMeters" to wgs84Altitude
+            ))
+        } catch (_: Exception) {
+            result.success(mapOf(
+                "hasMslAltitude" to false,
+                "mslAltitudeMeters" to null,
+                "wgs84AltitudeMeters" to null
+            ))
         }
     }
 

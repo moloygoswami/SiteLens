@@ -22,6 +22,7 @@ import 'package:sitelens/features/camera/controllers/gps_hardware_controller.dar
 import 'package:sitelens/features/camera/services/camera_hardware_service.dart';
 import 'package:sitelens/features/camera/services/evidence_storage_service.dart';
 import 'package:sitelens/features/camera/services/location_hardware_service.dart';
+import 'package:sitelens/features/camera/models/gnss_snapshot.dart';
 import 'package:sitelens/features/camera/widgets/camera_top_hud.dart';
 import 'package:sitelens/features/camera/widgets/camera_viewfinder.dart';
 import 'package:sitelens/features/camera/widgets/camera_shutter_station.dart';
@@ -75,6 +76,10 @@ class TestLocationService extends LocationHardwareService {
 
   @override
   Future<Position?> getLastKnownPosition() async => initialPosition;
+
+  @override
+  Future<AltitudeTelemetry> getAltitudeTelemetry() async =>
+      const AltitudeTelemetry(hasMslAltitude: true, mslAltitudeMeters: 18.4);
 
   @override
   Stream<Position> getPositionStream({LocationSettings? locationSettings}) {

@@ -21,6 +21,9 @@ abstract final class MapThumbnailPolicy {
   /// Timeout waiting for native GoogleMap controller initialization before falling back.
   static const Duration liveMapInitTimeout = Duration(seconds: 5);
 
+  /// Bounded settling duration for native GoogleMap layer transitions (Normal ↔ Satellite).
+  static const Duration layerTransitionSettlingDuration = Duration(milliseconds: 1500);
+
   /// Coordinate quantization decimals (4 decimals = ~11.1m resolution, consistent with 20m threshold).
   static const int coordinateDecimals = 4;
 
@@ -140,6 +143,32 @@ class MapThumbnailService {
       debugPrint('[MapThumbnailService] Error reading disk cache: $e');
     }
     return null;
+  }
+
+  /// Invalidates (deletes) any cached image file on disk for a specific coordinate bucket and mapType.
+  Future<void> invalidateCachedImage({
+    required double lat,
+    required double lon,
+    int zoom = 16,
+    required String mapType,
+    String styleVersion = 'v1',
+  }) async {
+    try {
+      final cacheDir = await getCacheDirectory();
+      final cacheKey = computeCacheKey(
+        lat: lat,
+        lon: lon,
+        zoom: zoom,
+        mapType: mapType,
+        styleVersion: styleVersion,
+      );
+      final file = File(p.join(cacheDir.path, '$cacheKey.png'));
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (e) {
+      debugPrint('[MapThumbnailService] Error invalidating disk cache: $e');
+    }
   }
 
   /// Backward-compatible alias for getCachedImage.

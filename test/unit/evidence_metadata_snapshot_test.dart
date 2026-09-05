@@ -210,5 +210,25 @@ void main() {
       );
       expect(nullSnapshot.altitudeDisplay, '—');
     });
+
+    test('EvidenceMetadataSnapshot formats WGS84 truthfully when isAltitudeMsl is false', () {
+      final wgsSnapshot = EvidenceMetadataSnapshot(
+        mediaId: 'id-wgs',
+        siteId: 's1',
+        siteCode: 'sc1',
+        siteName: 'sn1',
+        latitude: 22.5629,
+        longitude: 88.3009,
+        altitudeMeters: -42.4,
+        isAltitudeMsl: false,
+        accuracyMeters: 3.0,
+        lowAccuracy: false,
+        capturedAtUtc: DateTime.utc(2026, 9, 4, 15, 0, 0),
+        canonicalTimestampUtc: '2026-09-04 15:00:00 UTC',
+        resolvedAddress: 'Kolkata, WB',
+      );
+      expect(wgsSnapshot.isAltitudeMsl, isFalse);
+      expect(wgsSnapshot.altitudeDisplay, '-42.4 m (WGS84)');
+    });
   });
 }

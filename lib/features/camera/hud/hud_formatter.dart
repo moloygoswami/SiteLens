@@ -39,6 +39,7 @@ class HudFormatter {
       snapshot.latitude,
       snapshot.longitude,
       snapshot.altitudeMeters,
+      isMsl: snapshot.isAltitudeMsl,
     );
 
     final displaySha = formatSha(originalSha256);
@@ -75,6 +76,7 @@ class HudFormatter {
     required double latitude,
     required double longitude,
     double? altitudeMeters,
+    bool isAltitudeMsl = true,
     double? accuracyMeters,
     required bool isGpsLocked,
     required bool isDegraded,
@@ -98,7 +100,12 @@ class HudFormatter {
 
     final effectiveTime = captureTime ?? DateTime.now();
     final (utcText, localText, tzText) = formatTimestamps(effectiveTime);
-    final (latStr, lonStr, altSuffix) = formatCoordinates(latitude, longitude, altitudeMeters);
+    final (latStr, lonStr, altSuffix) = formatCoordinates(
+      latitude,
+      longitude,
+      altitudeMeters,
+      isMsl: isAltitudeMsl,
+    );
 
     final rawAddress = (resolvedAddress ?? '').trim();
     final isResolving = rawAddress.isEmpty || rawAddress == 'RESOLVING...';
@@ -151,15 +158,17 @@ class HudFormatter {
   static (String, String, String?) formatCoordinates(
     double latitude,
     double longitude,
-    double? altitudeMeters,
-  ) {
+    double? altitudeMeters, {
+    bool isMsl = true,
+  }) {
     final latStr = GPSUtils.formatSingleCoordinate(latitude, isLatitude: true);
     final lonStr = GPSUtils.formatSingleCoordinate(longitude, isLatitude: false);
 
     String? altSuffix;
     if (altitudeMeters != null) {
       final sign = altitudeMeters >= 0 ? '+' : '';
-      altSuffix = ' (Alt: $sign${altitudeMeters.toStringAsFixed(1)}m)';
+      final datum = isMsl ? 'm' : 'm WGS84';
+      altSuffix = ' (Alt: $sign${altitudeMeters.toStringAsFixed(1)}$datum)';
     }
 
     return (latStr, lonStr, altSuffix);

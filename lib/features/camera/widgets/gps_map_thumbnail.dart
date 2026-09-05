@@ -37,6 +37,7 @@ class GpsMapThumbnail extends ConsumerStatefulWidget {
 class _GpsMapThumbnailState extends ConsumerState<GpsMapThumbnail> {
   GoogleMapController? _googleMapController;
   Timer? _initTimeoutTimer;
+  Timer? _preCacheTimer;
   double _lastAnimatedLat = 0.0;
   double _lastAnimatedLon = 0.0;
   DateTime? _lastSnapshotTime;
@@ -96,6 +97,15 @@ class _GpsMapThumbnailState extends ConsumerState<GpsMapThumbnail> {
             ),
           );
         }
+
+        // Proactively schedule pre-cache snapshot so an authentic live frame is
+        // available prior to shutter, respecting the internal 15s interval throttle.
+        _preCacheTimer?.cancel();
+        _preCacheTimer = Timer(const Duration(milliseconds: 600), () {
+          if (mounted) {
+            _captureSnapshotIfEligible(widget.latitude, widget.longitude);
+          }
+        });
       }
     });
   }
@@ -114,7 +124,14 @@ class _GpsMapThumbnailState extends ConsumerState<GpsMapThumbnail> {
     if (!mounted || _googleMapController == null || !widget.isLocked) return;
     if (lat == 0.0 && lon == 0.0) return;
 
+    final controllerNotifier = ref.read(mapThumbnailControllerProvider.notifier);
     final currentMapType = ref.read(mapTypeSettingsProvider);
+    final captureGen = controllerNotifier.mapTypeGeneration;
+
+    // A snapshot taken while the map layer is actively transitioning must not be accepted
+    if (controllerNotifier.isMapTypeTransitioning) {
+      return;
+    }
 
     // A Normal ↔ Satellite switch must never be throttled: force a fresh
     // type-matched snapshot so the static/snapshot cache (and the evidence
@@ -142,23 +159,28 @@ class _GpsMapThumbnailState extends ConsumerState<GpsMapThumbnail> {
       return;
     }
 
-    _lastSnapshotTime = now;
-    _lastSnapshotLat = lat;
-    _lastSnapshotLon = lon;
-
     try {
       final snapshot = await _googleMapController?.takeSnapshot();
       if (snapshot != null && snapshot.isNotEmpty && mounted) {
-        ref.read(mapThumbnailControllerProvider.notifier).updateLiveSnapshot(
+        // Discard if generation changed while snapshot was in-flight
+        if (controllerNotifier.mapTypeGeneration != captureGen) {
+          return;
+        }
+
+        await controllerNotifier.updateLiveSnapshot(
           snapshot,
           lat: lat,
           lon: lon,
           mapType: currentMapType,
+          captureGeneration: captureGen,
         );
-        // Record the map type only after the snapshot is successfully accepted,
-        // so a failed capture leaves _lastSnapshotMapType unchanged and the next
-        // attempt still recognizes the pending Normal ↔ Satellite switch.
-        _lastSnapshotMapType = currentMapType;
+
+        if (controllerNotifier.mapTypeGeneration == captureGen && mounted) {
+          _lastSnapshotTime = DateTime.now();
+          _lastSnapshotLat = lat;
+          _lastSnapshotLon = lon;
+          _lastSnapshotMapType = currentMapType;
+        }
       }
     } catch (_) {}
   }
@@ -237,6 +259,7 @@ class _GpsMapThumbnailState extends ConsumerState<GpsMapThumbnail> {
   @override
   void dispose() {
     _initTimeoutTimer?.cancel();
+    _preCacheTimer?.cancel();
     _googleMapController?.dispose();
     _googleMapController = null;
     super.dispose();
@@ -248,20 +271,32 @@ class _GpsMapThumbnailState extends ConsumerState<GpsMapThumbnail> {
     final mapState = ref.watch(mapThumbnailControllerProvider);
     final isSupportedPlatform = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
-    // Listen for map type changes to keep controller synchronized
+    // Listen for map type changes to keep controller synchronized and guard transitions
     ref.listen<AppMapType>(mapTypeSettingsProvider, (_, nextMapType) {
       if (mounted) {
+        // Cancel any pending pre-cache timer belonging to the old map layer
+        _preCacheTimer?.cancel();
+
+        // Reset throttle bookkeeping so the new layer is not throttled
+        _lastSnapshotMapType = null;
+        _lastSnapshotTime = null;
+
+        // Invalidate controller caches and initiate transition state with new generation
+        ref.read(mapThumbnailControllerProvider.notifier).invalidateCachesOnMapTypeChange(
+              nextMapType,
+              lat: widget.latitude,
+              lon: widget.longitude,
+            );
+
         ref.read(mapThumbnailControllerProvider.notifier).handleGpsUpdate(
               newLat: widget.latitude,
               newLon: widget.longitude,
               isLocked: widget.isLocked,
               mapType: nextMapType,
             );
-        // After an in-place Normal ↔ Satellite change, refresh the static
-        // snapshot cache only once the live map has had a chance to apply the
-        // new layer. The throttle bypass plus _lastSnapshotMapType guard ensure
-        // a stale pre-change frame is never accepted as the new map type.
-        Future.delayed(const Duration(milliseconds: 1000), () {
+
+        // Schedule fresh pre-cache snapshot only after the bounded layer transition settling window (1500ms)
+        _preCacheTimer = Timer(MapThumbnailPolicy.layerTransitionSettlingDuration, () {
           if (mounted) {
             _captureSnapshotIfEligible(widget.latitude, widget.longitude);
           }
@@ -497,8 +532,11 @@ class _GpsMapThumbnailState extends ConsumerState<GpsMapThumbnail> {
                 () => controller.takeSnapshot(),
               )
               ..onLiveMapInitialized();
-            Future.delayed(const Duration(milliseconds: 1000), () {
-              _captureSnapshotIfEligible(widget.latitude, widget.longitude);
+            _preCacheTimer?.cancel();
+            _preCacheTimer = Timer(const Duration(milliseconds: 1000), () {
+              if (mounted) {
+                _captureSnapshotIfEligible(widget.latitude, widget.longitude);
+              }
             });
           },
           onCameraIdle: () {

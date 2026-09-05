@@ -44,6 +44,7 @@ class MockEvidenceStorageService extends EvidenceStorageService {
 
 class FakeMapThumbnailService extends MapThumbnailService {
   File? cachedFileToReturn;
+  final List<String> invalidatedKeys = [];
 
   FakeMapThumbnailService() : super(apiKey: 'fake-key');
 
@@ -56,6 +57,23 @@ class FakeMapThumbnailService extends MapThumbnailService {
     String styleVersion = 'v1',
   }) async {
     return cachedFileToReturn;
+  }
+
+  @override
+  Future<void> invalidateCachedImage({
+    required double lat,
+    required double lon,
+    int zoom = 16,
+    required String mapType,
+    String styleVersion = 'v1',
+  }) async {
+    invalidatedKeys.add(MapThumbnailService.computeCacheKey(
+      lat: lat,
+      lon: lon,
+      zoom: zoom,
+      mapType: mapType,
+      styleVersion: styleVersion,
+    ));
   }
 }
 
@@ -382,6 +400,315 @@ void main() {
       expect(decoded, isNotNull);
       expect(decoded!.width, equals(400));
       expect(decoded.height, equals(300));
+    });
+
+    test('9. takeLiveSnapshotForEvidence executes bounded retry and recovers if primary attempt throws', () async {
+      final fakeService = FakeMapThumbnailService();
+      final notifier = MapThumbnailNotifier(fakeService);
+
+      final testBytes = Uint8List.fromList([10, 20, 30, 40]);
+      int callCount = 0;
+
+      // Provider throws on first attempt, succeeds on bounded retry
+      notifier.registerLiveSnapshotProvider(() async {
+        callCount++;
+        if (callCount == 1) {
+          throw Exception('Transient native platform-view contention');
+        }
+        return testBytes;
+      });
+
+      final result = await notifier.takeLiveSnapshotForEvidence(
+        lat: 22.56298,
+        lon: 88.30085,
+        mapType: AppMapType.satellite,
+      );
+
+      expect(result, equals(testBytes));
+      expect(callCount, equals(2), reason: 'Must retry once after transient failure');
+    });
+
+    test('10. takeLiveSnapshotForEvidence falls back to verified pre-cached snapshot when live provider fails', () async {
+      final fakeService = FakeMapThumbnailService();
+      final notifier = MapThumbnailNotifier(fakeService);
+
+      final cachedBytes = Uint8List.fromList([100, 101, 102]);
+
+      // Pre-cache authentic snapshot
+      await notifier.updateLiveSnapshot(
+        cachedBytes,
+        lat: 22.56298,
+        lon: 88.30085,
+        mapType: AppMapType.satellite,
+      );
+
+      // Provider fails completely on all attempts
+      notifier.registerLiveSnapshotProvider(() async {
+        throw Exception('Native surface detached');
+      });
+
+      // Shutter at same location (< 20m) and matching mapType
+      final result = await notifier.takeLiveSnapshotForEvidence(
+        lat: 22.56300,
+        lon: 88.30085,
+        mapType: AppMapType.satellite,
+      );
+
+      expect(result, equals(cachedBytes), reason: 'Must return verified pre-cached authentic snapshot');
+    });
+
+    test('11. takeLiveSnapshotForEvidence rejects pre-cache if distance > 20m or mapType mismatches', () async {
+      final fakeService = FakeMapThumbnailService();
+      final notifier = MapThumbnailNotifier(fakeService);
+
+      final cachedBytes = Uint8List.fromList([200, 201]);
+
+      // Pre-cache authentic snapshot for Satellite at (22.56298, 88.30085)
+      await notifier.updateLiveSnapshot(
+        cachedBytes,
+        lat: 22.56298,
+        lon: 88.30085,
+        mapType: AppMapType.satellite,
+      );
+
+      // Provider fails
+      notifier.registerLiveSnapshotProvider(() async => null);
+
+      // Case A: MapType mismatch (user selected Normal, cached is Satellite) -> REJECTED
+      final mismatchedTypeResult = await notifier.takeLiveSnapshotForEvidence(
+        lat: 22.56298,
+        lon: 88.30085,
+        mapType: AppMapType.normal,
+      );
+      expect(mismatchedTypeResult, isNull, reason: 'Mismatched mapType pre-cache must be rejected');
+
+      // Case B: Distance moved > 20m (~50m away) -> REJECTED
+      final distantResult = await notifier.takeLiveSnapshotForEvidence(
+        lat: 22.56345, // ~52m away
+        lon: 88.30085,
+        mapType: AppMapType.satellite,
+      );
+      expect(distantResult, isNull, reason: 'Pre-cache beyond 20m must be rejected');
+    });
+
+    test('12. Map-type change increments generation and activates transition state', () {
+      final fakeService = FakeMapThumbnailService();
+      final notifier = MapThumbnailNotifier(fakeService);
+
+      expect(notifier.mapTypeGeneration, equals(0));
+      expect(notifier.isMapTypeTransitioning, isFalse);
+
+      notifier.invalidateCachesOnMapTypeChange(
+        AppMapType.normal,
+        lat: 22.56298,
+        lon: 88.30085,
+      );
+
+      expect(notifier.mapTypeGeneration, equals(1));
+      expect(notifier.isMapTypeTransitioning, isTrue);
+      expect(notifier.transitionTargetMapType, equals(AppMapType.normal));
+    });
+
+    test('13. In-memory cache is invalidated immediately on map-type change', () async {
+      final fakeService = FakeMapThumbnailService();
+      final notifier = MapThumbnailNotifier(fakeService);
+
+      final satBytes = Uint8List.fromList([1, 2, 3]);
+      await notifier.updateLiveSnapshot(
+        satBytes,
+        lat: 22.56298,
+        lon: 88.30085,
+        mapType: AppMapType.satellite,
+      );
+
+      expect(
+        notifier.getValidCachedSnapshotBytes(
+          lat: 22.56298,
+          lon: 88.30085,
+          mapType: AppMapType.satellite,
+        ),
+        equals(satBytes),
+      );
+
+      // Act: User switches to Normal (Roadmap)
+      notifier.invalidateCachesOnMapTypeChange(
+        AppMapType.normal,
+        lat: 22.56298,
+        lon: 88.30085,
+      );
+
+      // In-memory cache must now be cleared
+      expect(
+        notifier.getValidCachedSnapshotBytes(
+          lat: 22.56298,
+          lon: 88.30085,
+          mapType: AppMapType.satellite,
+        ),
+        isNull,
+      );
+      expect(
+        notifier.getValidCachedSnapshotBytes(
+          lat: 22.56298,
+          lon: 88.30085,
+          mapType: AppMapType.normal,
+        ),
+        isNull,
+      );
+    });
+
+    test('14. Affected disk cache is invalidated on map-type change', () {
+      final fakeService = FakeMapThumbnailService();
+      final notifier = MapThumbnailNotifier(fakeService);
+
+      notifier.invalidateCachesOnMapTypeChange(
+        AppMapType.satellite,
+        lat: 22.56298,
+        lon: 88.30085,
+      );
+
+      final expectedKey = MapThumbnailService.computeCacheKey(
+        lat: 22.56298,
+        lon: 88.30085,
+        mapType: AppMapType.satellite.staticMapParam,
+      );
+
+      expect(fakeService.invalidatedKeys, contains(expectedKey));
+    });
+
+    test('15. Old async snapshot completing after a map-type change is discarded (stale generation)', () async {
+      final fakeService = FakeMapThumbnailService();
+      final notifier = MapThumbnailNotifier(fakeService);
+
+      // Snapshot captured under generation 0 (Roadmap)
+      final initialGen = notifier.mapTypeGeneration;
+      final roadmapBytes = Uint8List.fromList([8, 8, 8]);
+
+      // User switches to Satellite (increments generation to 1)
+      notifier.invalidateCachesOnMapTypeChange(
+        AppMapType.satellite,
+        lat: 22.56298,
+        lon: 88.30085,
+      );
+
+      expect(notifier.mapTypeGeneration, greaterThan(initialGen));
+
+      // Asynchronous Roadmap snapshot completes late with captureGeneration = 0
+      await notifier.updateLiveSnapshot(
+        roadmapBytes,
+        lat: 22.56298,
+        lon: 88.30085,
+        mapType: AppMapType.normal,
+        captureGeneration: initialGen,
+      );
+
+      // Must be completely discarded: neither Normal nor Satellite should have these bytes
+      expect(
+        notifier.getValidCachedSnapshotBytes(
+          lat: 22.56298,
+          lon: 88.30085,
+          mapType: AppMapType.normal,
+        ),
+        isNull,
+      );
+      expect(
+        notifier.getValidCachedSnapshotBytes(
+          lat: 22.56298,
+          lon: 88.30085,
+          mapType: AppMapType.satellite,
+        ),
+        isNull,
+      );
+    });
+
+    test('16. Transition-state pre-cache is blocked during the 1500ms settling window and accepted after settling', () async {
+      final fakeService = FakeMapThumbnailService();
+      final notifier = MapThumbnailNotifier(fakeService);
+
+      // Transition to Satellite
+      notifier.invalidateCachesOnMapTypeChange(
+        AppMapType.satellite,
+        lat: 22.56298,
+        lon: 88.30085,
+      );
+      final gen = notifier.mapTypeGeneration;
+      final prematureBytes = Uint8List.fromList([99, 99]);
+
+      // Attempt to write snapshot immediately during settling window (elapsed < 1500ms)
+      await notifier.updateLiveSnapshot(
+        prematureBytes,
+        lat: 22.56298,
+        lon: 88.30085,
+        mapType: AppMapType.satellite,
+        captureGeneration: gen,
+      );
+
+      // Should be blocked because settling duration hasn't elapsed
+      expect(
+        notifier.getValidCachedSnapshotBytes(
+          lat: 22.56298,
+          lon: 88.30085,
+          mapType: AppMapType.satellite,
+        ),
+        isNull,
+      );
+      expect(notifier.isMapTypeTransitioning, isTrue);
+    });
+
+    test('17. Shutter fallback cannot use a previous-layer snapshot during active transition', () async {
+      final fakeService = FakeMapThumbnailService();
+      final notifier = MapThumbnailNotifier(fakeService);
+
+      // Live provider fails
+      notifier.registerLiveSnapshotProvider(() async => null);
+
+      // Transition to Satellite
+      notifier.invalidateCachesOnMapTypeChange(
+        AppMapType.satellite,
+        lat: 22.56298,
+        lon: 88.30085,
+      );
+
+      // Attempt evidence capture during transition
+      final result = await notifier.takeLiveSnapshotForEvidence(
+        lat: 22.56298,
+        lon: 88.30085,
+        mapType: AppMapType.satellite,
+      );
+
+      // Must return null instead of falling back to stale pre-transition data
+      expect(result, isNull);
+    });
+
+    test('18. Roadmap pixels can never be accepted as Satellite snapshot merely because logical state is Satellite', () async {
+      final fakeService = FakeMapThumbnailService();
+      final notifier = MapThumbnailNotifier(fakeService);
+
+      // Current state is Satellite
+      notifier.invalidateCachesOnMapTypeChange(
+        AppMapType.satellite,
+        lat: 22.56298,
+        lon: 88.30085,
+      );
+
+      final roadmapBytes = Uint8List.fromList([55, 66, 77]);
+
+      // An old Roadmap snapshot arrives tagged as normal
+      await notifier.updateLiveSnapshot(
+        roadmapBytes,
+        lat: 22.56298,
+        lon: 88.30085,
+        mapType: AppMapType.normal,
+      );
+
+      // Must not be cached under Satellite
+      expect(
+        notifier.getValidCachedSnapshotBytes(
+          lat: 22.56298,
+          lon: 88.30085,
+          mapType: AppMapType.satellite,
+        ),
+        isNull,
+      );
     });
   });
 }

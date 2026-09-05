@@ -62,7 +62,21 @@ class MockLocationService extends LocationHardwareService {
     return true;
   }
 
+  AltitudeTelemetry? customAltitudeTelemetry;
+  Position? _lastEmittedPosition;
+
+  @override
+  Future<AltitudeTelemetry> getAltitudeTelemetry() async {
+    return customAltitudeTelemetry ??
+        AltitudeTelemetry(
+          hasMslAltitude: true,
+          mslAltitudeMeters: _lastEmittedPosition?.altitude ?? lastKnown?.altitude ?? 18.4,
+          wgs84AltitudeMeters: _lastEmittedPosition?.altitude ?? lastKnown?.altitude ?? 18.4,
+        );
+  }
+
   void emitPosition(Position pos) {
+    _lastEmittedPosition = pos;
     _streamController.add(pos);
   }
 
@@ -167,10 +181,42 @@ void main() {
     });
 
     test('Altitude clean sign formatting for positive and negative values', () {
+      // When MSL is established (default isMsl: true)
       expect(GPSUtils.formatAltitude(18.4), '+18.4 m ASL');
       expect(GPSUtils.formatAltitude(-43.4), '-43.4 m ASL');
       expect(GPSUtils.formatAltitude(0.0), '+0.0 m ASL');
       expect(GPSUtils.formatAltitude(null), '—');
+
+      // When MSL is unavailable (truthful WGS84 labeling)
+      expect(GPSUtils.formatAltitude(18.4, isMsl: false), '+18.4 m (WGS84)');
+      expect(GPSUtils.formatAltitude(-42.4, isMsl: false), '-42.4 m (WGS84)');
+      expect(GPSUtils.formatAltitude(0.0, isMsl: false), '+0.0 m (WGS84)');
+      expect(GPSUtils.formatAltitude(null, isMsl: false), '—');
+    });
+
+    test('WGS84 fallback when MSL altitude is unavailable', () async {
+      final notifier = GpsHardwareNotifier(mockService);
+      await Future.delayed(Duration.zero);
+
+      mockService.customAltitudeTelemetry = const AltitudeTelemetry(
+        hasMslAltitude: false,
+        mslAltitudeMeters: null,
+        wgs84AltitudeMeters: -42.4,
+      );
+
+      mockService.emitPosition(createFakePosition(
+        latitude: 22.5629,
+        longitude: 88.3009,
+        accuracy: 3.0,
+        altitude: -42.4,
+        timestamp: DateTime.utc(2026, 9, 4, 15, 0, 0),
+      ));
+      await Future.delayed(Duration.zero);
+
+      expect(notifier.state.hasValidFix, isTrue);
+      expect(notifier.state.isAltitudeMsl, isFalse);
+      expect(notifier.state.altitudeMeters, -42.4);
+      expect(notifier.state.altitudeDisplay, '-42.4 m (WGS84)');
     });
 
     test('Altitude null gracefully shows placeholder without inventing values', () async {
