@@ -239,6 +239,53 @@ async function sendResendEmail({ submissionId, name, email, categoryLabel, messa
 }
 
 /**
+ * Defensive caller IP extraction for Cloud Functions 2nd-gen runtime.
+ * Under Cloud Functions 2nd-gen (Cloud Run / GFE), Express has `trust proxy` enabled,
+ * which causes `req.ip` to evaluate to the LEFTMOST (attacker-controlled) entry of X-Forwarded-For.
+ * Google Front End appends the real client IP as the RIGHTMOST entry of X-Forwarded-For.
+ * This function extracts the trusted rightmost entry, normalizes IPv4-mapped IPv6 addresses,
+ * and falls back to socket.remoteAddress.
+ *
+ * @param {object} request
+ * @returns {string}
+ */
+function extractClientIp(request) {
+  let callerIp = 'anonymous';
+  let rawForwardedFor;
+  if (request.rawRequest && request.rawRequest.headers) {
+    rawForwardedFor =
+      request.rawRequest.headers['x-forwarded-for'] ||
+      request.rawRequest.headers['X-Forwarded-For'];
+  }
+  if (Array.isArray(rawForwardedFor)) {
+    rawForwardedFor = rawForwardedFor.join(',');
+  }
+  if (typeof rawForwardedFor === 'string' && rawForwardedFor.trim().length > 0) {
+    const entries = rawForwardedFor
+      .split(',')
+      .map((e) => e.trim())
+      .filter((e) => e.length > 0);
+    if (entries.length > 0) {
+      callerIp = entries[entries.length - 1];
+    }
+  } else if (
+    request.rawRequest &&
+    ((request.rawRequest.socket && request.rawRequest.socket.remoteAddress) ||
+     (request.rawRequest.connection && request.rawRequest.connection.remoteAddress))
+  ) {
+    callerIp =
+      (request.rawRequest.socket && request.rawRequest.socket.remoteAddress) ||
+      (request.rawRequest.connection && request.rawRequest.connection.remoteAddress);
+  }
+
+  if (callerIp.startsWith('::ffff:')) {
+    callerIp = callerIp.slice(7);
+  }
+
+  return callerIp;
+}
+
+/**
  * Core handler logic for submitUserEnquiry (exported for unit testing).
  */
 async function handleUserEnquiry(request, options = {}) {
@@ -259,14 +306,24 @@ async function handleUserEnquiry(request, options = {}) {
   // 2. Validate and sanitize input
   const validated = validateEnquiryPayload(request.data);
 
-  // 3. Persistent Rate Limiting (Remediates vuln-0002 & vuln-0001: Drop untrusted X-Forwarded-For; enforce aggregate IP + per-UID limits)
+  // 3. Persistent Rate Limiting (vuln-0002/vuln-0001 remediation; hardened against X-Forwarded-For spoofing)
   const callerUid = request.auth ? request.auth.uid : null;
-  const callerIp = request.rawRequest && request.rawRequest.ip ? request.rawRequest.ip : 'anonymous';
-  const ipKey = callerIp.replace(/[^a-zA-Z0-9]/g, '_');
+
+  // Caller IP MUST NOT come from req.ip: on GCF 2nd-gen the functions-framework
+  // runtime enables Express `trust proxy`, so `req.ip` resolves to the LEFTMOST
+  // (attacker-controlled) X-Forwarded-For entry. The trusted Google Front End
+  // appends the real client IP as the RIGHTMOST entry, so derive the IP from the
+  // rightmost entry and fall back to the socket remote address.
+  const callerIp = extractClientIp(request);
+  const ipKey = callerIp.replace(/[^a-zA-Z0-9]/g, '_') || 'anonymous';
 
   // Step 3a: Enforce Aggregate Per-IP Limit for ALL requests (prevents multi-account farming)
   // Baseline: 10 attempts per 10-minute sliding window across all accounts from the same IP
   await checkPersistentRateLimit(db, `ip_aggregate_${ipKey}`, 10, 10 * 60 * 1000);
+
+  // Step 3a-2: Global non-IP aggregate cap (defense-in-depth). Even if the caller
+  // IP cannot be pinned down reliably, total submission volume stays bounded.
+  await checkPersistentRateLimit(db, 'global_total', 100, 10 * 60 * 1000);
 
   // Step 3b: Enforce granular limit (5 attempts / 10 minutes)
   // - For authenticated callers: scoped to UID + IP (uid_${callerUid}_ip_${ipKey})
@@ -324,6 +381,7 @@ async function handleUserEnquiry(request, options = {}) {
 exports.submitUserEnquiry = onCall(
   {
     enforceAppCheck: true,
+    consumeAppCheckToken: true,
     secrets: [resendApiKeySecret],
     region: 'us-central1',
     cors: false,
@@ -340,3 +398,4 @@ exports.checkPersistentRateLimit = checkPersistentRateLimit;
 exports.sendResendEmail = sendResendEmail;
 exports.handleUserEnquiry = handleUserEnquiry;
 exports.VALID_CATEGORIES = VALID_CATEGORIES;
+exports.extractClientIp = extractClientIp;

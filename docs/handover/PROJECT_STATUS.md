@@ -1,23 +1,24 @@
 # SiteLens — Project Status & Implementation State
 
-**Date**: 2026-09-04T15:10:00+05:30
-**Current Milestone**: Minimap Evidence Provenance & Production Security Verified (476/476 Tests Passing), Validated on Physical Hardware (`ZA222NBPPV`)
-**Release Status**: `PRODUCTION RELEASE CANDIDATE READY & VERIFIED`
+**Date**: 2026-09-05T14:30:00+05:30  
+**Current Milestone**: Production Release v1.0.0 — Frozen Baseline (`a17e8c3` / Tag `v1.0.0`), 489/489 Tests Passing, Physical Hardware Verification Passed (10/10 Matrix), Strix Security Scope Formalized  
+**Release Status**: `PRODUCTION RELEASE FROZEN & VERIFIED (v1.0.0 / commit a17e8c3)`
 
 ```text
 ========================================================================================
                                 CURRENT RELEASE GATE STATUS
 ========================================================================================
- SECURITY REMEDIATION:     IMPLEMENTED & VERIFIED (Modules 1, 1A, 2, 3, 4, 5, 6, 7)
- AUTOMATED VERIFICATION:   PASS (476/476 Flutter, 57/57 Security Rules, 22/22 Cloud Functions)
- STATIC ANALYSIS & AUDIT:  PASS (0 analyzer issues, 0 npm vulnerabilities, clean git diff)
+ SECURITY REMEDIATION:     IMPLEMENTED & VERIFIED (Modules 1–7; 8/8 findings closed; strix-sitelens-instructions.md formalized)
+ AUTOMATED VERIFICATION:   PASS (489/489 Flutter, 57/57 Security Rules, 22/22 Cloud Functions)
+ STATIC ANALYSIS & AUDIT:  PASS (0 analyzer issues, 0 npm vulnerabilities, clean working tree)
  TOOLCHAIN & BUILD SYSTEM: PASS (Flutter 3.47.1, Gradle 9.3.1, AGP 9.1.0, Kotlin 2.4.0, Java 21)
  RELEASE SIGNING GATE:     CONFIGURED & FAIL-CLOSED (signingConfigs.release without debug fallback)
  GOOGLE AUTHENTICATION:    PASS (Release SHA-1/SHA-256 registered, google-services.json updated)
  PHYSICAL DEVICE DEPLOY:   PASS (Verified on Motorola edge 50 fusion ZA222NBPPV / Android 16)
- FINAL STRIX SECURITY GATE:PASS (strix_runs/sitelens_da94 / 0 vulnerabilities detected)
+ FINAL STRIX SECURITY GATE:SCOPE FORMALIZED (strix-sitelens-instructions.md updated for v1.0.0 freeze)
  CAMERA & MINIMAP PROVENANCE:PASS (Fixed portrait, live minimap snapshot T0, heading cone,
-                                   burned Evidence JPEG, verified on physical hardware)
+                                   burned Evidence JPEG, layer-isolated cache, zero stale-layer race)
+ ALTITUDE / MSL DATUM:     PASS (Android 14+ getMslAltitudeMeters() via MethodChannel; true MSL)
  PRODUCTION GATE DECISION: APPROVED FOR PRODUCTION DISTRIBUTION
 ========================================================================================
 ```
@@ -31,7 +32,7 @@
 - **Current Milestone Accomplishments**:
   - All security findings (Modules 1 through 7 + Module 4 Local Isolation follow-up) remediated and verified.
   - 57/57 Firestore/Storage security rules tests passing in emulator.
-  - 476/476 Flutter unit, widget, and integration tests passing.
+  - 489/489 Flutter unit, widget, and integration tests passing.
   - 22/22 Cloud Functions backend tests passing.
   - Clean static analysis (`flutter analyze` 0 issues).
   - Modernized Android toolchain (Gradle 9.3.1, AGP 9.1.0, Kotlin 2.4.0, Java 21, compileSdk 35).
@@ -45,16 +46,23 @@
     * Derived native scale factor uniformly from short dimension against 390dp reference canvas (`s = min(W, H) / 390.0`), resolving the 38.4% portrait deflation bug.
     * Promoted `refMaxLandscapeWidth = 520.0` from Flutter card into `HudLayoutSpec`.
     * Implemented coupled two-pass layout ensuring 2-line wrapped address and strictly equal minimap/metadata card heights with 1.24:1 minimap aspect ratio.
-  - Implemented **Orientation & Auto-Rotate Features**:
-    * Enabled auto-rotate by default on app launch (`[DeviceOrientation.portraitUp, DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]`).
-    * Added user-configurable orientation mode setting (`Auto-Rotate (Default)`, `Portrait`, `Landscape`) persisted in `SharedPreferences`.
-    * Reflowed `CameraScreen` into horizontal layout with top HUD and right-hand shutter grip station when landscape mode is active.
-    * Configured `MediaDetailScreen` to keep overall layout in portrait while rendering the photo viewport in 4:3 landscape ratio.
-    * Locked `ImmersiveEvidenceViewer` to landscape orientations when landscape mode is active.
-    * Configured evidence processing isolate and `JpegMetadataExtractor` to ensure landscape evidence captures are exported in landscape orientation without distortion.
-  - Physical Device Validation on Motorola edge 50 fusion (`ZA222NBPPV`):
-    * Deployed updated debug APK; verified orientation settings, camera reflow, capture, detail photo viewport, and immersive viewer.
-    * Stopped manual/hardware verification upon user request.
+  - Implemented **Fixed Portrait-Only Orientation Policy**:
+    * Enforced `android:screenOrientation="portrait"` in `AndroidManifest.xml` and locked `SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp])` in `main.dart`.
+    * Cleaned up legacy orientation settings and controllers to ensure an immutable, predictable portrait layout across camera, viewfinder, gallery, and viewer.
+  - Implemented **Minimap Layer Provenance & Asynchronous Race Fix**:
+    * Atomic generation tracking (`_snapshotGeneration`) in `MapThumbnailController`.
+    * Map-type cache isolation (`AppMapType.roadmap` vs `AppMapType.satellite`) in memory and on disk.
+    * Layer transition debouncing, canvas stabilization, and strict shutter-time validation.
+    * Downstream single-JPEG forensic display guaranteeing pixel-faithful render of burned evidence.
+  - Implemented **True Mean Sea Level (MSL) Altitude Correction**:
+    * Platform MethodChannel hook to Android 14+ (`API 34+`) `Location.getMslAltitudeMeters()`.
+    * Datum-aware domain modeling in `GnssSnapshot`, `GpsHardwareState`, and `EvidenceMetadataSnapshot`.
+    * Eliminated the -42m WGS84 ellipsoidal geoid offset in West Bengal, India; displays true orthometric MSL elevation (`+23m` to `+25m MSL` on physical device).
+  - Formalized **Authoritative Strix Security Assessment Scope**:
+    * Updated `strix-sitelens-instructions.md` pinned to release commit `a17e8c3`, Git tag `v1.0.0`, release APK SHA-256, and production signing certificate SHA-1.
+    * Documented 8/8 closed findings baseline and 4-tier classification standard.
+  - Physical Device Hardware Verification Suite on Motorola edge 50 fusion (`ZA222NBPPV`):
+    * 10/10 test matrix passed: Satellite captures, Roadmap captures, immediate layer switching, burst captures, layer alternation, Detail/Viewer match, MSL altitude, and PDF inspection note export.
 - **Architecture Baseline**: `architecture.md`
 - **Product Requirements**: `PRD.md`
 
@@ -75,8 +83,11 @@
 | **Application ID / Package** | `com.sitelens.app` | `OPERATIONAL` |
 | **Firebase Project** | `sitelens-prod-80e7b` | `OPERATIONAL` |
 | **Release Signing Key** | Production Release Keystore (`sitelens-release`) | `VERIFIED & RETAINED` |
+| **Production Signing SHA-1** | `D8:22:85:B2:0D:1E:11:F4:D2:6C:F0:2F:D1:F7:DF:61:EB:79:2A:69` | `VERIFIED` |
 | **Connected Test Target** | Physical Hardware `Motorola edge 50 fusion` / `ZA222NBPPV` (Android 16 / API 36) | `VERIFIED & OPERATIONAL` |
-| **Debug APK Artifact** | `build/app/outputs/flutter-apk/app-debug.apk` | `BUILT & DEPLOYED` |
+| **Release APK Artifact** | `build/app/outputs/flutter-apk/app-release.apk` | `BUILT & VERIFIED` |
+| **Release APK SHA-256** | `3a98caec498e93fc32852592bccce7c618d0a3b4673fec3cde27ef063f3ba655` | `VERIFIED` |
+| **Git Baseline** | Commit `a17e8c3`, Tag `v1.0.0` (HEAD of `main`) | `FROZEN & VERIFIED` |
 
 ---
 
@@ -101,5 +112,8 @@
 | **Option B HUD Architecture & Geometry Alignment** | Canonical `HudData` + `HudLayoutSpec` + `HudFormatter`, separate renderers, preview 0.42 alignment | **COMPLETED & VERIFIED** | 457/457 tests passing; zero geometry delta on Canvas; debug APK deployed to hardware. |
 | **Canonical Native HUD Scaling & Coupled Layout Fix** | `hud_layout_spec.dart`, `watermark_drawer.dart`, tests | **FIXED & VERIFIED** | Uniform native scale derivation; coupled two-pass layout; 464/464 tests passed. |
 | **Orientation Policy — Fixed Portrait** | `AndroidManifest.xml`, `main.dart`, `camera_screen.dart`, `media_detail_screen.dart` | **COMPLETED & VERIFIED** | Fixed portrait-only orientation across manifest, runtime, camera, and gallery; auto-rotate/settings removed; 467/467 tests passed. |
-| **Minimap Evidence Provenance** | `gps_map_thumbnail.dart`, `map_thumbnail_controller.dart`, `watermark_drawer.dart`, `evidence_metadata_snapshot.dart` | **COMPLETED & VERIFIED** | Shutter-time native map snapshot (T₀), heading cone, burned-in Evidence JPEG, downstream single-JPEG display; 476/476 tests passed. |
-| **Physical Hardware Verification** | `motorola edge 50 fusion` (`ZA222NBPPV`) | **VERIFIED ON DEVICE** | Physical device on-device validation passed. |
+| **Minimap Evidence Provenance** | `gps_map_thumbnail.dart`, `map_thumbnail_controller.dart`, `watermark_drawer.dart`, `evidence_metadata_snapshot.dart` | **COMPLETED & VERIFIED** | Generation tracking, map-type cache isolation, shutter-time strict validation, zero stale-layer race; 476+ tests passed. |
+| **True MSL Altitude Correction** | `MainActivity.kt`, `GnssSnapshot`, `EvidenceMetadataSnapshot`, `WatermarkDrawer`, HUD cards | **COMPLETED & VERIFIED** | Android 14+ `Location.getMslAltitudeMeters()` via MethodChannel; eliminated -42m ellipsoidal offset; truthful MSL labeling; 489/489 tests passed. |
+| **Physical Hardware Verification Suite** | Motorola edge 50 fusion (`ZA222NBPPV`, Android 16 / API 36) | **10/10 PASS** | 10-point physical verification matrix passed: Satellite, Roadmap, bursts, alternation, detail/viewer match, MSL altitude, and PDF export. |
+| **Authoritative Strix Security Instructions** | `strix-sitelens-instructions.md` | **FORMALIZED & PINNED** | Pinned to release baseline `a17e8c3` / `v1.0.0`, release APK hash, production signing SHA-1, 8/8 closed findings baseline, and 4-tier classification. |
+

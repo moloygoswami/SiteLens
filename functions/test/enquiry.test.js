@@ -7,6 +7,7 @@ const {
   sendResendEmail,
   handleUserEnquiry,
   VALID_CATEGORIES,
+  extractClientIp,
 } = require('../index.js');
 
 /**
@@ -214,7 +215,7 @@ describe('Backend: User Enquiry System', () => {
       );
     });
 
-    test('rate limits unauthenticated callers by remote IP and ignores spoofed X-Forwarded-For (vuln-0002)', async () => {
+    test('rate limits unauthenticated callers by remote IP and ignores spoofed X-Forwarded-For (vuln-0001 / vuln-0002)', async () => {
       const mockFetch = async () => ({
         ok: true,
         status: 200,
@@ -223,13 +224,20 @@ describe('Backend: User Enquiry System', () => {
 
       const fixedIp = '203.0.113.195';
 
-      // Submit 5 requests from the same real IP, but rotating spoofed X-Forwarded-For header
+      // Submit 5 requests from the same real IP, but rotating spoofed X-Forwarded-For header.
+      // In production Cloud Functions 2nd-gen with Express trust proxy:
+      // Client sends: X-Forwarded-For: 198.51.100.i
+      // Google Front End appends real IP: X-Forwarded-For: 198.51.100.i, 203.0.113.195
+      // Express trust-proxy sets rawRequest.ip to the LEFTMOST (spoofed) IP: 198.51.100.i
+      // Backend extractClientIp extracts the RIGHTMOST IP: 203.0.113.195
       for (let i = 1; i <= 5; i++) {
+        const spoofedIp = `198.51.100.${i}`;
         const req = {
           app: { appId: 'com.sitelens.app' },
           rawRequest: {
-            ip: fixedIp,
-            headers: { 'x-forwarded-for': `198.51.100.${i}` }, // Spoofed header
+            ip: spoofedIp,
+            headers: { 'x-forwarded-for': `${spoofedIp}, ${fixedIp}` },
+            socket: { remoteAddress: '127.0.0.1' },
           },
           data: {
             submissionId: `sub-rate-test-ip-${i}`,
@@ -253,8 +261,9 @@ describe('Backend: User Enquiry System', () => {
       const sixthReq = {
         app: { appId: 'com.sitelens.app' },
         rawRequest: {
-          ip: fixedIp,
-          headers: { 'x-forwarded-for': '198.51.100.99' },
+          ip: '198.51.100.99',
+          headers: { 'x-forwarded-for': `198.51.100.99, ${fixedIp}` },
+          socket: { remoteAddress: '127.0.0.1' },
         },
         data: {
           submissionId: 'sub-rate-test-ip-6',
@@ -287,12 +296,18 @@ describe('Backend: User Enquiry System', () => {
 
       const fixedIp = '198.51.100.42';
 
-      // 10 distinct UIDs from the exact same IP each submit 1 request
+      // 10 distinct UIDs from the exact same real IP each submit 1 request,
+      // rotating spoofed X-Forwarded-For to simulate multi-account bypass attempts
       for (let i = 1; i <= 10; i++) {
+        const spoofedIp = `203.0.113.${i}`;
         const req = {
           app: { appId: 'com.sitelens.app' },
           auth: { uid: `attacker_uid_${i}` },
-          rawRequest: { ip: fixedIp },
+          rawRequest: {
+            ip: spoofedIp,
+            headers: { 'x-forwarded-for': `${spoofedIp}, ${fixedIp}` },
+            socket: { remoteAddress: '127.0.0.1' },
+          },
           data: {
             submissionId: `sub-multi-uid-${i}`,
             name: `Attacker Account ${i}`,
@@ -315,7 +330,11 @@ describe('Backend: User Enquiry System', () => {
       const eleventhReq = {
         app: { appId: 'com.sitelens.app' },
         auth: { uid: 'attacker_uid_11' },
-        rawRequest: { ip: fixedIp },
+        rawRequest: {
+          ip: '203.0.113.99',
+          headers: { 'x-forwarded-for': `203.0.113.99, ${fixedIp}` },
+          socket: { remoteAddress: '127.0.0.1' },
+        },
         data: {
           submissionId: 'sub-multi-uid-11',
           name: 'Attacker Account 11',
@@ -352,7 +371,10 @@ describe('Backend: User Enquiry System', () => {
         const req = {
           app: { appId: 'com.sitelens.app' },
           auth: { uid: 'heavy_user_1' },
-          rawRequest: { ip: fixedIp },
+          rawRequest: {
+            headers: { 'x-forwarded-for': fixedIp },
+            socket: { remoteAddress: fixedIp },
+          },
           data: {
             submissionId: `sub-heavy-uid-${i}`,
             name: 'Heavy User',
@@ -375,7 +397,10 @@ describe('Backend: User Enquiry System', () => {
       const sixthReq = {
         app: { appId: 'com.sitelens.app' },
         auth: { uid: 'heavy_user_1' },
-        rawRequest: { ip: fixedIp },
+        rawRequest: {
+          headers: { 'x-forwarded-for': fixedIp },
+          socket: { remoteAddress: fixedIp },
+        },
         data: {
           submissionId: 'sub-heavy-uid-6',
           name: 'Heavy User',
@@ -401,7 +426,10 @@ describe('Backend: User Enquiry System', () => {
       const anotherReq = {
         app: { appId: 'com.sitelens.app' },
         auth: { uid: 'distinct_user_2' },
-        rawRequest: { ip: fixedIp },
+        rawRequest: {
+          headers: { 'x-forwarded-for': fixedIp },
+          socket: { remoteAddress: fixedIp },
+        },
         data: {
           submissionId: 'sub-distinct-uid-2',
           name: 'Distinct User',
@@ -436,7 +464,10 @@ describe('Backend: User Enquiry System', () => {
           {
             app: { appId: 'com.sitelens.app' },
             auth: { uid: `user_ip1_${i}` },
-            rawRequest: { ip: ip1 },
+            rawRequest: {
+              headers: { 'x-forwarded-for': ip1 },
+              socket: { remoteAddress: ip1 },
+            },
             data: {
               submissionId: `sub-ip1-${i}`,
               name: `User ${i}`,
@@ -456,7 +487,10 @@ describe('Backend: User Enquiry System', () => {
             {
               app: { appId: 'com.sitelens.app' },
               auth: { uid: 'user_ip1_11' },
-              rawRequest: { ip: ip1 },
+              rawRequest: {
+                headers: { 'x-forwarded-for': ip1 },
+                socket: { remoteAddress: ip1 },
+              },
               data: {
                 submissionId: 'sub-ip1-11',
                 name: 'User 11',
@@ -476,7 +510,10 @@ describe('Backend: User Enquiry System', () => {
         {
           app: { appId: 'com.sitelens.app' },
           auth: { uid: 'user_ip2_1' },
-          rawRequest: { ip: ip2 },
+          rawRequest: {
+            headers: { 'x-forwarded-for': ip2 },
+            socket: { remoteAddress: ip2 },
+          },
           data: {
             submissionId: 'sub-ip2-1',
             name: 'User on IP2',
@@ -488,6 +525,218 @@ describe('Backend: User Enquiry System', () => {
         { db: mockDb, resendApiKey: 're_test_key', fetch: mockFetch, enforceAppCheck: true }
       );
       assert.strictEqual(ip2Res.success, true);
+    });
+
+    test('enforces global non-IP aggregate rate limit across all callers', async () => {
+      const mockFetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ id: 're_global' }),
+      });
+
+      // Submit 100 requests across distinct IPs (1 request each, below 10/IP limit)
+      for (let i = 1; i <= 100; i++) {
+        const ip = `10.0.${Math.floor(i / 250)}.${i % 250}`;
+        const req = {
+          app: { appId: 'com.sitelens.app' },
+          auth: { uid: `global_user_${i}` },
+          rawRequest: {
+            headers: { 'x-forwarded-for': ip },
+            socket: { remoteAddress: ip },
+          },
+          data: {
+            submissionId: `sub-global-${i}`,
+            name: `User ${i}`,
+            email: `user${i}@example.com`,
+            category: 'general',
+            message: 'Testing global aggregate submission limits.',
+          },
+        };
+
+        const res = await handleUserEnquiry(req, {
+          db: mockDb,
+          resendApiKey: 're_test_key',
+          fetch: mockFetch,
+          enforceAppCheck: true,
+        });
+        assert.strictEqual(res.success, true);
+      }
+
+      // 101st request from a fresh IP and fresh UID must be rejected by global_total
+      const freshReq = {
+        app: { appId: 'com.sitelens.app' },
+        auth: { uid: 'fresh_user_101' },
+        rawRequest: {
+          headers: { 'x-forwarded-for': '198.51.100.200' },
+          socket: { remoteAddress: '198.51.100.200' },
+        },
+        data: {
+          submissionId: 'sub-global-101',
+          name: 'Fresh User',
+          email: 'fresh@example.com',
+          category: 'general',
+          message: 'Should be blocked by global_total rate limit.',
+        },
+      };
+
+      await assert.rejects(
+        async () => {
+          await handleUserEnquiry(freshReq, {
+            db: mockDb,
+            resendApiKey: 're_test_key',
+            fetch: mockFetch,
+            enforceAppCheck: true,
+          });
+        },
+        { code: 'resource-exhausted' }
+      );
+    });
+
+    test('rate-limit failure remains fail-closed when database transaction throws', async () => {
+      let emailSent = false;
+      const mockFetch = async () => {
+        emailSent = true;
+        return { ok: true, status: 200, json: async () => ({ id: 're_fail' }) };
+      };
+
+      const brokenDb = {
+        collection: () => ({
+          doc: () => ({ get: async () => ({ exists: false }) }),
+        }),
+        runTransaction: async () => {
+          throw new Error('Firestore connection unavailable');
+        },
+      };
+
+      const req = {
+        app: { appId: 'com.sitelens.app' },
+        rawRequest: {
+          headers: { 'x-forwarded-for': '203.0.113.1' },
+          socket: { remoteAddress: '203.0.113.1' },
+        },
+        data: {
+          submissionId: 'sub-fail-closed-1',
+          name: 'Fail Closed Tester',
+          email: 'test@example.com',
+          category: 'general',
+          message: 'Ensuring fail-closed rate limit guarantees.',
+        },
+      };
+
+      await assert.rejects(
+        async () => {
+          await handleUserEnquiry(req, {
+            db: brokenDb,
+            resendApiKey: 're_test_key',
+            fetch: mockFetch,
+            enforceAppCheck: true,
+          });
+        },
+        /Firestore connection unavailable/
+      );
+
+      // Verify email was NOT sent
+      assert.strictEqual(emailSent, false);
+    });
+  });
+
+  describe('Defensive IP Extraction (extractClientIp)', () => {
+    test('extracts rightmost IP from multiple comma-separated X-Forwarded-For entries', () => {
+      const req = {
+        rawRequest: {
+          headers: { 'x-forwarded-for': '198.51.100.1, 10.0.0.1, 203.0.113.195' },
+          socket: { remoteAddress: '127.0.0.1' },
+          ip: '198.51.100.1',
+        },
+      };
+      assert.strictEqual(extractClientIp(req), '203.0.113.195');
+    });
+
+    test('trims whitespace around entries in X-Forwarded-For', () => {
+      const req = {
+        rawRequest: {
+          headers: { 'x-forwarded-for': '  198.51.100.1 ,   203.0.113.195   ' },
+        },
+      };
+      assert.strictEqual(extractClientIp(req), '203.0.113.195');
+    });
+
+    test('handles array-valued X-Forwarded-For header', () => {
+      const req = {
+        rawRequest: {
+          headers: { 'x-forwarded-for': ['198.51.100.1', '203.0.113.195'] },
+        },
+      };
+      assert.strictEqual(extractClientIp(req), '203.0.113.195');
+    });
+
+    test('case-insensitively checks X-Forwarded-For header', () => {
+      const req = {
+        rawRequest: {
+          headers: { 'X-Forwarded-For': '203.0.113.55' },
+        },
+      };
+      assert.strictEqual(extractClientIp(req), '203.0.113.55');
+    });
+
+    test('normalizes IPv4-mapped IPv6 address (strips ::ffff:)', () => {
+      const req = {
+        rawRequest: {
+          headers: { 'x-forwarded-for': '::ffff:203.0.113.195' },
+        },
+      };
+      assert.strictEqual(extractClientIp(req), '203.0.113.195');
+    });
+
+    test('normalizes IPv4-mapped IPv6 address from socket.remoteAddress', () => {
+      const req = {
+        rawRequest: {
+          headers: {},
+          socket: { remoteAddress: '::ffff:192.0.2.5' },
+        },
+      };
+      assert.strictEqual(extractClientIp(req), '192.0.2.5');
+    });
+
+    test('falls back to socket.remoteAddress when X-Forwarded-For is absent', () => {
+      const req = {
+        rawRequest: {
+          headers: {},
+          socket: { remoteAddress: '198.51.100.88' },
+        },
+      };
+      assert.strictEqual(extractClientIp(req), '198.51.100.88');
+    });
+
+    test('falls back to connection.remoteAddress when socket is absent', () => {
+      const req = {
+        rawRequest: {
+          headers: {},
+          connection: { remoteAddress: '198.51.100.77' },
+        },
+      };
+      assert.strictEqual(extractClientIp(req), '198.51.100.77');
+    });
+
+    test('returns anonymous when neither header nor socket exists', () => {
+      const req = {
+        rawRequest: {
+          headers: {},
+        },
+      };
+      assert.strictEqual(extractClientIp(req), 'anonymous');
+    });
+
+    test('never uses rawRequest.ip when header or socket is available', () => {
+      const req = {
+        rawRequest: {
+          ip: 'attacker.controlled.ip',
+          headers: { 'x-forwarded-for': 'spoofed.ip, 203.0.113.195' },
+          socket: { remoteAddress: '127.0.0.1' },
+        },
+      };
+      // Must not be attacker.controlled.ip or spoofed.ip
+      assert.strictEqual(extractClientIp(req), '203.0.113.195');
     });
   });
 

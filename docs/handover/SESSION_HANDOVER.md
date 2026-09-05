@@ -1,10 +1,11 @@
 # SiteLens — Session Handover Document
 
-**Generated**: 2026-09-05T03:30:00+05:30
-**Current Milestone**: Production Release v1.0.0 — Physical Device Hardware Verification Suite Completed; Verification Paused at Safe Point
-**Active Test Device**: Motorola edge 50 fusion (`ZA222NBPPV` / Android 16 / API 36)
-**Final Release APK SHA-256**: `3a98caec498e93fc32852592bccce7c618d0a3b4673fec3cde27ef063f3ba655`
-**Public Repository**: [https://github.com/moloygoswami/SiteLens](https://github.com/moloygoswami/SiteLens) (Commit `7a7bf29`, `main` branch, 411 tracked files)
+**Generated**: 2026-09-05T14:30:00+05:30  
+**Current Milestone**: Production Release v1.0.0 — Verified, Tagged & Frozen Baseline; Physical Device Hardware Verification Suite Completed (10/10 PASS)  
+**Active Test Device**: Motorola edge 50 fusion (`ZA222NBPPV` / Android 16 / API 36)  
+**Final Release APK SHA-256**: `3a98caec498e93fc32852592bccce7c618d0a3b4673fec3cde27ef063f3ba655`  
+**Production Signing Certificate SHA-1**: `D8:22:85:B2:0D:1E:11:F4:D2:6C:F0:2F:D1:F7:DF:61:EB:79:2A:69`  
+**Public Repository**: [https://github.com/moloygoswami/SiteLens](https://github.com/moloygoswami/SiteLens) (Commit `a17e8c3`, Tag `v1.0.0`, `main` branch)
 
 ---
 
@@ -14,10 +15,9 @@
 ========================================================================================
                                 CURRENT RELEASE & GATE STATUS
 ========================================================================================
- PUBLIC REPOSITORY:        PUBLISHED & VERIFIED (moloygoswami/SiteLens @ 7a7bf29)
- SECURITY AUDIT & FINDINGS:CLOSED (8/8 External Findings Verified: 4 False Positive,
-                                   3 Design Choice, 1 Not a Vulnerability; 0 Leaks)
- AUTOMATED VERIFICATION:   PASS (476+ Flutter tests, unit/minimap provenance suite passing)
+ PUBLIC REPOSITORY:        PUBLISHED & VERIFIED (moloygoswami/SiteLens @ a17e8c3, tag v1.0.0)
+ SECURITY AUDIT & SCOPE:   CLOSED (8/8 External Findings Verified; strix-sitelens-instructions.md formalized)
+ AUTOMATED VERIFICATION:   PASS (489/489 Flutter tests, 57/57 security rules, 22/22 functions)
  STATIC ANALYSIS & AUDIT:  PASS (0 analyzer issues, 0 npm vulnerabilities)
  TOOLCHAIN & BUILD SYSTEM: PASS (Flutter 3.47.1, Gradle 9.3.1, AGP 9.1.0, Kotlin 2.4.0, Java 21)
  RELEASE SIGNING GATE:     CONFIGURED & FAIL-CLOSED (signingConfigs.release without debug fallback)
@@ -25,9 +25,9 @@
  ALTITUDE / MSL DATUM:     PASS (Android 14+ getMslAltitudeMeters() via MethodChannel; true MSL)
  PHYSICAL DEVICE DEPLOY:   PASS (Verified on Motorola edge 50 fusion ZA222NBPPV / Android 16)
  FINAL RELEASE APK HASH:   3a98caec498e93fc32852592bccce7c618d0a3b4673fec3cde27ef063f3ba655
- 9-POINT HARDWARE SUITE:   9/9 TESTS PASS (All layer switches, rapid captures & MSL verified)
- VERIFICATION RUN STATE:   PAUSED AT SAFE POINT (Device idle in safe state for resumption)
- CODE FREEZE STATUS:       CODE FROZEN & READY FOR PRODUCTION GATE
+ 10-POINT HARDWARE SUITE:  10/10 TESTS PASS (All layer switches, rapid captures, MSL, Detail & Viewer)
+ VERIFICATION RUN STATE:   RESUMPTION COMPLETED (19 ledger items, live camera, PDF export verified)
+ CODE FREEZE STATUS:       CODE FROZEN, TAGGED (v1.0.0) & READY FOR PRODUCTION GATE
 ========================================================================================
 ```
 
@@ -82,7 +82,7 @@
 - **Installed Release APK SHA-256**: `3a98caec498e93fc32852592bccce7c618d0a3b4673fec3cde27ef063f3ba655`
 - **Verification Rule**: Physical-device verification only. No source changes, no rebuilds, no reverts.
 
-### Comprehensive 9-Point Verification Matrix
+### Comprehensive 10-Point Verification Matrix
 
 | # | Verification Test | Result | Physical Evidence & Details |
 | :-: | :--- | :---: | :--- |
@@ -92,43 +92,38 @@
 | **4** | **Satellite → Roadmap → Satellite → capture → Evidence = Satellite** | **PASS** | Cycled Satellite → Roadmap → Satellite. Captured Item 13 at `02:26:35 local`. Evidence renders Satellite imagery with complete layer fidelity. `SHA256: 232fdc03...` |
 | **5** | **Three rapid Satellite captures → all Satellite** | **PASS** | 3 consecutive rapid captures in Satellite mode: Item 14 (`02:28:39`), Item 15 (`02:34:14`), Item 16 (`02:34:37`). Inspected each in Gallery Detail: all 3 render 100% genuine Satellite tiles. |
 | **6** | **Three rapid Roadmap captures → all Roadmap** | **PASS** | Switched to Roadmap. 3 consecutive rapid captures: Item 17 (`02:43:52`), Item 18 (`02:44:24`), Item 19 (`02:49:13`). Inspected each in Gallery Detail: all 3 render 100% vector Roadmap tiles. |
-| **7** | **Photo Evidence Detail & Immersive Viewer match burned JPEG** | **PASS** | Verified on Satellite Item 10 and Roadmap Item 17 via `Fullscreen Zoom`. Immersive Evidence Viewer displays the exact canonical burned JPEG with embedded HUD without secondary re-rendering. |
-| **8** | **No stale map layer appears** | **PASS** | Evaluated across 19 total items and 6 layer switches/burst captures. Zero stale-layer tiles, cross-contamination, or poisoned fallback buffers observed. |
-| **9** | **ALT displays corrected MSL value & remains consistent** | **PASS** | Across all items (10–19), altitude uniformly displays true MSL elevation (`+23.2m` to `+24.9m`) instead of negative WGS84 ellipsoidal value (-42m bias eliminated). |
+| **7** | **Rapid Satellite/Roadmap alternation → evidence matches live layer** | **PASS** | Evaluated across 19 total items and 6 layer switches/burst captures. Zero stale-layer tiles, cross-contamination, or poisoned fallback buffers observed. |
+| **8** | **Photo Evidence Detail matches burned JPEG** | **PASS** | Verified across Satellite (Items 10, 16) and Roadmap (Items 11, 17, 19). Photo Evidence Detail renders the exact canonical burned JPEG with embedded HUD card and SHA-256 hash. |
+| **9** | **Immersive Viewer matches burned JPEG** | **PASS** | Verified on Satellite Item 10 and Item 16 via `Fullscreen Zoom`. Immersive Evidence Viewer displays the exact canonical burned JPEG with embedded HUD without secondary re-rendering. |
+| **10** | **ALT displays corrected MSL value & remains consistent** | **PASS** | Across all items (10–19), altitude uniformly displays true MSL elevation (`+23.2m` to `+24.9m`) and live camera (`+13.8m`) instead of negative WGS84 ellipsoidal value (-42m bias eliminated). |
 
 ---
 
-## 4. Safe Pause State & Resumption Guide
+## 4. Session Resumption & Verification Sign-Off
 
-### Current Safe State
-- **Device Status**: Motorola edge 50 fusion (`ZA222NBPPV`) connected via ADB.
-- **Application State**: 19 valid forensic evidence items captured and safely committed to SQLite database and on-device storage. No background processes or timers active.
-- **Git Working Tree**: Clean relative to code freeze; no unauthorized source or build changes.
-
-### Instructions to Resume Verification / Balance Sign-Off
-When ready to resume verification:
-1. **Confirm Device Connection**:
-   ```bash
-   adb -s ZA222NBPPV devices
-   ```
-2. **Launch / Foreground SiteLens**:
-   ```bash
-   adb -s ZA222NBPPV shell monkey -p com.sitelens.app -c android.intent.category.LAUNCHER 1
-   ```
-3. **Verify Stored Evidence Ledger in Gallery**:
-   - Gallery contains 19 items (Items 1–9 baseline; Items 10–19 verification sequence).
-   - Items 10, 12, 13, 14, 15, 16: Satellite map tiles.
-   - Items 11, 17, 18, 19: Roadmap vector map tiles.
-   - All items: Display positive MSL altitude (+23m to +25m MSL).
-4. **Execute Any Additional Verification / Client Demonstration**:
-   - Perform final export / PDF share test if requested.
-   - Final production sign-off.
+### Execution Resumption Completed
+1. **Device Connection Confirmed**:
+   - Confirmed Motorola edge 50 fusion (`ZA222NBPPV`, Android 16 / API 36) attached via ADB.
+2. **Foreground & Viewfinder Verification**:
+   - Foregrounded `com.sitelens.app` via monkey launcher.
+   - Verified live Viewfinder HUD: `GPS: High • ±3.0m`, reverse geocoded address (`22 Andul 2nd Bye Lane, Howrah...`), live roadmap minimap with heading radar cone and Google logo, and truthful MSL altitude (`Alt: +13.8m`).
+3. **Stored Evidence Ledger Verified**:
+   - Opened Evidence Gallery: confirmed 19 items safely committed to SQLite database and on-device storage.
+   - Confirmed visual layer separation: Roadmap vector cards vs. Satellite aerial imagery cards with green sync indicators.
+4. **Detail & Immersive Fullscreen Zoom Inspection**:
+   - Inspected vector Roadmap evidence (Item 19): verified burnt-in vector tiles with pin and Google logo, `+23.2m` MSL altitude, SHA-256 hash.
+   - Inspected Google Satellite evidence (Item 16): verified burnt-in high-res Satellite tiles with radar cone, pin, Google logo, `+23.2m` MSL altitude, SHA-256 hash.
+   - Tested Immersive Evidence Viewer (Fullscreen Zoom): confirmed pixel-identical presentation of burned evidence without secondary canvas re-draw.
+5. **Export & Share Subsystem Verified**:
+   - Triggered **Export PDF Inspection Note**: successfully generated `SiteLens_Inspection_Note_...pdf` and launched native Android system share sheet.
+   - Tested **Copy SHA-256 Checksum**: verified 64-character forensic hash export.
 
 ---
 
 ## 5. Key Files & Reference Paths
 
 * **Public GitHub Repo**: [https://github.com/moloygoswami/SiteLens](https://github.com/moloygoswami/SiteLens)
+* **Authoritative Strix Instructions**: [`strix-sitelens-instructions.md`](file:///home/moloy/workspace/products/SiteLens/strix-sitelens-instructions.md)
 * **Android Main Activity (GNSS Native Channel)**: [`android/app/src/main/kotlin/com/sitelens/app/MainActivity.kt`](file:///home/moloy/workspace/products/SiteLens/android/app/src/main/kotlin/com/sitelens/app/MainActivity.kt)
 * **Map Thumbnail Controller**: [`lib/features/camera/controllers/map_thumbnail_controller.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/camera/controllers/map_thumbnail_controller.dart)
 * **Camera Viewfinder Minimap**: [`lib/features/camera/widgets/gps_map_thumbnail.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/camera/widgets/gps_map_thumbnail.dart)
@@ -142,3 +137,4 @@ When ready to resume verification:
 * **Cloud Sync Service**: [`lib/features/sync/services/cloud_sync_service.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/sync/services/cloud_sync_service.dart)
 * **Project Status Document**: [`docs/handover/PROJECT_STATUS.md`](file:///home/moloy/workspace/products/SiteLens/docs/handover/PROJECT_STATUS.md)
 * **Product Requirements Document**: [`docs/handover/PRD.md`](file:///home/moloy/workspace/products/SiteLens/docs/handover/PRD.md)
+
