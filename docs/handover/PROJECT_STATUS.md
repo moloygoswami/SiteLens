@@ -1,16 +1,16 @@
 # SiteLens — Project Status & Implementation State
 
-**Date**: 2026-09-05T14:30:00+05:30  
-**Current Milestone**: Production Release v1.0.0 — Frozen Baseline (`a17e8c3` / Tag `v1.0.0`), 489/489 Tests Passing, Physical Hardware Verification Passed (10/10 Matrix), Strix Security Scope Formalized  
-**Release Status**: `PRODUCTION RELEASE FROZEN & VERIFIED (v1.0.0 / commit a17e8c3)`
+**Date**: 2026-09-06T02:51:00+05:30
+**Current Milestone**: Post-v1.0.0 Reliability Audit & Hardware Verification — Baseline (`6a02f91` on `main`, frozen Tag `v1.0.0` at `a17e8c3`), 507/507 Tests Passing, Physical Hardware Verification Passed (10/10 Matrix + Zoom), Complete Test Inventory Formalized (`docs/ALL_TESTS.md`)
+**Release Status**: `PRODUCTION RELEASE FROZEN (v1.0.0 / commit a17e8c3) — POST-RELEASE AUDIT & VERIFICATION ACTIVE`
 
 ```text
 ========================================================================================
                                 CURRENT RELEASE GATE STATUS
 ========================================================================================
  SECURITY REMEDIATION:     IMPLEMENTED & VERIFIED (Modules 1–7; 8/8 findings closed; strix-sitelens-instructions.md formalized)
- AUTOMATED VERIFICATION:   PASS (489/489 Flutter, 57/57 Security Rules, 22/22 Cloud Functions)
- STATIC ANALYSIS & AUDIT:  PASS (0 analyzer issues, 0 npm vulnerabilities, clean working tree)
+ AUTOMATED VERIFICATION:   PASS (507/507 Flutter: 407 unit tests + 100 widget tests across 60 files; 57/57 Security Rules, 22/22 Cloud Functions)
+ STATIC ANALYSIS & AUDIT:  PASS (0 analyzer issues, 0 npm vulnerabilities)
  TOOLCHAIN & BUILD SYSTEM: PASS (Flutter 3.47.1, Gradle 9.3.1, AGP 9.1.0, Kotlin 2.4.0, Java 21)
  RELEASE SIGNING GATE:     CONFIGURED & FAIL-CLOSED (signingConfigs.release without debug fallback)
  GOOGLE AUTHENTICATION:    PASS (Release SHA-1/SHA-256 registered, google-services.json updated)
@@ -18,8 +18,10 @@
  FINAL STRIX SECURITY GATE:SCOPE FORMALIZED (strix-sitelens-instructions.md updated for v1.0.0 freeze)
  CAMERA & MINIMAP PROVENANCE:PASS (Fixed portrait, live minimap snapshot T0, heading cone,
                                    burned Evidence JPEG, layer-isolated cache, zero stale-layer race)
+ CAMERA ZOOM & INTEGRITY:  PASS (1.0x init default, truthful label, capability-aware cycling; Rule 5 compliant)
+ TEST SUITE INVENTORY:     PASS (docs/ALL_TESTS.md: 507/507 tests exhaustively cataloged with instructions)
  ALTITUDE / MSL DATUM:     PASS (Android 14+ getMslAltitudeMeters() via MethodChannel; true MSL)
- PRODUCTION GATE DECISION: APPROVED FOR PRODUCTION DISTRIBUTION
+ PRODUCTION GATE DECISION: APPROVED FOR PRODUCTION DISTRIBUTION (v1.0.0 frozen)
 ========================================================================================
 ```
 
@@ -32,7 +34,7 @@
 - **Current Milestone Accomplishments**:
   - All security findings (Modules 1 through 7 + Module 4 Local Isolation follow-up) remediated and verified.
   - 57/57 Firestore/Storage security rules tests passing in emulator.
-  - 489/489 Flutter unit, widget, and integration tests passing.
+  - 507/507 Flutter unit, widget, and integration tests passing across 60 files (407 unit tests, 100 widget tests).
   - 22/22 Cloud Functions backend tests passing.
   - Clean static analysis (`flutter analyze` 0 issues).
   - Modernized Android toolchain (Gradle 9.3.1, AGP 9.1.0, Kotlin 2.4.0, Java 21, compileSdk 35).
@@ -58,6 +60,18 @@
     * Platform MethodChannel hook to Android 14+ (`API 34+`) `Location.getMslAltitudeMeters()`.
     * Datum-aware domain modeling in `GnssSnapshot`, `GpsHardwareState`, and `EvidenceMetadataSnapshot`.
     * Eliminated the -42m WGS84 ellipsoidal geoid offset in West Bengal, India; displays true orthometric MSL elevation (`+23m` to `+25m MSL` on physical device).
+  - Implemented **E2E Reliability Audit & F1/F2/F4 Remediations**:
+    * Decoupled physical capture instant $T_0$ from asynchronous GNSS satellite fix time in `EvidenceMetadataSnapshot.capture()` (`customCaptureTimeUtc`), eliminating burst timestamp collision.
+    * Implemented generation tracking guard in `MapThumbnailController` (`_mapTypeGeneration`), preventing superseded background static map responses from corrupting the viewfinder minimap cache.
+    * Resolved native Camera2 controller handle leak in resolution fallback error paths and added FIFO lifecycle synchronization mutex (`_synchronized`) across pause, resume, and initialize in `CameraHardwareNotifier`.
+    * Formally proved F3 shutter re-entrancy hazard in automated widget test without introducing unwarranted production mutex overhead.
+  - Implemented **Camera Zoom Initialization & Truthful Preset Cycling (Rule 5 Evidence Integrity)**:
+    * Standardized camera hardware and UI initialization to `1.0x` (`CameraLensZoom.standard`).
+    * Enforced physical truthfulness on zoom labels (`currentZoomLevel <= 0.6` for `'0.5x'`), eliminating misleading `0.5x` labels when hardware is clamped to `minZoom: 1.0`.
+    * Implemented capability-aware zoom preset cycling (`[1x, 2x]` on standard sensors, `[1x, 2x, 0.5x]` on ultra-wide sensors).
+  - Formalized **Authoritative Complete Test Inventory (`docs/ALL_TESTS.md`)**:
+    * Cataloged all 507 tests across 60 files sequentially numbered (#1 to #507) with exact Dart test names and concise test instructions.
+    * Verified 100% test count and name accuracy against the test suite.
   - Formalized **Authoritative Strix Security Assessment Scope**:
     * Updated `strix-sitelens-instructions.md` pinned to release commit `a17e8c3`, Git tag `v1.0.0`, release APK SHA-256, and production signing certificate SHA-1.
     * Documented 8/8 closed findings baseline and 4-tier classification standard.
@@ -113,7 +127,9 @@
 | **Canonical Native HUD Scaling & Coupled Layout Fix** | `hud_layout_spec.dart`, `watermark_drawer.dart`, tests | **FIXED & VERIFIED** | Uniform native scale derivation; coupled two-pass layout; 464/464 tests passed. |
 | **Orientation Policy — Fixed Portrait** | `AndroidManifest.xml`, `main.dart`, `camera_screen.dart`, `media_detail_screen.dart` | **COMPLETED & VERIFIED** | Fixed portrait-only orientation across manifest, runtime, camera, and gallery; auto-rotate/settings removed; 467/467 tests passed. |
 | **Minimap Evidence Provenance** | `gps_map_thumbnail.dart`, `map_thumbnail_controller.dart`, `watermark_drawer.dart`, `evidence_metadata_snapshot.dart` | **COMPLETED & VERIFIED** | Generation tracking, map-type cache isolation, shutter-time strict validation, zero stale-layer race; 476+ tests passed. |
-| **True MSL Altitude Correction** | `MainActivity.kt`, `GnssSnapshot`, `EvidenceMetadataSnapshot`, `WatermarkDrawer`, HUD cards | **COMPLETED & VERIFIED** | Android 14+ `Location.getMslAltitudeMeters()` via MethodChannel; eliminated -42m ellipsoidal offset; truthful MSL labeling; 489/489 tests passed. |
+| **True MSL Altitude Correction** | `MainActivity.kt`, `GnssSnapshot`, `EvidenceMetadataSnapshot`, `WatermarkDrawer`, HUD cards | **COMPLETED & VERIFIED** | Android 14+ `Location.getMslAltitudeMeters()` via MethodChannel; eliminated -42m ellipsoidal offset; truthful MSL labeling; 489/489 baseline tests passed. |
 | **Physical Hardware Verification Suite** | Motorola edge 50 fusion (`ZA222NBPPV`, Android 16 / API 36) | **10/10 PASS** | 10-point physical verification matrix passed: Satellite, Roadmap, bursts, alternation, detail/viewer match, MSL altitude, and PDF export. |
 | **Authoritative Strix Security Instructions** | `strix-sitelens-instructions.md` | **FORMALIZED & PINNED** | Pinned to release baseline `a17e8c3` / `v1.0.0`, release APK hash, production signing SHA-1, 8/8 closed findings baseline, and 4-tier classification. |
-
+| **E2E Reliability Audit & F1/F2/F4 Remediations** | `camera_screen.dart`, `map_thumbnail_controller.dart`, `camera_hardware_controller.dart`, `evidence_metadata_snapshot.dart` | **COMPLETED & VERIFIED** | F1 decoupled timestamp, F2 generation guard, F4 Camera2 leak & mutex fixed; F3 test-only hazard verified; physical device verified. |
+| **Camera Zoom Hardware Integrity & Preset Cycling** | `camera_hardware_state.dart`, `camera_ui_state.dart`, `camera_hardware_controller.dart` | **COMPLETED & VERIFIED** | 1.0x standard init default, truthful zoom display label, capability-aware preset cycling (Rule 5 compliant); 21/21 unit tests passed. |
+| **Complete Test Inventory (`docs/ALL_TESTS.md`)** | `docs/ALL_TESTS.md` | **COMPLETED & VERIFIED** | 507/507 automated tests across 60 files (407 unit tests + 100 widget tests) sequentially numbered (#1–#507) with exact names & instructions. |

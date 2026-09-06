@@ -19,6 +19,78 @@ class MockErrorCameraService extends CameraHardwareService {
   }
 }
 
+class MockFailingResolutionCameraService extends CameraHardwareService {
+  final List<CameraDescription> cameras;
+  final List<CameraController> createdControllers = [];
+  final List<CameraController> disposedControllers = [];
+
+  MockFailingResolutionCameraService(this.cameras);
+
+  @override
+  Future<List<CameraDescription>> getAvailableCameras() async => cameras;
+
+  @override
+  CameraController createController({
+    required CameraDescription cameraDescription,
+    ResolutionPreset resolutionPreset = ResolutionPreset.max,
+    bool enableAudio = true,
+  }) {
+    final c = super.createController(
+      cameraDescription: cameraDescription,
+      resolutionPreset: resolutionPreset,
+      enableAudio: enableAudio,
+    );
+    createdControllers.add(c);
+    return c;
+  }
+
+  @override
+  Future<void> initializeController(CameraController controller) async {
+    throw CameraException('CameraInitError', 'Sensor open failed');
+  }
+
+  @override
+  Future<void> disposeController(CameraController? controller) async {
+    if (controller != null) {
+      disposedControllers.add(controller);
+    }
+  }
+}
+
+class MockRecoverableCameraService extends CameraHardwareService {
+  final List<CameraDescription> cameras;
+  bool shouldFail = true;
+  final List<CameraController> disposedControllers = [];
+
+  MockRecoverableCameraService(this.cameras);
+
+  @override
+  Future<List<CameraDescription>> getAvailableCameras() async => cameras;
+
+  @override
+  Future<void> initializeController(CameraController controller) async {
+    if (shouldFail) {
+      throw CameraException('HardwareUnavailable', 'Hardware busy');
+    }
+  }
+
+  @override
+  Future<void> disposeController(CameraController? controller) async {
+    if (controller != null) {
+      disposedControllers.add(controller);
+    }
+  }
+
+  @override
+  Future<double> getMinZoomLevel(CameraController controller) async => 1.0;
+
+  @override
+  Future<double> getMaxZoomLevel(CameraController controller) async => 5.0;
+
+  @override
+  Future<void> setZoomLevel(CameraController controller, double zoom) async {}
+}
+
 class FakeCameraService extends CameraHardwareService {
   final List<CameraDescription> cameras;
   bool wasDisposed = false;
@@ -108,17 +180,19 @@ void main() {
 
       // Verify zoom preset calculation with clamping
       await notifier.setZoomPreset(CameraLensZoom.wide); // 0.5x requested
-      // Clamped to 1.0
+      // Clamped to 1.0 and accurately reflected as standard lens zoom (not wide)
       expect(notifier.state.currentZoomLevel, 1.0);
-      expect(notifier.state.lensZoom, CameraLensZoom.wide);
+      expect(notifier.state.lensZoom, CameraLensZoom.standard);
+      expect(notifier.state.zoomDisplayLabel, '1x');
 
       await notifier.setZoomPreset(CameraLensZoom.tele); // 2.0x requested
       // Allowed within 1.0 to 3.0 range
       expect(notifier.state.currentZoomLevel, 2.0);
       expect(notifier.state.lensZoom, CameraLensZoom.tele);
+      expect(notifier.state.zoomDisplayLabel, '2x');
     });
 
-    test('Initializes camera at 0.5x wide zoom when sensor supports it', () async {
+    test('Initializes camera at 1.0x standard zoom by default', () async {
       const mockCamera = CameraDescription(
         name: '0',
         lensDirection: CameraLensDirection.back,
@@ -132,12 +206,13 @@ void main() {
       await Future.delayed(Duration.zero);
 
       expect(notifier.state.status, CameraStatus.ready);
-      expect(notifier.state.currentZoomLevel, 0.5);
-      expect(fakeService.currentZoom, 0.5);
-      expect(notifier.state.lensZoom, CameraLensZoom.wide);
+      expect(notifier.state.currentZoomLevel, 1.0);
+      expect(fakeService.currentZoom, 1.0);
+      expect(notifier.state.lensZoom, CameraLensZoom.standard);
+      expect(notifier.state.zoomDisplayLabel, '1x');
     });
 
-    test('Clamps initial zoom to sensor min when 0.5x is outside bounds', () async {
+    test('Clamps initial zoom to sensor min when 1.0x is outside bounds', () async {
       const mockCamera = CameraDescription(
         name: '0',
         lensDirection: CameraLensDirection.back,
@@ -152,7 +227,7 @@ void main() {
 
       expect(notifier.state.status, CameraStatus.ready);
       expect(notifier.state.currentZoomLevel, 1.2);
-      expect(notifier.state.lensZoom, CameraLensZoom.wide);
+      expect(notifier.state.lensZoom, CameraLensZoom.standard);
       expect(notifier.state.zoomDisplayLabel, '1.2x');
     });
 
@@ -234,14 +309,14 @@ void main() {
       expect(notifier.state.captureMode, CameraCaptureMode.photo);
     });
 
-    test('Default camera state configurations have 0.5x wide zoom preset', () {
+    test('Default camera state configurations have 1.0x standard zoom preset', () {
       const defaultHardwareState = CameraHardwareState();
-      expect(defaultHardwareState.lensZoom, CameraLensZoom.wide);
-      expect(defaultHardwareState.currentZoomLevel, 0.5);
-      expect(defaultHardwareState.zoomDisplayLabel, '0.5x');
+      expect(defaultHardwareState.lensZoom, CameraLensZoom.standard);
+      expect(defaultHardwareState.currentZoomLevel, 1.0);
+      expect(defaultHardwareState.zoomDisplayLabel, '1x');
 
       const defaultUiState = CameraUiState();
-      expect(defaultUiState.lensZoom, CameraLensZoom.wide);
+      expect(defaultUiState.lensZoom, CameraLensZoom.standard);
     });
 
     test('Flip mutex ignores concurrent switchCamera calls and releases guard on completion', () async {
@@ -373,7 +448,7 @@ void main() {
       expect(notifier.state.flashMode, CameraFlashMode.on);
     });
 
-    test('Parallel optical zoom bound queries concurrently retrieve min/max and clamp initial zoom to 0.5x preference', () async {
+    test('Parallel optical zoom bound queries concurrently retrieve min/max and set initial zoom to 1.0x standard', () async {
       const mockCamera = CameraDescription(
         name: '0',
         lensDirection: CameraLensDirection.back,
@@ -388,8 +463,137 @@ void main() {
 
       expect(notifier.state.minZoomLevel, 0.5);
       expect(notifier.state.maxZoomLevel, 10.0);
-      expect(notifier.state.currentZoomLevel, 0.5);
-      expect(notifier.state.lensZoom, CameraLensZoom.wide);
+      expect(notifier.state.currentZoomLevel, 1.0);
+      expect(notifier.state.lensZoom, CameraLensZoom.standard);
+      expect(notifier.state.zoomDisplayLabel, '1x');
+    });
+
+    test('availableZoomPresets includes wide only when sensor supports <= 0.6x and is not front camera', () {
+      // Rear camera without ultra-wide (e.g. Motorola edge 50 fusion back camera: min 1.0)
+      const rearStandardState = CameraHardwareState(
+        minZoomLevel: 1.0,
+        maxZoomLevel: 10.0,
+        availableCameras: [
+          CameraDescription(name: '0', lensDirection: CameraLensDirection.back, sensorOrientation: 90),
+        ],
+        selectedCameraIndex: 0,
+      );
+      expect(rearStandardState.supportsWide, isFalse);
+      expect(rearStandardState.supportsTele, isTrue);
+      expect(rearStandardState.availableZoomPresets, [CameraLensZoom.standard, CameraLensZoom.tele]);
+
+      // Rear camera with ultra-wide (min 0.5)
+      const rearWideState = CameraHardwareState(
+        minZoomLevel: 0.5,
+        maxZoomLevel: 8.0,
+        availableCameras: [
+          CameraDescription(name: '0', lensDirection: CameraLensDirection.back, sensorOrientation: 90),
+        ],
+        selectedCameraIndex: 0,
+      );
+      expect(rearWideState.supportsWide, isTrue);
+      expect(rearWideState.supportsTele, isTrue);
+      expect(rearWideState.availableZoomPresets, [
+        CameraLensZoom.standard,
+        CameraLensZoom.tele,
+        CameraLensZoom.wide,
+      ]);
+
+      // Front camera with min 0.5 (front cameras should not enable wide preset)
+      const frontState = CameraHardwareState(
+        minZoomLevel: 0.5,
+        maxZoomLevel: 3.0,
+        availableCameras: [
+          CameraDescription(name: '1', lensDirection: CameraLensDirection.front, sensorOrientation: 270),
+        ],
+        selectedCameraIndex: 0,
+      );
+      expect(frontState.supportsWide, isFalse);
+      expect(frontState.availableZoomPresets, [CameraLensZoom.standard, CameraLensZoom.tele]);
+    });
+
+    test('zoomDisplayLabel never returns 0.5x when currentZoomLevel is 1.0x', () {
+      // Evidence integrity verification: Never falsely display 0.5x on 1.0x zoom
+      const state1x = CameraHardwareState(
+        currentZoomLevel: 1.0,
+        lensZoom: CameraLensZoom.wide, // Even if lensZoom is wide, 1.0x magnification is 1x
+      );
+      expect(state1x.zoomDisplayLabel, '1x');
+
+      const state05x = CameraHardwareState(
+        currentZoomLevel: 0.5,
+        lensZoom: CameraLensZoom.wide,
+      );
+      expect(state05x.zoomDisplayLabel, '0.5x');
+
+      const state2x = CameraHardwareState(
+        currentZoomLevel: 2.0,
+        lensZoom: CameraLensZoom.tele,
+      );
+      expect(state2x.zoomDisplayLabel, '2x');
+    });
+
+    test('Every candidate controller created during fallback attempts is cleanly disposed on initialization failure', () async {
+      const rearCamera = CameraDescription(
+        name: '0',
+        lensDirection: CameraLensDirection.back,
+        sensorOrientation: 90,
+      );
+      final failingService = MockFailingResolutionCameraService([rearCamera]);
+      final notifier = CameraHardwareNotifier(failingService);
+      await Future.delayed(Duration.zero);
+
+      expect(notifier.state.status, CameraStatus.error);
+      expect(notifier.controller, isNull);
+      // All 3 fallback presets (max, veryHigh, high) were attempted
+      expect(failingService.createdControllers.length, 3);
+      // Crucial: ALL 3 created controllers were cleanly disposed — zero hardware resource leak!
+      expect(failingService.disposedControllers.length, 3);
+      for (final created in failingService.createdControllers) {
+        expect(failingService.disposedControllers.contains(created), isTrue);
+      }
+    });
+
+    test('Rapid pauseCamera followed immediately by resumeCamera resolves cleanly to ready state', () async {
+      const rearCamera = CameraDescription(
+        name: '0',
+        lensDirection: CameraLensDirection.back,
+        sensorOrientation: 90,
+      );
+      final fakeService = FakeCameraService([rearCamera]);
+      final notifier = CameraHardwareNotifier(fakeService);
+      await Future.delayed(Duration.zero);
+      expect(notifier.state.status, CameraStatus.ready);
+
+      // Rapidly fire pause then resume without waiting for pause to complete
+      final pauseFuture = notifier.pauseCamera();
+      final resumeFuture = notifier.resumeCamera();
+      await Future.wait([pauseFuture, resumeFuture]);
+
+      expect(notifier.state.status, CameraStatus.ready);
+      expect(notifier.controller, isNotNull);
+    });
+
+    test('retry restores camera to ready state after transient initialization failure', () async {
+      const rearCamera = CameraDescription(
+        name: '0',
+        lensDirection: CameraLensDirection.back,
+        sensorOrientation: 90,
+      );
+      final recoverableService = MockRecoverableCameraService([rearCamera]);
+      recoverableService.shouldFail = true;
+
+      final notifier = CameraHardwareNotifier(recoverableService);
+      await Future.delayed(Duration.zero);
+      expect(notifier.state.status, CameraStatus.error);
+      expect(notifier.controller, isNull);
+
+      // Hardware becomes available again
+      recoverableService.shouldFail = false;
+      await notifier.retry();
+
+      expect(notifier.state.status, CameraStatus.ready);
+      expect(notifier.controller, isNotNull);
     });
   });
 }

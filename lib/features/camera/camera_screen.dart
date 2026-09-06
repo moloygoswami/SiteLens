@@ -96,10 +96,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with WidgetsBinding
       cameraNotifier.pauseCamera();
       gpsNotifier.pauseLocationStream();
     } else if (state == AppLifecycleState.resumed) {
-      final currentStatus = ref.read(cameraHardwareProvider).status;
-      if (currentStatus == CameraStatus.unavailable || currentStatus == CameraStatus.error) {
-        cameraNotifier.resumeCamera();
-      }
+      cameraNotifier.resumeCamera();
       gpsNotifier.resumeLocationStream();
       _showInterruptedRecordingRecovery();
     }
@@ -319,8 +316,15 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with WidgetsBinding
   }
 
   void _handleCycleLens() {
-    final nextLens = CameraLensZoom.values[
-        (_uiState.lensZoom.index + 1) % CameraLensZoom.values.length];
+    final cameraHardware = ref.read(cameraHardwareProvider);
+    final available = cameraHardware.availableZoomPresets;
+    if (available.isEmpty) return;
+
+    final currentIndex = available.indexOf(cameraHardware.lensZoom);
+    final nextLens = (currentIndex == -1 || currentIndex + 1 >= available.length)
+        ? available.first
+        : available[currentIndex + 1];
+
     setState(() {
       _uiState = _uiState.copyWith(lensZoom: nextLens);
     });
@@ -584,6 +588,8 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with WidgetsBinding
     required String siteCode,
     required String siteName,
   }) async {
+    // 0. Physical capture instant authority at exact shutter actuation
+    final shutterInstantUtc = DateTime.now().toUtc();
 
     // 1. Synchronously snapshot metadata at exact shutter-accept time
     final currentUserId = ref.read(authServiceProvider).currentUser?.uid;
@@ -608,6 +614,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with WidgetsBinding
       resolvedAddress: gpsHardware.resolvedLocationName,
       creatorId: currentUserId,
       lowAccuracyThresholdMeters: gpsSettings.lowAccuracyThresholdMeters,
+      customCaptureTimeUtc: shutterInstantUtc,
     );
 
     final currentMapType = ref.read(mapTypeSettingsProvider);

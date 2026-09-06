@@ -297,7 +297,7 @@ class CameraUiState {
     this.gps = GpsUiFixture.defaultLocked,
     this.captureMode = CameraCaptureMode.photo,
     this.flashMode = CameraFlashMode.auto,
-    this.lensZoom = CameraLensZoom.wide,
+    this.lensZoom = CameraLensZoom.standard,
     this.aspectRatio = CameraAspectRatio.ratio4_3,
     this.captureTimer = CameraCaptureTimer.off,
     this.isCountingDown = false,

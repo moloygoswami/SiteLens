@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -45,6 +46,7 @@ class MockEvidenceStorageService extends EvidenceStorageService {
 class FakeMapThumbnailService extends MapThumbnailService {
   File? cachedFileToReturn;
   final List<String> invalidatedKeys = [];
+  Future<File?> Function(String mapType)? onFetchStaticMapImage;
 
   FakeMapThumbnailService() : super(apiKey: 'fake-key');
 
@@ -56,6 +58,23 @@ class FakeMapThumbnailService extends MapThumbnailService {
     String mapType = 'satellite',
     String styleVersion = 'v1',
   }) async {
+    return cachedFileToReturn;
+  }
+
+  @override
+  Future<File?> getOrFetchStaticMapImage({
+    required double lat,
+    required double lon,
+    int zoom = 18,
+    int width = 300,
+    int height = 300,
+    int scale = 2,
+    String mapType = 'satellite',
+    String styleVersion = 'v2',
+  }) async {
+    if (onFetchStaticMapImage != null) {
+      return onFetchStaticMapImage!(mapType);
+    }
     return cachedFileToReturn;
   }
 
@@ -709,6 +728,185 @@ void main() {
         ),
         isNull,
       );
+    });
+
+    group('F2: Minimap Stale Result Protection & Callback Ordering Tests', () {
+      test('1. Satellite -> Roadmap -> Satellite: transitions state and increments generation token', () {
+        final fakeService = FakeMapThumbnailService();
+        final notifier = MapThumbnailNotifier(fakeService);
+
+        expect(notifier.mapTypeGeneration, 0);
+        expect(notifier.state.mapType, AppMapType.satellite);
+
+        // Switch to Roadmap (Gen 1)
+        notifier.invalidateCachesOnMapTypeChange(AppMapType.normal, lat: 22.56, lon: 88.30);
+        expect(notifier.mapTypeGeneration, 1);
+        expect(notifier.state.mapType, AppMapType.normal);
+
+        // Switch back to Satellite (Gen 2)
+        notifier.invalidateCachesOnMapTypeChange(AppMapType.satellite, lat: 22.56, lon: 88.30);
+        expect(notifier.mapTypeGeneration, 2);
+        expect(notifier.state.mapType, AppMapType.satellite);
+      });
+
+      test('2. Roadmap response arriving after Satellite becomes current is discarded', () async {
+        final fakeService = FakeMapThumbnailService();
+        final roadmapCompleter = Completer<File?>();
+        fakeService.onFetchStaticMapImage = (type) {
+          if (type == 'roadmap') return roadmapCompleter.future;
+          return Future.value(null);
+        };
+
+        final notifier = MapThumbnailNotifier(fakeService);
+        notifier.state = notifier.state.copyWith(lat: 22.56, lon: 88.30);
+
+        // 1. Move to Roadmap (Gen 1)
+        notifier.invalidateCachesOnMapTypeChange(AppMapType.normal, lat: 22.56, lon: 88.30);
+        notifier.onLiveMapFailed(); // triggers _fetchStaticImageInBackground for roadmap (Gen 1)
+
+        // 2. Quickly move back to Satellite (Gen 2)
+        notifier.invalidateCachesOnMapTypeChange(AppMapType.satellite, lat: 22.56, lon: 88.30);
+
+        // 3. Stale Roadmap response arrives late
+        final roadmapFile = File('/tmp/mock_roadmap.png');
+        roadmapCompleter.complete(roadmapFile);
+        await pumpEventQueue();
+
+        // Must be rejected; cachedImage must NOT be roadmapFile
+        expect(notifier.state.cachedImage, isNot(equals(roadmapFile)));
+        expect(notifier.state.cachedImage, isNull);
+        expect(notifier.state.mapType, AppMapType.satellite);
+      });
+
+      test('3. Satellite response from an obsolete generation arriving after a newer Satellite generation is discarded', () async {
+        final fakeService = FakeMapThumbnailService();
+        final satGen0Completer = Completer<File?>();
+        fakeService.onFetchStaticMapImage = (type) => satGen0Completer.future;
+
+        final notifier = MapThumbnailNotifier(fakeService);
+        notifier.state = notifier.state.copyWith(lat: 22.56, lon: 88.30);
+
+        // 1. Trigger Satellite fetch under Gen 0
+        notifier.onLiveMapFailed(); // triggers fetch for satellite (Gen 0)
+
+        // 2. User toggles Roadmap (Gen 1) -> Satellite (Gen 2)
+        notifier.invalidateCachesOnMapTypeChange(AppMapType.normal, lat: 22.56, lon: 88.30);
+        notifier.invalidateCachesOnMapTypeChange(AppMapType.satellite, lat: 22.56, lon: 88.30);
+        expect(notifier.mapTypeGeneration, 2);
+
+        // 3. Obsolete Gen 0 response completes
+        final obsoleteSatFile = File('/tmp/mock_sat_gen0.png');
+        satGen0Completer.complete(obsoleteSatFile);
+        await pumpEventQueue();
+
+        // Must be rejected because generation (0) != current generation (2)
+        expect(notifier.state.cachedImage, isNot(equals(obsoleteSatFile)));
+        expect(notifier.state.cachedImage, isNull);
+      });
+
+      test('4. All three map requests overlapping with out-of-order completion: only current generation is accepted', () async {
+        final fakeService = FakeMapThumbnailService();
+        final completerA = Completer<File?>(); // Sat Gen 0
+        final completerB = Completer<File?>(); // Road Gen 1
+        final completerC = Completer<File?>(); // Sat Gen 2
+
+        int callCount = 0;
+        fakeService.onFetchStaticMapImage = (type) {
+          callCount++;
+          if (callCount == 1) return completerA.future;
+          if (callCount == 2) return completerB.future;
+          return completerC.future;
+        };
+
+        final notifier = MapThumbnailNotifier(fakeService);
+        notifier.state = notifier.state.copyWith(lat: 22.56, lon: 88.30);
+
+        // Request A (Sat, Gen 0)
+        notifier.onLiveMapFailed();
+
+        // Request B (Road, Gen 1)
+        notifier.invalidateCachesOnMapTypeChange(AppMapType.normal, lat: 22.56, lon: 88.30);
+        notifier.onLiveMapFailed();
+
+        // Request C (Sat, Gen 2)
+        notifier.invalidateCachesOnMapTypeChange(AppMapType.satellite, lat: 22.56, lon: 88.30);
+        notifier.onLiveMapFailed();
+
+        expect(callCount, 3);
+
+        final fileA = File('/tmp/tile_a.png');
+        final fileB = File('/tmp/tile_b.png');
+        final fileC = File('/tmp/tile_c.png');
+
+        // Out of order completion: B arrives first
+        completerB.complete(fileB);
+        await pumpEventQueue();
+        expect(notifier.state.cachedImage, isNull);
+
+        // A arrives second
+        completerA.complete(fileA);
+        await pumpEventQueue();
+        expect(notifier.state.cachedImage, isNull);
+
+        // C arrives last
+        completerC.complete(fileC);
+        await pumpEventQueue();
+        // Only C matches Gen 2 and AppMapType.satellite!
+        expect(notifier.state.cachedImage, equals(fileC));
+        expect(notifier.state.tier, MapThumbnailTier.staticCached);
+      });
+
+      test('5. Capture while stale responses are in flight: fallback cache never contains stale imagery', () async {
+        final fakeService = FakeMapThumbnailService();
+        final completerB = Completer<File?>();
+        fakeService.onFetchStaticMapImage = (type) => completerB.future;
+
+        final notifier = MapThumbnailNotifier(fakeService);
+        notifier.state = notifier.state.copyWith(lat: 22.56, lon: 88.30);
+
+        // Toggle to Roadmap and trigger fetch
+        notifier.invalidateCachesOnMapTypeChange(AppMapType.normal, lat: 22.56, lon: 88.30);
+        notifier.onLiveMapFailed();
+
+        // Toggle back to Satellite
+        notifier.invalidateCachesOnMapTypeChange(AppMapType.satellite, lat: 22.56, lon: 88.30);
+
+        // While B is still in flight, check fallback cache
+        expect(notifier.state.cachedImage, isNull);
+        expect(notifier.state.cachedTile, isNull);
+        expect(notifier.state.mapType, AppMapType.satellite);
+
+        // B completes with Roadmap file while in flight
+        completerB.complete(File('/tmp/roadmap.png'));
+        await pumpEventQueue();
+
+        // Must still be null - never poisoned
+        expect(notifier.state.cachedImage, isNull);
+        expect(notifier.state.cachedTile, isNull);
+      });
+
+      test('6. Confirm stale imagery cannot enter the evidence fallback cache', () async {
+        final fakeService = FakeMapThumbnailService();
+        final notifier = MapThumbnailNotifier(fakeService);
+
+        notifier.invalidateCachesOnMapTypeChange(AppMapType.satellite, lat: 22.56, lon: 88.30);
+
+        // Attempt to supply mismatched live snapshot bytes (tagged normal)
+        await notifier.updateLiveSnapshot(
+          Uint8List.fromList([1, 2, 3]),
+          lat: 22.56,
+          lon: 88.30,
+          mapType: AppMapType.normal,
+        );
+
+        // Snapshot query for Satellite must return null
+        final cached = notifier.getValidCachedSnapshotBytes(
+          lat: 22.56,
+          lon: 88.30,
+          mapType: AppMapType.satellite,
+        );
+        expect(cached, isNull);
+      });
     });
   });
 }

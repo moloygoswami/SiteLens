@@ -32,9 +32,9 @@ class CameraHardwareState {
     this.selectedCameraIndex = 0,
     this.captureMode = CameraCaptureMode.photo,
     this.flashMode = CameraFlashMode.auto,
-    this.lensZoom = CameraLensZoom.wide,
-    this.currentZoomLevel = 0.5,
-    this.minZoomLevel = 0.5,
+    this.lensZoom = CameraLensZoom.standard,
+    this.currentZoomLevel = 1.0,
+    this.minZoomLevel = 1.0,
     this.maxZoomLevel = 5.0,
     this.errorMessage,
     this.recordingDurationSeconds = 0,
@@ -64,8 +64,22 @@ class CameraHardwareState {
 
   bool get hasMultipleCameras => availableCameras.length > 1;
 
+  bool get supportsWide => minZoomLevel <= 0.6 && !isFrontCamera;
+  bool get supportsTele => maxZoomLevel >= 1.8;
+
+  List<CameraLensZoom> get availableZoomPresets {
+    final presets = <CameraLensZoom>[CameraLensZoom.standard];
+    if (supportsTele) {
+      presets.add(CameraLensZoom.tele);
+    }
+    if (supportsWide) {
+      presets.add(CameraLensZoom.wide);
+    }
+    return presets;
+  }
+
   String get zoomDisplayLabel {
-    if (lensZoom == CameraLensZoom.wide && currentZoomLevel <= 1.0) {
+    if (currentZoomLevel <= 0.6) {
       return '0.5x';
     }
     if (currentZoomLevel == currentZoomLevel.roundToDouble()) {

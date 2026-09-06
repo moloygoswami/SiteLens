@@ -4,6 +4,7 @@ import 'package:sitelens/core/utils/gps_utils.dart';
 import 'package:sitelens/features/camera/models/evidence_metadata_snapshot.dart';
 import 'package:sitelens/features/camera/models/gnss_snapshot.dart';
 import 'package:sitelens/features/camera/models/gps_hardware_state.dart';
+import 'package:sitelens/features/camera/hud/hud_formatter.dart';
 
 void main() {
   group('EvidenceMetadataSnapshot Unit Tests', () {
@@ -28,6 +29,7 @@ void main() {
         siteName: 'Sonar Kella Apartment',
         customMediaId: 'fixed-uuid-1234',
         resolvedAddress: '42 Construction Way • New Town',
+        customCaptureTimeUtc: DateTime.utc(2026, 8, 15, 14, 30, 0),
       );
 
       expect(snapshot.mediaId, 'fixed-uuid-1234');
@@ -39,7 +41,9 @@ void main() {
       expect(snapshot.altitudeMeters, 18.4);
       expect(snapshot.accuracyMeters, 3.2);
       expect(snapshot.lowAccuracy, isFalse);
+      expect(snapshot.capturedAtUtc, DateTime.utc(2026, 8, 15, 14, 30, 0));
       expect(snapshot.canonicalTimestampUtc, '2026-08-15 14:30:00 UTC');
+      expect(snapshot.gnssFixTimestampUtc, DateTime.utc(2026, 8, 15, 14, 30, 0));
       expect(snapshot.altitudeDisplay, '+18.4 m ASL');
       expect(snapshot.accuracyDisplay, '±3.2m');
       expect(snapshot.resolvedAddress, '42 Construction Way • New Town');
@@ -229,6 +233,189 @@ void main() {
       );
       expect(wgsSnapshot.isAltitudeMsl, isFalse);
       expect(wgsSnapshot.altitudeDisplay, '-42.4 m (WGS84)');
+    });
+
+    group('F1: Capture Timestamp Authority Tests', () {
+      test('1. Single capture timestamp authority: capturedAtUtc reflects shutter instant, not stale GNSS fix time', () {
+        final staleGpsFixTime = DateTime.utc(2026, 8, 15, 14, 29, 55); // 5 seconds in past
+        final shutterTime = DateTime.utc(2026, 8, 15, 14, 30, 0);
+
+        final gpsState = GpsHardwareState(
+          fixStatus: GPSFixStatus.high,
+          hasValidFix: true,
+          latitude: 22.57264,
+          longitude: 88.36391,
+          accuracyMeters: 2.1,
+          timestampUtc: staleGpsFixTime,
+        );
+
+        final snapshot = EvidenceMetadataSnapshot.capture(
+          gpsState: gpsState,
+          siteId: 'SITE_101',
+          siteCode: 'HOME',
+          siteName: 'Test Site',
+          customCaptureTimeUtc: shutterTime,
+        );
+
+        // Captured time MUST equal the shutter instant
+        expect(snapshot.capturedAtUtc, shutterTime);
+        expect(snapshot.canonicalTimestampUtc, '2026-08-15 14:30:00 UTC');
+        // GNSS fix time is preserved strictly as GNSS telemetry metadata
+        expect(snapshot.gnssFixTimestampUtc, staleGpsFixTime);
+        expect(snapshot.capturedAtUtc, isNot(equals(staleGpsFixTime)));
+      });
+
+      test('2. Rapid 3x capture produces distinct, correctly ordered timestamps under identical static GNSS fix', () {
+        final staticGpsFixTime = DateTime.utc(2026, 8, 15, 14, 30, 0);
+        final gpsState = GpsHardwareState(
+          fixStatus: GPSFixStatus.high,
+          hasValidFix: true,
+          latitude: 22.57264,
+          longitude: 88.36391,
+          accuracyMeters: 2.1,
+          timestampUtc: staticGpsFixTime,
+        );
+
+        final t1 = DateTime.utc(2026, 8, 15, 14, 30, 1, 100);
+        final t2 = DateTime.utc(2026, 8, 15, 14, 30, 1, 850);
+        final t3 = DateTime.utc(2026, 8, 15, 14, 30, 2, 400);
+
+        final s1 = EvidenceMetadataSnapshot.capture(gpsState: gpsState, siteId: 'S1', siteCode: 'SC', siteName: 'SN', customCaptureTimeUtc: t1);
+        final s2 = EvidenceMetadataSnapshot.capture(gpsState: gpsState, siteId: 'S1', siteCode: 'SC', siteName: 'SN', customCaptureTimeUtc: t2);
+        final s3 = EvidenceMetadataSnapshot.capture(gpsState: gpsState, siteId: 'S1', siteCode: 'SC', siteName: 'SN', customCaptureTimeUtc: t3);
+
+        // All 3 share the static GNSS fix metadata
+        expect(s1.gnssFixTimestampUtc, staticGpsFixTime);
+        expect(s2.gnssFixTimestampUtc, staticGpsFixTime);
+        expect(s3.gnssFixTimestampUtc, staticGpsFixTime);
+
+        // But all 3 have distinct, monotonic physical capture times
+        expect(s1.capturedAtUtc, t1);
+        expect(s2.capturedAtUtc, t2);
+        expect(s3.capturedAtUtc, t3);
+        expect(s1.capturedAtUtc.isBefore(s2.capturedAtUtc), isTrue);
+        expect(s2.capturedAtUtc.isBefore(s3.capturedAtUtc), isTrue);
+        expect(s1.canonicalTimestampUtc, '2026-08-15 14:30:01 UTC');
+        expect(s2.canonicalTimestampUtc, '2026-08-15 14:30:01 UTC');
+        expect(s3.canonicalTimestampUtc, '2026-08-15 14:30:02 UTC');
+        expect(s1.capturedAtUtc != s2.capturedAtUtc, isTrue);
+        expect(s2.capturedAtUtc != s3.capturedAtUtc, isTrue);
+      });
+
+      test('3. Rapid 5x capture produces distinct, correctly ordered timestamps across burst', () {
+        final staticGpsFixTime = DateTime.utc(2026, 8, 15, 14, 30, 0);
+        final gpsState = GpsHardwareState(
+          fixStatus: GPSFixStatus.high,
+          hasValidFix: true,
+          latitude: 22.57264,
+          longitude: 88.36391,
+          accuracyMeters: 2.1,
+          timestampUtc: staticGpsFixTime,
+        );
+
+        final times = List.generate(5, (i) => DateTime.utc(2026, 8, 15, 14, 30, 1 + i, i * 200));
+        final snapshots = times.map((t) => EvidenceMetadataSnapshot.capture(
+          gpsState: gpsState,
+          siteId: 'S1',
+          siteCode: 'SC',
+          siteName: 'SN',
+          customCaptureTimeUtc: t,
+        )).toList();
+
+        for (int i = 0; i < 4; i++) {
+          expect(snapshots[i].capturedAtUtc.isBefore(snapshots[i + 1].capturedAtUtc), isTrue);
+          expect(snapshots[i].gnssFixTimestampUtc, staticGpsFixTime);
+        }
+        final uniqueCapturedTimes = snapshots.map((s) => s.capturedAtUtc).toSet();
+        expect(uniqueCapturedTimes.length, 5);
+      });
+
+      test('4. Confirm persisted timestamps correspond to capture-time authority rather than GNSS fix time', () {
+        final oldFixTime = DateTime.utc(2026, 8, 15, 14, 25, 0); // 5 minutes old
+        final shutterTime = DateTime.utc(2026, 8, 15, 14, 30, 0);
+        final gpsState = GpsHardwareState(
+          fixStatus: GPSFixStatus.high,
+          hasValidFix: true,
+          latitude: 22.57264,
+          longitude: 88.36391,
+          accuracyMeters: 2.1,
+          timestampUtc: oldFixTime,
+        );
+
+        final snapshot = EvidenceMetadataSnapshot.capture(
+          gpsState: gpsState,
+          siteId: 'S1',
+          siteCode: 'SC',
+          siteName: 'SN',
+          customCaptureTimeUtc: shutterTime,
+        );
+
+        // Simulation of database persistence mapping (LocalMediaRepository / MediaPersistenceCoordinator)
+        final persistedIso = snapshot.capturedAtUtc.toUtc().toIso8601String();
+        expect(persistedIso, '2026-08-15T14:30:00.000Z');
+        expect(persistedIso, isNot(equals(oldFixTime.toIso8601String())));
+      });
+
+      test('5. Confirm watermark HUD text and persisted timestamp agree', () {
+        final shutterTime = DateTime.utc(2026, 8, 15, 14, 30, 45);
+        final gpsState = GpsHardwareState(
+          fixStatus: GPSFixStatus.high,
+          hasValidFix: true,
+          latitude: 22.57264,
+          longitude: 88.36391,
+          accuracyMeters: 2.1,
+          timestampUtc: DateTime.utc(2026, 8, 15, 14, 30, 40),
+        );
+
+        final snapshot = EvidenceMetadataSnapshot.capture(
+          gpsState: gpsState,
+          siteId: 'S1',
+          siteCode: 'SC',
+          siteName: 'SN',
+          customCaptureTimeUtc: shutterTime,
+        );
+
+        final hud = HudFormatter.fromSnapshot(
+          snapshot: snapshot,
+          originalSha256: 'sha-dummy',
+          isGpsLocked: true,
+        );
+
+        final persistedIso = snapshot.capturedAtUtc.toUtc().toIso8601String();
+        // Watermark HUD formats 'yyyy-MM-dd HH:mm:ss'
+        expect(hud.utcTimestampText, '2026-08-15 14:30:45');
+        expect(snapshot.canonicalTimestampUtc, '2026-08-15 14:30:45 UTC');
+        expect(persistedIso, startsWith('2026-08-15T14:30:45'));
+      });
+
+      test('6. Default capture path (omitted customCaptureTimeUtc) uses current execution instant, preserves gnssFixTimestampUtc, and is not overwritten by stale GNSS fix time', () {
+        final staleGpsFixTime = DateTime.utc(2026, 8, 15, 14, 20, 0); // 10 minutes in past
+        final gpsState = GpsHardwareState(
+          fixStatus: GPSFixStatus.high,
+          hasValidFix: true,
+          latitude: 22.57264,
+          longitude: 88.36391,
+          accuracyMeters: 2.1,
+          timestampUtc: staleGpsFixTime,
+        );
+
+        final beforeCapture = DateTime.now().toUtc();
+        final snapshot = EvidenceMetadataSnapshot.capture(
+          gpsState: gpsState,
+          siteId: 'S1',
+          siteCode: 'SC',
+          siteName: 'SN',
+        );
+        final afterCapture = DateTime.now().toUtc();
+
+        expect(snapshot.gnssFixTimestampUtc, staleGpsFixTime);
+        expect(snapshot.capturedAtUtc, isNot(equals(staleGpsFixTime)));
+        expect(
+          snapshot.capturedAtUtc.isAfter(beforeCapture.subtract(const Duration(seconds: 1))) &&
+              snapshot.capturedAtUtc.isBefore(afterCapture.add(const Duration(seconds: 1))),
+          isTrue,
+        );
+      });
     });
   });
 }

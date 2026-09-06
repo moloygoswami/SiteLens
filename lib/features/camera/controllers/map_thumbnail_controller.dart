@@ -164,6 +164,8 @@ class MapThumbnailNotifier extends StateNotifier<MapThumbnailState> {
     double lon,
     AppMapType mapType,
   ) async {
+    final requestGen = _mapTypeGeneration;
+    final requestMapType = mapType;
     try {
       final image = await _service.getOrFetchStaticMapImage(
         lat: lat,
@@ -171,6 +173,17 @@ class MapThumbnailNotifier extends StateNotifier<MapThumbnailState> {
         mapType: mapType.staticMapParam,
       );
       if (image != null && mounted) {
+        // Stale-result protection invariant:
+        // Must reject responses if generation or mapType changed during the fetch.
+        if (requestGen != _mapTypeGeneration || state.mapType != requestMapType) {
+          debugPrint(
+            '[MapThumbnailNotifier] Discarding stale static map fetch '
+            '(requestGen=$requestGen != currentGen=$_mapTypeGeneration, '
+            'requestType=$requestMapType != currentType=${state.mapType})',
+          );
+          return;
+        }
+
         final newTier = state.tier == MapThumbnailTier.syntheticFallback
             ? MapThumbnailTier.staticCached
             : state.tier;

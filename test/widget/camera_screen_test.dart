@@ -37,7 +37,14 @@ import 'package:sitelens/domain/models/site_model.dart';
 import 'package:sitelens/data/repositories/site_repository.dart';
 import 'package:sitelens/features/sites/site_controller.dart';
 import 'package:sitelens/features/camera/services/media_persistence_coordinator.dart';
+import 'package:image/image.dart' as img;
+import 'package:sitelens/features/camera/models/camera_hardware_state.dart';
+import 'package:sitelens/features/camera/controllers/map_thumbnail_controller.dart';
+import 'package:sitelens/features/camera/services/evidence_processing_service.dart';
+import 'package:sitelens/features/camera/models/processed_evidence_payload.dart';
+import 'package:sitelens/features/camera/models/evidence_metadata_snapshot.dart';
 import 'package:sitelens/features/review/models/pending_capture_payload.dart';
+import 'package:sitelens/features/review/review_tag_screen.dart';
 
 class TestCameraService extends CameraHardwareService {
   @override
@@ -274,10 +281,108 @@ class _RecordingRecoveryCoordinator implements MediaPersistenceCoordinator {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+class _ReentrancyNavigatorObserver extends NavigatorObserver {
+  final List<Route<dynamic>> routes = [];
+  int pushedRouteCount = 0;
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    super.didPush(route, previousRoute);
+    routes.add(route);
+    if (previousRoute != null) {
+      pushedRouteCount++;
+    }
+  }
+}
+
+class _ReentrancyCameraHardwareNotifier extends CameraHardwareNotifier {
+  _ReentrancyCameraHardwareNotifier(this.service, this.tempDir)
+      : super(service) {
+    state = state.copyWith(status: CameraStatus.ready);
+  }
+
+  final CameraHardwareService service;
+  final Directory tempDir;
+  int takePhotoCallCount = 0;
+
+  @override
+  Future<void> initialize() async {
+    state = state.copyWith(status: CameraStatus.ready);
+  }
+
+  @override
+  Future<XFile?> takePhoto() async {
+    takePhotoCallCount++;
+    state = state.copyWith(status: CameraStatus.capturing);
+    try {
+      final testImg = img.Image(width: 10, height: 10);
+      final bytes = Uint8List.fromList(img.encodeJpg(testImg));
+      return XFile.fromData(
+        bytes,
+        path: '${tempDir.path}/reentrancy_capture_$takePhotoCallCount.jpg',
+      );
+    } finally {
+      // Exactly mirrors production CameraHardwareController: resets status to ready
+      // immediately upon hardware completion, creating the post-hardware re-entrancy window.
+      state = state.copyWith(status: CameraStatus.ready);
+    }
+  }
+}
+
+class _ReentrancyEvidenceStorageService extends EvidenceStorageService {
+  @override
+  String getOriginalRelativePath(String mediaId) => 'media/orig_$mediaId.jpg';
+
+  @override
+  Future<void> deleteTempCameraFile(String tempPath) async {}
+
+  @override
+  Future<String> resolveAbsolutePath(String relativePath) async => '/tmp/$relativePath';
+
+  @override
+  Future<Directory> getMediaDirectory() async => Directory.systemTemp;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _ReentrancyEvidenceProcessingService implements EvidenceProcessingService {
+  @override
+  Future<ProcessedEvidencePayload> processCapture({
+    required Uint8List originalBytes,
+    required EvidenceMetadataSnapshot snapshot,
+    Uint8List? mapTileBytes,
+    bool isGpsLocked = true,
+    bool showAddress = true,
+    bool showMapTile = true,
+    CameraAspectRatio? targetAspectRatio,
+  }) async {
+    return ProcessedEvidencePayload(
+      isSuccess: true,
+      mediaId: snapshot.mediaId,
+      originalFilePath: 'media/orig_${snapshot.mediaId}.jpg',
+      evidenceFilePath: 'media/evid_${snapshot.mediaId}.jpg',
+      thumbnailFilePath: 'media/thumb_${snapshot.mediaId}.jpg',
+      originalSha256: 'mock-orig-sha',
+      evidenceSha256: 'mock-evid-sha',
+      originalFileSizeBytes: originalBytes.length,
+      evidenceFileSizeBytes: originalBytes.length,
+      thumbnailFileSizeBytes: 100,
+      thumbnailWidth: 10,
+      thumbnailHeight: 10,
+      metadataSnapshot: snapshot,
+    );
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 Widget createCameraTestWidget({
   CameraUiState? state,
   List<Override> overrides = const [],
   Size size = const Size(400, 800),
+  List<NavigatorObserver> navigatorObservers = const [],
 }) {
   final db = AppDatabase(NativeDatabase.memory());
   return ProviderScope(
@@ -305,6 +410,7 @@ Widget createCameraTestWidget({
         ),
         child: CameraScreen(key: UniqueKey()),
       ),
+      navigatorObservers: navigatorObservers,
       onGenerateRoute: AppRoutes.onGenerateRoute,
     ),
   );
@@ -903,6 +1009,98 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.textContaining('Calibrate: Tilt in figure-8 motion'), findsOneWidget);
+    });
+  });
+
+  group('F3 Shutter Button State Machine Re-Entrancy Hazard Confirmation', () {
+    testWidgets(
+        'Confirms F3: Rapid shutter re-activation during in-flight post-hardware processing triggers overlapping capture and duplicate review navigation',
+        (tester) async {
+      final tempDir = Directory.systemTemp.createTempSync('sitelens_f3_reentrancy_');
+      addTearDown(() {
+        if (tempDir.existsSync()) {
+          tempDir.deleteSync(recursive: true);
+        }
+      });
+
+      final cameraNotifier = _ReentrancyCameraHardwareNotifier(TestCameraService(), tempDir);
+      final navObserver = _ReentrancyNavigatorObserver();
+      final gateCompleter = Completer<Uint8List?>();
+
+      await tester.pumpWidget(createCameraTestWidget(
+        overrides: [
+          cameraHardwareProvider.overrideWith((ref) => cameraNotifier),
+          evidenceStorageServiceProvider.overrideWithValue(_ReentrancyEvidenceStorageService()),
+          evidenceProcessingServiceProvider.overrideWithValue(_ReentrancyEvidenceProcessingService()),
+          authServiceProvider.overrideWithValue(_CameraTestAuthService()),
+        ],
+        navigatorObservers: [navObserver],
+      ));
+      await tester.pumpAndSettle();
+
+      // Register the gate on mapThumbnailControllerProvider so post-hardware processing suspends
+      final element = tester.element(find.byType(CameraScreen));
+      final container = ProviderScope.containerOf(element);
+      container.read(mapThumbnailControllerProvider.notifier).registerLiveSnapshotProvider(
+        () => gateCompleter.future,
+      );
+
+      // Verify initial state: no shutter activations, no routes pushed, shutter ready
+      expect(cameraNotifier.takePhotoCallCount, 0);
+      expect(navObserver.pushedRouteCount, 0);
+      expect(find.byType(ShutterButton), findsOneWidget);
+
+      // 1. First shutter activation: enters post-hardware processing
+      await tester.tap(find.byType(ShutterButton));
+      await tester.pump();
+
+      expect(
+        cameraNotifier.takePhotoCallCount,
+        1,
+        reason: 'Criterion 1: First shutter activation enters post-hardware processing and completes takePhoto()',
+      );
+
+      // 2. That processing remains in flight awaiting live map snapshot
+      expect(
+        gateCompleter.isCompleted,
+        isFalse,
+        reason: 'Criterion 2: Post-hardware processing remains in flight awaiting map snapshot gate',
+      );
+      expect(
+        navObserver.pushedRouteCount,
+        0,
+        reason: 'Criterion 2: Navigation has not yet occurred while first capture is in flight',
+      );
+      final shutterButtonBeforeSecondTap = tester.widget<ShutterButton>(find.byType(ShutterButton));
+      expect(
+        shutterButtonBeforeSecondTap.isLocked,
+        isFalse,
+        reason: 'Criterion 2: Shutter button is prematurely unlocked in UI because takePhoto finally block reset status to ready',
+      );
+
+      // 3. Second shutter activation occurs during that in-flight interval
+      await tester.tap(find.byType(ShutterButton));
+      await tester.pump();
+
+      // 4. Overlapping capture is actually observed
+      expect(
+        cameraNotifier.takePhotoCallCount,
+        2,
+        reason: 'Criterion 4: Overlapping capture observed — second shutter actuation entered takePhoto() concurrently while first was still in flight',
+      );
+
+      // 5. Release post-hardware processing and verify navigation behavior is consistent with stated F3 hypothesis
+      gateCompleter.complete(Uint8List.fromList([1, 2, 3, 4]));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pumpAndSettle();
+
+      expect(
+        navObserver.pushedRouteCount,
+        2,
+        reason: 'Criterion 5: Navigation behavior is consistent with F3 hypothesis — uncoordinated concurrent captures pushed duplicate review routes',
+      );
+      expect(find.byType(ReviewTagScreen), findsOneWidget);
     });
   });
 }

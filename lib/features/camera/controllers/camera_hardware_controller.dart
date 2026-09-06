@@ -22,6 +22,8 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
   Timer? _recordingTimer;
   XFile? _inFlightVideoFile;
   bool _isSwitching = false;
+  bool _isPaused = false;
+  Future<void>? _transitionLock;
 
   CameraHardwareNotifier(this._service) : super(const CameraHardwareState()) {
     initialize();
@@ -31,31 +33,56 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
   XFile? get inFlightVideoFile => _inFlightVideoFile;
   bool get isSwitching => _isSwitching;
 
-  Future<void> initialize() async {
-    state = state.copyWith(status: CameraStatus.initializing);
-    try {
-      final cameras = await _service.getAvailableCameras();
-      if (cameras.isEmpty) {
-        state = state.copyWith(
-          status: CameraStatus.unavailable,
-          availableCameras: const [],
-          errorMessage: 'No cameras found on device',
-        );
-        return;
-      }
-
-      state = state.copyWith(
-        availableCameras: cameras,
-        selectedCameraIndex: 0,
-      );
-
-      await _initControllerAtIndex(0);
-    } catch (e) {
-      state = state.copyWith(
-        status: CameraStatus.error,
-        errorMessage: 'Camera initialization failed: $e',
-      );
+  Future<T> _synchronized<T>(Future<T> Function() action) async {
+    final previous = _transitionLock;
+    final completer = Completer<void>();
+    _transitionLock = completer.future;
+    if (previous != null) {
+      try {
+        await previous;
+      } catch (_) {}
     }
+    try {
+      return await action();
+    } finally {
+      completer.complete();
+      if (_transitionLock == completer.future) {
+        _transitionLock = null;
+      }
+    }
+  }
+
+  Future<void> initialize() async {
+    _isPaused = false;
+    return _synchronized(() async {
+      if (_isPaused || !mounted) return;
+      state = state.copyWith(status: CameraStatus.initializing);
+      try {
+        final cameras = await _service.getAvailableCameras();
+        if (cameras.isEmpty) {
+          state = state.copyWith(
+            status: CameraStatus.unavailable,
+            availableCameras: const [],
+            errorMessage: 'No cameras found on device',
+          );
+          return;
+        }
+
+        state = state.copyWith(
+          availableCameras: cameras,
+          selectedCameraIndex: 0,
+        );
+
+        await _initControllerAtIndex(0);
+      } catch (e) {
+        if (mounted && !_isPaused) {
+          state = state.copyWith(
+            status: CameraStatus.error,
+            errorMessage: 'Camera initialization failed: $e',
+          );
+        }
+      }
+    });
   }
 
   Future<void> _initControllerAtIndex(int index, {CameraCaptureMode captureMode = CameraCaptureMode.photo}) async {
@@ -72,76 +99,81 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
       await _service.disposeController(oldController);
     }
 
-    if (!mounted) return;
+    if (!mounted || _isPaused) return;
 
     final cameraDesc = state.availableCameras[index];
     final isFrontCamera = cameraDesc.lensDirection == CameraLensDirection.front;
     final resolvedFlashMode = isFrontCamera ? CameraFlashMode.off : state.flashMode;
-    const preset = ResolutionPreset.max;
-    const shouldEnableAudio = true;
-    var newController = _service.createController(
-      cameraDescription: cameraDesc,
-      resolutionPreset: preset,
-      enableAudio: shouldEnableAudio,
-    );
 
-    try {
-      await _service.initializeController(newController);
-    } catch (e) {
-      // Fallback: If initializing with max/audio failed, try fallback with veryHigh / high
+    final presetsToTry = [
+      (ResolutionPreset.max, true),
+      (ResolutionPreset.veryHigh, false),
+      (ResolutionPreset.high, false),
+    ];
+
+    CameraController? initializedController;
+    Object? lastError;
+
+    for (final (preset, enableAudio) in presetsToTry) {
+      if (!mounted || _isPaused) {
+        return;
+      }
+
+      final candidate = _service.createController(
+        cameraDescription: cameraDesc,
+        resolutionPreset: preset,
+        enableAudio: enableAudio,
+      );
+
       try {
-        await _service.disposeController(newController);
-        newController = _service.createController(
-          cameraDescription: cameraDesc,
-          resolutionPreset: ResolutionPreset.veryHigh,
-          enableAudio: false,
-        );
-        await _service.initializeController(newController);
-      } catch (innerError) {
-        try {
-          await _service.disposeController(newController);
-          newController = _service.createController(
-            cameraDescription: cameraDesc,
-            resolutionPreset: ResolutionPreset.high,
-            enableAudio: false,
-          );
-          await _service.initializeController(newController);
-        } catch (finalError) {
-          if (mounted) {
-            state = state.copyWith(
-              status: CameraStatus.error,
-              errorMessage: 'Failed to initialize camera: $finalError',
-            );
-          }
-          return;
-        }
+        await _service.initializeController(candidate);
+        initializedController = candidate;
+        lastError = null;
+        break;
+      } catch (err) {
+        lastError = err;
+        await _service.disposeController(candidate);
       }
     }
 
-    if (!mounted) {
-      await _service.disposeController(newController);
+    if (initializedController == null) {
+      if (mounted && !_isPaused) {
+        state = state.copyWith(
+          status: CameraStatus.error,
+          errorMessage: 'Failed to initialize camera: $lastError',
+        );
+      }
+      return;
+    }
+
+    if (!mounted || _isPaused) {
+      await _service.disposeController(initializedController);
       return;
     }
 
     try {
       final zoomBounds = await Future.wait([
-        _service.getMinZoomLevel(newController),
-        _service.getMaxZoomLevel(newController),
+        _service.getMinZoomLevel(initializedController),
+        _service.getMaxZoomLevel(initializedController),
       ]);
       final minZoom = zoomBounds[0];
       final maxZoom = zoomBounds[1];
 
-      // Default to 0.5x wide zoom for both rear and front cameras
-      final targetInitialZoom = 0.5.clamp(minZoom, maxZoom).toDouble();
+      // Default to 1.0x standard zoom
+      final targetInitialZoom = 1.0.clamp(minZoom, maxZoom).toDouble();
 
-      await _service.setZoomLevel(newController, targetInitialZoom);
+      await _service.setZoomLevel(initializedController, targetInitialZoom);
 
-      if (!mounted) {
-        await _service.disposeController(newController);
+      if (!mounted || _isPaused) {
+        await _service.disposeController(initializedController);
         return;
       }
 
-      _controller = newController;
+      _controller = initializedController;
+
+      final initialLens = targetInitialZoom <= 0.6
+          ? CameraLensZoom.wide
+          : (targetInitialZoom >= 1.8 ? CameraLensZoom.tele : CameraLensZoom.standard);
 
       state = state.copyWith(
         status: CameraStatus.ready,
@@ -150,30 +182,33 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
         minZoomLevel: minZoom,
         maxZoomLevel: maxZoom,
         currentZoomLevel: targetInitialZoom,
-        lensZoom: CameraLensZoom.wide,
+        lensZoom: initialLens,
       );
     } catch (e) {
-      if (!mounted) {
-        await _service.disposeController(newController);
+      if (!mounted || _isPaused) {
+        await _service.disposeController(initializedController);
         return;
       }
-      _controller = newController;
+      _controller = initializedController;
       state = state.copyWith(
         status: CameraStatus.ready,
         selectedCameraIndex: index,
         flashMode: resolvedFlashMode,
-        currentZoomLevel: 0.5,
-        lensZoom: CameraLensZoom.wide,
+        currentZoomLevel: 1.0,
+        lensZoom: CameraLensZoom.standard,
       );
     }
   }
 
   Future<void> switchCamera() async {
-    if (!mounted || state.availableCameras.length < 2 || _isSwitching) return;
+    if (!mounted || state.availableCameras.length < 2 || _isSwitching || _isPaused) return;
     _isSwitching = true;
     try {
-      final nextIndex = (state.selectedCameraIndex + 1) % state.availableCameras.length;
-      await _initControllerAtIndex(nextIndex, captureMode: state.captureMode);
+      await _synchronized(() async {
+        if (!mounted || _isPaused) return;
+        final nextIndex = (state.selectedCameraIndex + 1) % state.availableCameras.length;
+        await _initControllerAtIndex(nextIndex, captureMode: state.captureMode);
+      });
     } finally {
       _isSwitching = false;
     }
@@ -227,8 +262,11 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
     }
 
     if (mounted) {
+      final actualLens = clampedZoom <= 0.6
+          ? CameraLensZoom.wide
+          : (clampedZoom >= 1.8 ? CameraLensZoom.tele : CameraLensZoom.standard);
       state = state.copyWith(
-        lensZoom: preset,
+        lensZoom: actualLens,
         currentZoomLevel: clampedZoom,
       );
     }
@@ -283,7 +321,7 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
       }
       return null;
     } finally {
-      if (mounted) {
+      if (mounted && !_isPaused) {
         state = state.copyWith(status: CameraStatus.ready);
       }
     }
@@ -348,62 +386,77 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
   }
 
   Future<void> pauseCamera() async {
+    _isPaused = true;
     if (!mounted) return;
 
-    // An in-flight recording must NEVER be silently discarded: evidence loss
-    // on a phone call or lifecycle interruption is a P1 failure. Stop it
-    // cleanly, keep the file, and flag it for recovery on resume.
-    if (state.isRecordingVideo) {
-      _recordingTimer?.cancel();
-      _recordingTimer = null;
-      try {
-        if (_controller != null && _service.isRecordingVideo(_controller)) {
-          _inFlightVideoFile = await _service.stopVideoRecording(_controller!);
-        }
-      } catch (_) {}
-    }
+    return _synchronized(() async {
+      // An in-flight recording must NEVER be silently discarded: evidence loss
+      // on a phone call or lifecycle interruption is a P1 failure. Stop it
+      // cleanly, keep the file, and flag it for recovery on resume.
+      if (state.isRecordingVideo) {
+        _recordingTimer?.cancel();
+        _recordingTimer = null;
+        try {
+          if (_controller != null && _service.isRecordingVideo(_controller)) {
+            _inFlightVideoFile = await _service.stopVideoRecording(_controller!);
+          }
+        } catch (_) {}
+      }
 
-    final oldController = _controller;
-    _controller = null;
-    await _service.disposeController(oldController);
+      final oldController = _controller;
+      _controller = null;
+      if (oldController != null) {
+        await _service.disposeController(oldController);
+      }
 
-    if (mounted) {
-      state = state.copyWith(
-        status: CameraStatus.unavailable,
-        hasInterruptedRecording: state.isRecordingVideo || _inFlightVideoFile != null,
-        recordingStoppedAtUtc: DateTime.now().toUtc(),
-      );
-    }
+      if (mounted) {
+        state = state.copyWith(
+          status: CameraStatus.unavailable,
+          hasInterruptedRecording: state.isRecordingVideo || _inFlightVideoFile != null,
+          recordingStoppedAtUtc: DateTime.now().toUtc(),
+        );
+      }
+    });
   }
 
   Future<void> resumeCamera() async {
+    _isPaused = false;
     if (!mounted) return;
-    state = state.copyWith(status: CameraStatus.initializing);
-    try {
-      final cameras = await _service.getAvailableCameras();
-      if (cameras.isEmpty) {
-        state = state.copyWith(
-          status: CameraStatus.unavailable,
-          availableCameras: const [],
-          errorMessage: 'No cameras found on device',
-        );
+
+    return _synchronized(() async {
+      if (_isPaused || !mounted) return;
+      if (_controller != null && _controller!.value.isInitialized && state.status == CameraStatus.ready) {
         return;
       }
-      state = state.copyWith(availableCameras: cameras);
-      final targetIndex = state.selectedCameraIndex < cameras.length ? state.selectedCameraIndex : 0;
-      await _initControllerAtIndex(targetIndex);
-    } catch (e) {
-      if (mounted) {
-        state = state.copyWith(
-          status: CameraStatus.error,
-          errorMessage: 'Failed to resume camera: $e',
-        );
+
+      state = state.copyWith(status: CameraStatus.initializing);
+      try {
+        final cameras = await _service.getAvailableCameras();
+        if (cameras.isEmpty) {
+          state = state.copyWith(
+            status: CameraStatus.unavailable,
+            availableCameras: const [],
+            errorMessage: 'No cameras found on device',
+          );
+          return;
+        }
+        state = state.copyWith(availableCameras: cameras);
+        final targetIndex = state.selectedCameraIndex < cameras.length ? state.selectedCameraIndex : 0;
+        await _initControllerAtIndex(targetIndex);
+      } catch (e) {
+        if (mounted && !_isPaused) {
+          state = state.copyWith(
+            status: CameraStatus.error,
+            errorMessage: 'Failed to resume camera: $e',
+          );
+        }
       }
-    }
+    });
   }
 
   /// Retries initializing the camera hardware and available optical lenses.
   Future<void> retry() async {
+    _isPaused = false;
     await initialize();
   }
 
@@ -416,6 +469,7 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
 
   @override
   void dispose() {
+    _isPaused = true;
     _recordingTimer?.cancel();
     _recordingTimer = null;
     final oldController = _controller;

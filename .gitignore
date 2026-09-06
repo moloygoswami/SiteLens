@@ -80,6 +80,7 @@ app_flutter/
 # -----------------------------------------------------------------------------
 docs/*
 !docs/handover/
+!docs/ALL_TESTS.md
 design.md
 design-reference-*.png
 .stitch/

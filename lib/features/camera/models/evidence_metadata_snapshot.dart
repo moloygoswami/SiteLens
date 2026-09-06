@@ -31,6 +31,10 @@ class EvidenceMetadataSnapshot {
   final Map<String, GnssConstellationSummary>? gnssConstellations;
   final GnssSnapshot? gnssSnapshot;
 
+  /// Timestamp when the GNSS satellite fix was computed by the receiver.
+  /// Preserved as GNSS telemetry metadata; strictly decoupled from physical capture instant.
+  final DateTime? gnssFixTimestampUtc;
+
   const EvidenceMetadataSnapshot({
     required this.mediaId,
     required this.siteId,
@@ -51,6 +55,7 @@ class EvidenceMetadataSnapshot {
     this.gnssSatellitesUsedInFix,
     this.gnssConstellations,
     this.gnssSnapshot,
+    this.gnssFixTimestampUtc,
   });
 
   /// Factory constructor capturing a synchronous, immutable snapshot from live GPS
@@ -65,10 +70,11 @@ class EvidenceMetadataSnapshot {
     String? creatorId,
     double? lowAccuracyThresholdMeters,
     GnssSnapshot? customGnssSnapshot,
+    DateTime? customCaptureTimeUtc,
   }) {
     final mediaId = customMediaId ?? const Uuid().v4();
     final nowUtc = DateTime.now().toUtc();
-    final captureUtc = gpsState.timestampUtc ?? nowUtc;
+    final captureUtc = customCaptureTimeUtc ?? nowUtc;
     final canonicalFormatted =
         '${DateFormat("yyyy-MM-dd HH:mm:ss").format(captureUtc)} UTC';
 
@@ -114,6 +120,7 @@ class EvidenceMetadataSnapshot {
       gnssSatellitesUsedInFix: gnssAvailable ? gnss?.satellitesUsedInFix : null,
       gnssConstellations: gnssAvailable ? gnss?.constellations : null,
       gnssSnapshot: gnss,
+      gnssFixTimestampUtc: gpsState.timestampUtc,
     );
   }
 
