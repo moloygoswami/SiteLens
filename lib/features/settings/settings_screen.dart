@@ -17,6 +17,8 @@ import '../camera/widgets/timestamp_settings_modal.dart';
 import '../sites/site_controller.dart';
 import '../sites/site_setup_screen.dart';
 import '../support/widgets/user_enquiry_modal.dart';
+import '../../data/local/database/database_provider.dart';
+import 'widgets/account_deletion_dialog.dart';
 import 'widgets/google_photos_settings_card.dart';
 import 'widgets/legal_doc_modal.dart';
 import 'widgets/settings_section_card.dart';
@@ -462,6 +464,37 @@ class SettingsScreen extends ConsumerWidget {
               ),
             ),
           ],
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          child: TextButton.icon(
+            onPressed: () {
+              AccountDeletionDialog.show(
+                context,
+                authService: ref.read(authServiceProvider),
+                appDatabase: ref.read(appDatabaseProvider),
+              );
+            },
+            icon: const Icon(Icons.delete_forever_rounded, size: 16, color: AppColors.statusRed),
+            label: const Text(
+              'DELETE ACCOUNT',
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 11,
+                color: AppColors.statusRed,
+                letterSpacing: 0.5,
+              ),
+            ),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              backgroundColor: AppColors.statusRed.withAlpha(15),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppRadii.pill),
+                side: BorderSide(color: AppColors.statusRed.withAlpha(50)),
+              ),
+            ),
+          ),
         ),
       ],
     );

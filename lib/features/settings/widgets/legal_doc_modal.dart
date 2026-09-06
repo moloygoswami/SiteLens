@@ -199,7 +199,8 @@ const List<_LegalSection> _privacyPolicyContent = [
     'When enabled by the user, optional cloud synchronization connects directly with Firebase Authentication and Google Photos API under your explicit authorization.',
   ),
   _LegalSection(
-    '5. Contact & Data Deletion',
-    'You may request account removal and data deletion at any time by contacting your project administrator or support@sitelens.local.',
+    '5. Account & Data Deletion',
+    'You can delete your account and associated personal data at any time directly in the app via Settings → Delete Account, or by emailing moloygoswami@outlook.com.\n\n'
+    'Upon deletion: Personal authentication profiles, user account records, support enquiries, and any sole-member sites with their associated media and cloud storage are permanently purged. For shared project sites, photographic evidence is retained to preserve project audit integrity, with author attribution converted to a pseudonymous historical identifier that is dissociated from your personal profile.',
   ),
 ];

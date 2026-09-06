@@ -53,6 +53,7 @@ dependencies:
   archive: ^3.6.1 # ZIP package creation
   google_sign_in: ^6.2.2
   firebase_app_check: ^0.3.2+10
+  cloud_functions: ^5.2.0
 
 dev_dependencies:
   flutter_test:

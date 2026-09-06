@@ -1,3 +1,4 @@
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -207,3 +208,122 @@ final authStateProvider = StreamProvider<AuthUser?>((ref) {
   final authService = ref.watch(authServiceProvider);
   return authService.authStateChanges;
 });
+
+/// Extension on AuthService providing secure account-deletion operations
+/// without mutating the frozen AuthService class interface.
+extension AccountDeletionAuthService on AuthService {
+  /// Whether the currently signed-in user authenticated with email/password.
+  bool get isPasswordProvider {
+    try {
+      final user = _firebaseAuth.currentUser;
+      if (user == null) return false;
+      return user.providerData.any((p) => p.providerId == 'password');
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /// Re-authenticates the current user using their password.
+  Future<void> reauthenticateWithPassword(String password) async {
+    final user = _firebaseAuth.currentUser;
+    if (user == null || user.email == null) {
+      throw FirebaseAuthException(
+        code: 'no-current-user',
+        message: 'No active authenticated user session found.',
+      );
+    }
+    final credential = EmailAuthProvider.credential(
+      email: user.email!,
+      password: password,
+    );
+    await user.reauthenticateWithCredential(credential);
+  }
+
+  /// Re-authenticates the current user using Google Sign-In.
+  Future<void> reauthenticateWithGoogle() async {
+    final user = _firebaseAuth.currentUser;
+    if (user == null) {
+      throw FirebaseAuthException(
+        code: 'no-current-user',
+        message: 'No active authenticated user session found.',
+      );
+    }
+    final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
+    if (googleUser == null) {
+      throw FirebaseAuthException(
+        code: 'cancelled',
+        message: 'Google re-authentication was cancelled by the user.',
+      );
+    }
+    final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+    final OAuthCredential credential = GoogleAuthProvider.credential(
+      accessToken: googleAuth.accessToken,
+      idToken: googleAuth.idToken,
+    );
+    await user.reauthenticateWithCredential(credential);
+  }
+
+  /// Authoritatively invokes the 2nd-gen Cloud Function to delete the user account.
+  /// Server-side validation inspects all site memberships and cascades data deletion.
+  Future<Map<String, dynamic>> deleteAccount({
+    Map<String, String>? successorAdmins,
+    FirebaseFunctions? functions,
+  }) async {
+    final fn = functions ?? FirebaseFunctions.instanceFor(region: 'us-central1');
+    final callable = fn.httpsCallable('deleteUserAccount');
+    final response = await callable.call({
+      if (successorAdmins != null) 'successorAdmins': successorAdmins,
+    });
+    if (response.data is Map) {
+      return Map<String, dynamic>.from(response.data as Map);
+    }
+    return {'success': true};
+  }
+}
+
+/// Represents a shared site requiring an explicit successor admin assignment.
+class SuccessorSiteRequirement {
+  final String siteId;
+  final String siteName;
+  final List<EligibleMember> eligibleMembers;
+
+  const SuccessorSiteRequirement({
+    required this.siteId,
+    required this.siteName,
+    required this.eligibleMembers,
+  });
+
+  factory SuccessorSiteRequirement.fromMap(Map<dynamic, dynamic> map) {
+    final rawMembers = map['eligibleMembers'];
+    final membersList = rawMembers is List ? rawMembers : [];
+    return SuccessorSiteRequirement(
+      siteId: map['siteId']?.toString() ?? '',
+      siteName: map['siteName']?.toString() ?? '',
+      eligibleMembers: membersList
+          .map((m) => EligibleMember.fromMap(Map<dynamic, dynamic>.from(m as Map)))
+          .toList(),
+    );
+  }
+}
+
+/// Represents an active member eligible for admin succession on a shared site.
+class EligibleMember {
+  final String userId;
+  final String role;
+  final String status;
+
+  const EligibleMember({
+    required this.userId,
+    required this.role,
+    required this.status,
+  });
+
+  factory EligibleMember.fromMap(Map<dynamic, dynamic> map) {
+    return EligibleMember(
+      userId: map['userId']?.toString() ?? '',
+      role: map['role']?.toString() ?? 'member',
+      status: map['status']?.toString() ?? 'active',
+    );
+  }
+}
+

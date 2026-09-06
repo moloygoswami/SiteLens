@@ -126,6 +126,15 @@ class AppDatabase extends _$AppDatabase {
     },
   );
 
+  /// Purges all local user data across all tables during account deletion.
+  Future<void> clearAllUserData() async {
+    await transaction(() async {
+      await delete(googlePhotosSyncEntries).go();
+      await delete(media).go();
+      await delete(sites).go();
+    });
+  }
+
   static LazyDatabase _openConnection() {
     return LazyDatabase(() async {
       final dbFolder = await getApplicationDocumentsDirectory();
