@@ -40,12 +40,5 @@ class FakePermissionService extends StateNotifier<SiteLensPermissionStatus>
   Future<void> requestAllCorePermissions() async {}
 
   @override
-  Future<PermissionStatus> requestIgnoreBatteryOptimizations() async =>
-      PermissionStatus.granted;
-
-  @override
-  Future<bool> isBatteryOptimizationIgnored() async => true;
-
-  @override
   Future<bool> openSystemSettings() async => true;
 }

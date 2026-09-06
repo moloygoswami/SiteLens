@@ -131,16 +131,6 @@ class PermissionService extends StateNotifier<SiteLensPermissionStatus> {
     await checkAllPermissions();
   }
 
-  Future<PermissionStatus> requestIgnoreBatteryOptimizations() async {
-    final res = await Permission.ignoreBatteryOptimizations.request();
-    return res;
-  }
-
-  Future<bool> isBatteryOptimizationIgnored() async {
-    final status = await Permission.ignoreBatteryOptimizations.status;
-    return status.isGranted;
-  }
-
   Future<bool> openSystemSettings() async {
     return await openAppSettings();
   }

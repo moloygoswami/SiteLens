@@ -64,11 +64,6 @@ class _PermissionOnboardingScreenState
 
     if (mounted) {
       if (status.areCorePermissionsGranted) {
-        // Programmatically request battery optimization exemption for uninterrupted GNSS & sync
-        try {
-          await service.requestIgnoreBatteryOptimizations();
-        } catch (_) {}
-
         setState(() => _isRequesting = false);
         await _proceedToSiteSetup();
       } else if (status.isPermanentlyDenied) {
