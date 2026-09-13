@@ -1,3 +1,4 @@
+import '../../features/camera/hud/hud_data.dart';
 import 'enums.dart';
 
 class MediaItem {
@@ -11,7 +12,12 @@ class MediaItem {
   final double lon;
   final double? accuracyM;
   final bool lowAccuracy;
-  final double? altitude; // Captured elevation in meters ASL — Added in v7 (remediates vuln-0002)
+  final double? altitude; // Captured elevation in meters — Added in v7 (remediates vuln-0002)
+  final bool? isAltitudeMsl; // Datum: true = MSL, false = WGS84, null = unknown — Added in v8
+  final HudStatus? verificationStatus; // Canonical verification status at capture time — Added in v8
+  final int? gnssSatelliteCount; // Total tracked satellites at capture time — Added in v8
+  final int? gnssSatellitesUsedInFix; // Satellites used in position fix — Added in v8
+  final DateTime? gnssFixTimestampUtc; // GNSS receiver hardware fix timestamp — Added in v8
   final String? activityTag;
   final ObservationType observationType;
   final String? linkedMediaId;
@@ -36,6 +42,11 @@ class MediaItem {
     this.accuracyM,
     this.lowAccuracy = false,
     this.altitude,
+    this.isAltitudeMsl,
+    this.verificationStatus,
+    this.gnssSatelliteCount,
+    this.gnssSatellitesUsedInFix,
+    this.gnssFixTimestampUtc,
     this.activityTag,
     this.observationType = ObservationType.general,
     this.linkedMediaId,
@@ -61,6 +72,11 @@ class MediaItem {
     double? accuracyM,
     bool? lowAccuracy,
     double? altitude,
+    bool? isAltitudeMsl,
+    HudStatus? verificationStatus,
+    int? gnssSatelliteCount,
+    int? gnssSatellitesUsedInFix,
+    DateTime? gnssFixTimestampUtc,
     String? activityTag,
     ObservationType? observationType,
     String? linkedMediaId,
@@ -85,6 +101,11 @@ class MediaItem {
       accuracyM: accuracyM ?? this.accuracyM,
       lowAccuracy: lowAccuracy ?? this.lowAccuracy,
       altitude: altitude ?? this.altitude,
+      isAltitudeMsl: isAltitudeMsl ?? this.isAltitudeMsl,
+      verificationStatus: verificationStatus ?? this.verificationStatus,
+      gnssSatelliteCount: gnssSatelliteCount ?? this.gnssSatelliteCount,
+      gnssSatellitesUsedInFix: gnssSatellitesUsedInFix ?? this.gnssSatellitesUsedInFix,
+      gnssFixTimestampUtc: gnssFixTimestampUtc ?? this.gnssFixTimestampUtc,
       activityTag: activityTag ?? this.activityTag,
       observationType: observationType ?? this.observationType,
       linkedMediaId: linkedMediaId ?? this.linkedMediaId,

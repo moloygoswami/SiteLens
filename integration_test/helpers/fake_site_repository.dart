@@ -26,9 +26,12 @@ class FakeSiteRepository implements SiteRepository {
   }
 
   @override
-  Future<void> deleteSite(String id) async {
+  Future<void> deleteSite(String id, {String? creatorId}) async {
     _sites.removeWhere((s) => s.id == id);
   }
+
+  @override
+  Future<bool> hasMediaForSite(String siteId) async => false;
 
   @override
   Future<void> seedDefaultSitesIfEmpty() async {

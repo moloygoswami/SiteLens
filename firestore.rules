@@ -88,7 +88,9 @@ service cloud.firestore {
                           'id', 'site_id', 'creator_id',
                           'storage_original_path', 'storage_thumbnail_path',
                           'type', 'lat', 'lon', 'accuracy_m', 'low_accuracy',
-                          'altitude', 'activity_tag', 'observation_type', 'linked_media_id',
+                          'altitude', 'is_altitude_msl', 'verification_status',
+                          'gnss_satellite_count', 'gnss_satellites_used_in_fix', 'gnss_fix_timestamp',
+                          'activity_tag', 'observation_type', 'linked_media_id',
                           'note', 'captured_at', 'sha256_hash', 'evidence_sha256_hash',
                           'captured_address', 'is_deleted', 'created_at', 'updated_at', 'originalUri'
                         ])
@@ -106,6 +108,11 @@ service cloud.firestore {
                      && (!('accuracy_m' in request.resource.data) || request.resource.data.accuracy_m == null || (request.resource.data.accuracy_m is number && request.resource.data.accuracy_m >= 0.0 && request.resource.data.accuracy_m <= 500.0))
                      && request.resource.data.low_accuracy is bool
                      && (!('altitude' in request.resource.data) || request.resource.data.altitude == null || (request.resource.data.altitude is number && request.resource.data.altitude >= -500.0 && request.resource.data.altitude <= 10000.0))
+                     && (!('is_altitude_msl' in request.resource.data) || request.resource.data.is_altitude_msl == null || request.resource.data.is_altitude_msl is bool)
+                     && (!('verification_status' in request.resource.data) || request.resource.data.verification_status == null || request.resource.data.verification_status in ['verified', 'degraded', 'pending'])
+                     && (!('gnss_satellite_count' in request.resource.data) || request.resource.data.gnss_satellite_count == null || (request.resource.data.gnss_satellite_count is number && request.resource.data.gnss_satellite_count >= 0.0 && request.resource.data.gnss_satellite_count <= 200.0))
+                     && (!('gnss_satellites_used_in_fix' in request.resource.data) || request.resource.data.gnss_satellites_used_in_fix == null || (request.resource.data.gnss_satellites_used_in_fix is number && request.resource.data.gnss_satellites_used_in_fix >= 0.0 && request.resource.data.gnss_satellites_used_in_fix <= 200.0))
+                     && (!('gnss_fix_timestamp' in request.resource.data) || request.resource.data.gnss_fix_timestamp == null || (request.resource.data.gnss_fix_timestamp is string && request.resource.data.gnss_fix_timestamp.size() <= 40))
                      && (!('captured_at' in request.resource.data) || (request.resource.data.captured_at is string && request.resource.data.captured_at.matches('^20[2-9][0-9]-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})?$') && request.resource.data.captured_at.size() <= 40))
                      && (!('captured_address' in request.resource.data) || request.resource.data.captured_address == null || (request.resource.data.captured_address is string && request.resource.data.captured_address.size() <= 500))
                      && (!('note' in request.resource.data) || request.resource.data.note == null || (request.resource.data.note is string && request.resource.data.note.size() <= 2000))

@@ -10,6 +10,7 @@ import 'package:sitelens/data/repositories/site_repository.dart';
 import 'package:sitelens/domain/models/enums.dart';
 import 'package:sitelens/domain/models/media_item.dart';
 import 'package:sitelens/domain/models/site_model.dart';
+import 'package:sitelens/features/camera/hud/hud_data.dart';
 import 'package:sitelens/features/sync/services/cloud_sync_service.dart';
 
 class FakeFullMetadata implements FullMetadata {
@@ -183,7 +184,10 @@ class FakeSiteRepository implements SiteRepository {
   Future<List<SiteModel>> getAllSites({String? creatorId}) async => sites.values.toList();
 
   @override
-  Future<void> deleteSite(String id) async => sites.remove(id);
+  Future<void> deleteSite(String id, {String? creatorId}) async => sites.remove(id);
+
+  @override
+  Future<bool> hasMediaForSite(String siteId) async => false;
 
   @override
   Future<void> seedDefaultSitesIfEmpty() async {}
@@ -977,6 +981,287 @@ void main() {
         ),
         throwsA(isA<PermanentSyncException>()),
       );
+    });
+  });
+
+  group('F2 v8 Forensic Metadata Persistence Tests', () {
+    MediaItem forensicItem() => baseItem.copyWith(
+          altitude: 18.4,
+          isAltitudeMsl: true,
+          verificationStatus: HudStatus.verified,
+          gnssSatelliteCount: 24,
+          gnssSatellitesUsedInFix: 18,
+          gnssFixTimestampUtc: DateTime.utc(2026, 8, 18, 10, 29, 30),
+        );
+
+    Map<String, dynamic> matchingCloudDoc({Map<String, dynamic>? overrides}) {
+      return {
+        'id': 'media-100',
+        'site_id': 'site-alpha',
+        'creator_id': 'engineer-bob',
+        'storage_original_path': 'sites/site-alpha/media/media-100/original',
+        'storage_thumbnail_path': 'sites/site-alpha/media/media-100/thumbnail',
+        'type': 'photo',
+        'lat': 22.5726,
+        'lon': 88.3639,
+        'accuracy_m': 3.5,
+        'low_accuracy': false,
+        'altitude': 18.4,
+        'is_altitude_msl': true,
+        'verification_status': 'verified',
+        'gnss_satellite_count': 24,
+        'gnss_satellites_used_in_fix': 18,
+        'gnss_fix_timestamp': '2026-08-18T10:29:30.000Z',
+        'activity_tag': 'Pillar Reinforcement',
+        'observation_type': 'general',
+        'note': 'Foundations check',
+        'captured_at': '2026-08-18T10:30:00.000Z',
+        'sha256_hash': origSha,
+        'evidence_sha256_hash': evidSha,
+        'captured_address': 'Sector 4 Metro Station, Kolkata',
+        'is_deleted': false,
+        ...?overrides,
+      };
+    }
+
+    void seedStorageRefs() {
+      final origRef = fakeStorage.ref('sites/site-alpha/media/media-100/original') as FakeReference;
+      origRef.metadataToReturn = FakeFullMetadata(
+        customMetadata: {
+          'x-sitelens-original-sha256': origSha,
+          'x-sitelens-evidence-sha256': evidSha,
+          'x-sitelens-captured-address': 'Sector 4 Metro Station, Kolkata',
+        },
+      );
+      final thumbRef = fakeStorage.ref('sites/site-alpha/media/media-100/thumbnail') as FakeReference;
+      thumbRef.metadataToReturn = FakeFullMetadata(
+        customMetadata: {'x-sitelens-thumbnail-sha256': thumbSha},
+      );
+    }
+
+    test('Create path persists altitude, datum, verification status and GNSS telemetry', () async {
+      await syncService.syncMediaItem(
+        item: forensicItem(),
+        absoluteOriginalPath: origFile.path,
+        absoluteEvidencePath: evidFile.path,
+        absoluteThumbnailPath: thumbFile.path,
+        currentUserId: 'engineer-bob',
+      );
+
+      final docRef = fakeFirestore.doc('sites/site-alpha/media/media-100') as FakeDocumentReference;
+      final payload = docRef.lastSetData!;
+      expect(payload['altitude'], equals(18.4));
+      expect(payload['is_altitude_msl'], isTrue);
+      expect(payload['verification_status'], equals('verified'));
+      expect(payload['gnss_satellite_count'], equals(24));
+      expect(payload['gnss_satellites_used_in_fix'], equals(18));
+      expect(payload['gnss_fix_timestamp'], equals('2026-08-18T10:29:30.000Z'));
+    });
+
+    test('Reconcile path: matching v8 fields pass without conflict or re-upload', () async {
+      final docRef = fakeFirestore.doc('sites/site-alpha/media/media-100') as FakeDocumentReference;
+      docRef.snapshotToReturn = FakeDocumentSnapshot(
+        exists: true,
+        data: matchingCloudDoc(),
+      );
+      seedStorageRefs();
+
+      await syncService.syncMediaItem(
+        item: forensicItem(),
+        absoluteOriginalPath: origFile.path,
+        absoluteEvidencePath: evidFile.path,
+        absoluteThumbnailPath: thumbFile.path,
+        currentUserId: 'engineer-bob',
+      );
+
+      final origRef = fakeStorage.ref('sites/site-alpha/media/media-100/original') as FakeReference;
+      expect(origRef.putFileCallCount, equals(0));
+    });
+
+    test('Reconcile path: conflicting altitude throws IntegrityConflictException', () async {
+      final docRef = fakeFirestore.doc('sites/site-alpha/media/media-100') as FakeDocumentReference;
+      docRef.snapshotToReturn = FakeDocumentSnapshot(
+        exists: true,
+        data: matchingCloudDoc(overrides: {'altitude': 999.9}),
+      );
+      seedStorageRefs();
+
+      expect(
+        () => syncService.syncMediaItem(
+          item: forensicItem(),
+          absoluteOriginalPath: origFile.path,
+          absoluteEvidencePath: evidFile.path,
+          absoluteThumbnailPath: thumbFile.path,
+          currentUserId: 'engineer-bob',
+        ),
+        throwsA(isA<IntegrityConflictException>()),
+      );
+    });
+
+    test('Reconcile path: conflicting verification status throws IntegrityConflictException', () async {
+      final docRef = fakeFirestore.doc('sites/site-alpha/media/media-100') as FakeDocumentReference;
+      docRef.snapshotToReturn = FakeDocumentSnapshot(
+        exists: true,
+        data: matchingCloudDoc(overrides: {'verification_status': 'pending'}),
+      );
+      seedStorageRefs();
+
+      expect(
+        () => syncService.syncMediaItem(
+          item: forensicItem(),
+          absoluteOriginalPath: origFile.path,
+          absoluteEvidencePath: evidFile.path,
+          absoluteThumbnailPath: thumbFile.path,
+          currentUserId: 'engineer-bob',
+        ),
+        throwsA(isA<IntegrityConflictException>()),
+      );
+    });
+
+    test('Reconcile path: conflicting GNSS telemetry throws IntegrityConflictException', () async {
+      final docRef = fakeFirestore.doc('sites/site-alpha/media/media-100') as FakeDocumentReference;
+      docRef.snapshotToReturn = FakeDocumentSnapshot(
+        exists: true,
+        data: matchingCloudDoc(overrides: {'gnss_satellite_count': 7}),
+      );
+      seedStorageRefs();
+
+      expect(
+        () => syncService.syncMediaItem(
+          item: forensicItem(),
+          absoluteOriginalPath: origFile.path,
+          absoluteEvidencePath: evidFile.path,
+          absoluteThumbnailPath: thumbFile.path,
+          currentUserId: 'engineer-bob',
+        ),
+        throwsA(isA<IntegrityConflictException>()),
+      );
+    });
+  });
+
+  group('B-1 Cloud Tombstone Synchronization Tests', () {
+    MediaItem tombstonedItem() => baseItem.copyWith(
+          isDeleted: true,
+          syncStatus: SyncStatusType.synced,
+        );
+
+    FakeDocumentReference seedExistingDoc({bool isDeleted = false}) {
+      final docRef = fakeFirestore.doc('sites/site-alpha/media/media-100') as FakeDocumentReference;
+      docRef.snapshotToReturn = FakeDocumentSnapshot(
+        exists: true,
+        data: {
+          'id': 'media-100',
+          'site_id': 'site-alpha',
+          'creator_id': 'engineer-bob',
+          'storage_original_path': 'sites/site-alpha/media/media-100/original',
+          'storage_thumbnail_path': 'sites/site-alpha/media/media-100/thumbnail',
+          'type': 'photo',
+          'lat': 22.5726,
+          'lon': 88.3639,
+          'accuracy_m': 3.5,
+          'low_accuracy': false,
+          'activity_tag': 'Pillar Reinforcement',
+          'observation_type': 'general',
+          'note': 'Foundations check',
+          'captured_at': '2026-08-18T10:30:00.000Z',
+          'sha256_hash': origSha,
+          'evidence_sha256_hash': evidSha,
+          'captured_address': 'Sector 4 Metro Station, Kolkata',
+          'is_deleted': isDeleted,
+        },
+      );
+      return docRef;
+    }
+
+    test('Propagates is_deleted: true to the existing document without touching Storage artifacts', () async {
+      final docRef = seedExistingDoc();
+
+      await syncService.syncTombstone(item: tombstonedItem(), currentUserId: 'engineer-bob');
+
+      expect(docRef.lastUpdateData, isNotNull);
+      expect(docRef.lastUpdateData!['is_deleted'], isTrue);
+
+      // The tombstone is a ledger state only: original and thumbnail are never
+      // uploaded, replaced, or deleted (write-once artifacts stay intact).
+      final origRef = fakeStorage.ref('sites/site-alpha/media/media-100/original') as FakeReference;
+      final thumbRef = fakeStorage.ref('sites/site-alpha/media/media-100/thumbnail') as FakeReference;
+      expect(origRef.putFileCallCount, equals(0));
+      expect(thumbRef.putFileCallCount, equals(0));
+    });
+
+    test('Idempotent: an already-tombstoned cloud document receives no further update', () async {
+      final docRef = seedExistingDoc(isDeleted: true);
+
+      await syncService.syncTombstone(item: tombstonedItem(), currentUserId: 'engineer-bob');
+
+      expect(docRef.lastUpdateData, isNull);
+    });
+
+    test('No-op for a never-published item: no cloud record is created and no deletion is claimed', () async {
+      final docRef = fakeFirestore.doc('sites/site-alpha/media/media-never-synced') as FakeDocumentReference;
+
+      await syncService.syncTombstone(
+        item: baseItem.copyWith(
+          id: 'media-never-synced',
+          isDeleted: true,
+          syncStatus: SyncStatusType.pending,
+        ),
+        currentUserId: 'engineer-bob',
+      );
+
+      // Nothing was created or updated in Firestore: a nonexistent cloud record
+      // cannot gain a deletion ledger entry (rules forbid is_deleted at create).
+      expect(docRef.lastSetData, isNull);
+      expect(docRef.lastUpdateData, isNull);
+      expect(docRef.snapshotToReturn?.exists, isNot(isTrue));
+
+      final origRef = fakeStorage.ref('sites/site-alpha/media/media-never-synced/original') as FakeReference;
+      expect(origRef.putFileCallCount, equals(0));
+    });
+
+    test('Creator mismatch throws PermanentSyncException', () async {
+      expect(
+        () => syncService.syncTombstone(item: tombstonedItem(), currentUserId: 'someone-else'),
+        throwsA(isA<PermanentSyncException>()),
+      );
+    });
+
+    test('Immutable forensic conflict is detected, never overwritten by tombstone reconciliation', () async {
+      final docRef = fakeFirestore.doc('sites/site-alpha/media/media-100') as FakeDocumentReference;
+      docRef.snapshotToReturn = FakeDocumentSnapshot(
+        exists: true,
+        data: {
+          'sha256_hash': 'f' * 64, // Conflicting original SHA
+          'captured_at': '2026-08-18T10:30:00.000Z',
+          'is_deleted': false,
+        },
+      );
+
+      expect(
+        () => syncService.syncTombstone(item: tombstonedItem(), currentUserId: 'engineer-bob'),
+        throwsA(isA<IntegrityConflictException>()),
+      );
+      expect(docRef.lastUpdateData, isNull);
+    });
+
+    test('C-2: permanently-deleted failed item reconciles the ledger without touching Storage artifacts', () async {
+      final docRef = seedExistingDoc();
+
+      // A permanently-deleted locally-failed item: the ledger document was
+      // already published before the artifact uploads failed.
+      await syncService.syncTombstone(
+        item: baseItem.copyWith(isDeleted: true, syncStatus: SyncStatusType.failed),
+        currentUserId: 'engineer-bob',
+      );
+
+      expect(docRef.lastUpdateData, isNotNull);
+      expect(docRef.lastUpdateData!['is_deleted'], isTrue);
+
+      // Tombstone propagation never uploads, replaces, or deletes artifacts.
+      final origRef = fakeStorage.ref('sites/site-alpha/media/media-100/original') as FakeReference;
+      final thumbRef = fakeStorage.ref('sites/site-alpha/media/media-100/thumbnail') as FakeReference;
+      expect(origRef.putFileCallCount, equals(0));
+      expect(thumbRef.putFileCallCount, equals(0));
     });
   });
 }

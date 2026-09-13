@@ -3,6 +3,7 @@ import 'package:camera/camera.dart';
 import 'package:sitelens/features/camera/controllers/camera_hardware_controller.dart';
 import 'package:sitelens/features/camera/models/camera_hardware_state.dart';
 import 'package:sitelens/features/camera/models/camera_ui_state.dart';
+import 'package:sitelens/features/camera/models/gps_hardware_state.dart';
 import 'package:sitelens/features/camera/services/camera_hardware_service.dart';
 
 class MockEmptyCameraService extends CameraHardwareService {
@@ -12,10 +13,17 @@ class MockEmptyCameraService extends CameraHardwareService {
   }
 }
 
-class MockErrorCameraService extends CameraHardwareService {
+class MockAccessDeniedCameraService extends CameraHardwareService {
   @override
   Future<List<CameraDescription>> getAvailableCameras() async {
     throw CameraException('CameraAccessDenied', 'Permission was denied by user');
+  }
+}
+
+class MockGenericErrorCameraService extends CameraHardwareService {
+  @override
+  Future<List<CameraDescription>> getAvailableCameras() async {
+    throw CameraException('CameraInitError', 'Sensor initialization failed');
   }
 }
 
@@ -144,6 +152,14 @@ class FakeCameraService extends CameraHardwareService {
   }
 
   @override
+  Future<void> startVideoRecording(CameraController controller) async {}
+
+  @override
+  Future<XFile> stopVideoRecording(CameraController controller) async {
+    return XFile('/tmp/fake_video.mp4');
+  }
+
+  @override
   Future<void> disposeController(CameraController? controller) async {
     wasDisposed = true;
   }
@@ -161,8 +177,18 @@ void main() {
       expect(notifier.controller, isNull);
     });
 
-    test('Transitions to error when availableCameras() throws exception', () async {
-      final notifier = CameraHardwareNotifier(MockErrorCameraService());
+    test('Transitions to permissionDenied when availableCameras() throws CameraAccessDenied', () async {
+      final notifier = CameraHardwareNotifier(MockAccessDeniedCameraService());
+      await Future.delayed(Duration.zero);
+
+      expect(notifier.state.status, CameraStatus.permissionDenied);
+      expect(notifier.state.isPermissionDenied, isTrue);
+      expect(notifier.state.errorMessage, contains('Camera permission is denied'));
+      expect(notifier.controller, isNull);
+    });
+
+    test('Transitions to error when availableCameras() throws generic exception', () async {
+      final notifier = CameraHardwareNotifier(MockGenericErrorCameraService());
       await Future.delayed(Duration.zero);
 
       expect(notifier.state.status, CameraStatus.error);
@@ -594,6 +620,41 @@ void main() {
 
       expect(notifier.state.status, CameraStatus.ready);
       expect(notifier.controller, isNotNull);
+    });
+
+    test('startVideoRecording stores recordingGpsState and pauseCamera preserves it across interruption', () async {
+      const mockCamera = CameraDescription(
+        name: '0',
+        lensDirection: CameraLensDirection.back,
+        sensorOrientation: 90,
+      );
+      final fakeService = FakeCameraService([mockCamera]);
+      final notifier = CameraHardwareNotifier(fakeService);
+      await Future.delayed(Duration.zero);
+      expect(notifier.state.status, CameraStatus.ready);
+
+      const recordingGps = GpsHardwareState(
+        latitude: 22.56298,
+        longitude: 88.30085,
+        altitudeMeters: 10.0,
+        accuracyMeters: 3.5,
+        isAltitudeMsl: true,
+        hasValidFix: true,
+      );
+
+      await notifier.startVideoRecording(recordingGpsState: recordingGps);
+      expect(notifier.state.isRecordingVideo, isTrue);
+      expect(notifier.state.recordingGpsState, equals(recordingGps));
+
+      // Pause during recording simulates lifecycle interruption
+      await notifier.pauseCamera();
+      expect(notifier.state.hasInterruptedRecording, isTrue);
+      expect(notifier.state.recordingGpsState, equals(recordingGps));
+
+      // Clear interrupted recording clears recordingGpsState
+      notifier.clearInterruptedRecording();
+      expect(notifier.state.hasInterruptedRecording, isFalse);
+      expect(notifier.state.recordingGpsState, isNull);
     });
   });
 }

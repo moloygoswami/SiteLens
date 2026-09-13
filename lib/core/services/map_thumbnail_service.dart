@@ -27,6 +27,12 @@ abstract final class MapThumbnailPolicy {
   /// Coordinate quantization decimals (4 decimals = ~11.1m resolution, consistent with 20m threshold).
   static const int coordinateDecimals = 4;
 
+  /// Canonical zoom level for map thumbnails and static fetches.
+  static const int canonicalZoom = 18;
+
+  /// Canonical style version for map thumbnails and static fetches.
+  static const String canonicalStyleVersion = 'v2';
+
   /// Cache TTL for static map images on disk.
   static const Duration cacheTtl = Duration(days: 7);
 
@@ -65,9 +71,9 @@ class MapThumbnailService {
   static String computeCacheKey({
     required double lat,
     required double lon,
-    int zoom = 16,
+    int zoom = MapThumbnailPolicy.canonicalZoom,
     String mapType = 'satellite',
-    String styleVersion = 'v1',
+    String styleVersion = MapThumbnailPolicy.canonicalStyleVersion,
   }) {
     final qLat = quantizeCoordinate(lat);
     final qLon = quantizeCoordinate(lon);
@@ -117,9 +123,9 @@ class MapThumbnailService {
   Future<File?> getCachedImage({
     required double lat,
     required double lon,
-    int zoom = 16,
+    int zoom = MapThumbnailPolicy.canonicalZoom,
     String mapType = 'satellite',
-    String styleVersion = 'v1',
+    String styleVersion = MapThumbnailPolicy.canonicalStyleVersion,
   }) async {
     try {
       final cacheDir = await getCacheDirectory();
@@ -149,9 +155,9 @@ class MapThumbnailService {
   Future<void> invalidateCachedImage({
     required double lat,
     required double lon,
-    int zoom = 16,
+    int zoom = MapThumbnailPolicy.canonicalZoom,
     required String mapType,
-    String styleVersion = 'v1',
+    String styleVersion = MapThumbnailPolicy.canonicalStyleVersion,
   }) async {
     try {
       final cacheDir = await getCacheDirectory();
@@ -175,9 +181,9 @@ class MapThumbnailService {
   Future<File?> getCachedTile({
     required double lat,
     required double lon,
-    int zoom = 16,
+    int zoom = MapThumbnailPolicy.canonicalZoom,
     String mapType = 'satellite',
-    String styleVersion = 'v1',
+    String styleVersion = MapThumbnailPolicy.canonicalStyleVersion,
   }) => getCachedImage(
     lat: lat,
     lon: lon,
@@ -190,12 +196,12 @@ class MapThumbnailService {
   Future<File?> getOrFetchStaticMapImage({
     required double lat,
     required double lon,
-    int zoom = 18,
+    int zoom = MapThumbnailPolicy.canonicalZoom,
     int width = 300,
     int height = 300,
     int scale = 2,
     String mapType = 'satellite',
-    String styleVersion = 'v2',
+    String styleVersion = MapThumbnailPolicy.canonicalStyleVersion,
   }) async {
     final cacheKey = computeCacheKey(
       lat: lat,
@@ -247,12 +253,12 @@ class MapThumbnailService {
   Future<File?> getOrFetchStaticMapTile({
     required double lat,
     required double lon,
-    int zoom = 18,
+    int zoom = MapThumbnailPolicy.canonicalZoom,
     int width = 300,
     int height = 300,
     int scale = 2,
     String mapType = 'satellite',
-    String styleVersion = 'v2',
+    String styleVersion = MapThumbnailPolicy.canonicalStyleVersion,
   }) => getOrFetchStaticMapImage(
     lat: lat,
     lon: lon,

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
+import 'package:sitelens/core/services/auth_service.dart';
+import 'package:sitelens/core/services/session_service.dart';
 import 'package:sitelens/features/auth/welcome_screen.dart';
 import 'package:sitelens/features/camera/camera_screen.dart';
 import 'package:sitelens/features/settings/settings_screen.dart';
@@ -218,6 +220,51 @@ void main() {
       // Verify Navigator back-stack is completely clean
       final welcomeContext = tester.element(find.byType(WelcomeScreen));
       expect(Navigator.of(welcomeContext).canPop(), isFalse);
+    });
+
+    testWidgets('6. Asynchronous session invalidation while on pushed CameraScreen wipes navigation stack back to WelcomeScreen',
+        (tester) async {
+      final harness = E2ETestHarness();
+      addTearDown(harness.dispose);
+
+      await harness.bootstrapAuthenticatedApp(tester);
+      await tester.pump(const Duration(milliseconds: 500));
+
+      expect(find.byType(SiteSetupScreen), findsOneWidget);
+
+      // Navigate to pushed CameraScreen
+      await tester.tap(find.text('Confirm Site & Open Camera'));
+      await tester.pumpAndSettle();
+      expect(find.byType(CameraScreen), findsOneWidget);
+
+      // Verify that the route is pushed and can be popped
+      final cameraContext = tester.element(find.byType(CameraScreen));
+      expect(Navigator.of(cameraContext).canPop(), isTrue);
+
+      // Trigger asynchronous session invalidation (e.g. user disabled or token revoked)
+      await harness.container.read(sessionServiceProvider.notifier).invalidateSession(
+        reason: SessionTerminationReason.userDisabled,
+        message: 'The user account has been disabled by an administrator.',
+      );
+
+      // Pump to process session state change and root navigator unwind
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pumpAndSettle();
+
+      // Verify: WelcomeScreen is rendered at root, CameraScreen & SiteSetupScreen are destroyed
+      expect(find.byType(WelcomeScreen), findsOneWidget);
+      expect(find.byType(CameraScreen), findsNothing);
+      expect(find.byType(SiteSetupScreen), findsNothing);
+      expect(harness.fakeAuthService.currentUser, isNull);
+
+      // Verify the entire navigation stack was wiped: canPop() is strictly false
+      final welcomeContext = tester.element(find.byType(WelcomeScreen));
+      expect(Navigator.of(welcomeContext).canPop(), isFalse);
+
+      // Further attempt to pop yields false and remains on WelcomeScreen
+      final didPop = await Navigator.of(welcomeContext).maybePop();
+      expect(didPop, isFalse);
+      expect(find.byType(WelcomeScreen), findsOneWidget);
     });
   });
 }

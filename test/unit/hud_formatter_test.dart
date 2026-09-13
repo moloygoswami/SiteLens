@@ -3,6 +3,8 @@ import 'package:sitelens/features/camera/hud/hud_data.dart';
 import 'package:sitelens/features/camera/hud/hud_formatter.dart';
 import 'package:sitelens/features/camera/hud/hud_layout_spec.dart';
 import 'package:sitelens/features/camera/models/evidence_metadata_snapshot.dart';
+import 'package:sitelens/domain/models/enums.dart';
+import 'package:sitelens/domain/models/media_item.dart';
 
 void main() {
   group('HudData & HudFormatter Unit Tests', () {
@@ -119,6 +121,100 @@ void main() {
 
       final (_, _, wgsSuffix) = HudFormatter.formatCoordinates(22.56, 88.30, -42.41, isMsl: false);
       expect(wgsSuffix, ' (Alt: -42.4m WGS84)');
+    });
+
+    MediaItem persistedItem({
+      String siteId = 'site-alpha',
+      double? accuracyM = 4.0,
+      int? gnssSatelliteCount = 15,
+      int? gnssSatellitesUsedInFix = 10,
+    }) {
+      return MediaItem(
+        id: 'm1',
+        siteId: siteId,
+        type: MediaItemType.photo,
+        uri: 'media/evid_m1.jpg',
+        originalUri: 'media/orig_m1.jpg',
+        capturedAt: DateTime.utc(2026, 8, 15, 12, 0, 0),
+        lat: 22.56298,
+        lon: 88.30085,
+        altitude: 18.2,
+        isAltitudeMsl: true,
+        accuracyM: accuracyM,
+        verificationStatus: HudStatus.verified,
+        gnssSatelliteCount: gnssSatelliteCount,
+        gnssSatellitesUsedInFix: gnssSatellitesUsedInFix,
+        sha256Hash: sampleSha,
+      );
+    }
+
+    test('fromMediaItem uses the canonical siteCode and never the internal siteId',
+        () {
+      final item = persistedItem();
+
+      expect(
+        HudFormatter.fromMediaItem(item, siteCode: 'SL-001').siteCodeText,
+        'SL-001',
+      );
+      // Missing / blank / sentinel siteCode -> established neutral fallback,
+      // never the internal Firestore-style site document id.
+      expect(HudFormatter.fromMediaItem(item).siteCodeText, 'SITE');
+      expect(
+        HudFormatter.fromMediaItem(item, siteCode: '').siteCodeText,
+        'SITE',
+      );
+      expect(
+        HudFormatter.fromMediaItem(item, siteCode: 'UNASSIGNED').siteCodeText,
+        'SITE',
+      );
+      expect(
+        HudFormatter.fromMediaItem(item, siteCode: ' sl-001 ').siteCodeText,
+        'SL-001',
+      );
+      expect(
+        HudFormatter.fromMediaItem(item, siteCode: 'SL-001').siteCodeText,
+        isNot('site-alpha'),
+      );
+    });
+
+    test('fromMediaItem carries persisted accuracy and satellite telemetry', () {
+      final hud =
+          HudFormatter.fromMediaItem(persistedItem(), siteCode: 'SL-001');
+      expect(hud.accuracyText, '±4.0m');
+      expect(hud.satellitesText, 'SATS: 10/15');
+      expect(hud.isGpsLocked, true);
+
+      final noTelemetry = HudFormatter.fromMediaItem(
+        persistedItem(
+          accuracyM: null,
+          gnssSatelliteCount: null,
+          gnssSatellitesUsedInFix: null,
+        ),
+        siteCode: 'SL-001',
+      );
+      expect(noTelemetry.accuracyText, isNull);
+      expect(noTelemetry.satellitesText, isNull);
+    });
+
+    test(
+        'fromSnapshot and fromLive leave the telemetry tail unset (burned/live cards unchanged)',
+        () {
+      final fromSnapshot = HudFormatter.fromSnapshot(
+        snapshot: sampleSnapshot,
+        originalSha256: sampleSha,
+      );
+      expect(fromSnapshot.accuracyText, isNull);
+      expect(fromSnapshot.satellitesText, isNull);
+
+      final fromLive = HudFormatter.fromLive(
+        siteCode: 'TEST',
+        resolvedAddress: '123 Main St',
+        latitude: 22.5,
+        longitude: 88.3,
+        isGpsLocked: true,
+      );
+      expect(fromLive.accuracyText, isNull);
+      expect(fromLive.satellitesText, isNull);
     });
   });
 }

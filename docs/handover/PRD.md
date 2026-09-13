@@ -18,7 +18,7 @@ Phase 1 includes:
 -   project/site selection
 -   GPS-aware photo/video capture
 -   visible burned-in geotagging
--   EXIF GPS metadata for photos
+-   immutable original artifact with derived, privacy-safe evidence artifacts
 -   local-first media storage
 -   local gallery
 -   media detail
@@ -496,6 +496,10 @@ Actions:
 The system MUST NOT automatically link evidence without user
 confirmation.
 
+Links are restricted to the same site and the same creator (creator/site
+isolation), and a `Closed` observation must be linked to an eligible open
+`Non-Conformity` on the same site before it can be saved.
+
 ## 8.5 Actions
 
 Retake:
@@ -564,7 +568,7 @@ Map view shows media pins, with clustering where appropriate.
 
 Each media item should expose:
 
--   queued
+-   pending
 -   syncing
 -   synced
 -   failed
@@ -597,13 +601,14 @@ Secondary actions:
 -   Share
 -   Delete from Device / Remove from Gallery
 
-### Deletion & Cloud Recovery Policy (M7-02-II-B)
+### Deletion, Storage Cleanup & Cloud Recovery Policy
 
-1. **Delete from Device**: Physically removes all local media files (`orig_*`, `evid_*`, `thumb_*` for photos; `orig_*`, `thumb_*` for videos) belonging to the media item from device storage to fully reclaim storage space. The SQLite database record is preserved (`is_deleted = 0`) to maintain cloud identity and enable subsequent on-demand recovery, while the immutable cloud backup remains intact.
-2. **Remove from Gallery / Archive**: Physically removes all local media files belonging to the media item and marks the SQLite record as soft-deleted (`is_deleted = 1`) to remove/hide the item from the local Gallery/Archive presentation, while preserving the immutable cloud copy.
-3. **Critical Invariant**: Neither local deletion operation may delete the cloud copy. Local deletion MUST NEVER delete Firebase Storage objects or Firestore documents. Cloud originals remain write-once immutable.
-4. **Destructive Warning for Unsynced Media**: If media has not been synchronized to the cloud (`synced != 1`), deletion requires an explicit, prominent destructive warning confirming that the media is not backed up and will be permanently lost with no recovery option.
-5. **Cloud Recovery**: Cloud-backed media whose local files were removed can be recovered on demand via forensically verified (`sha256_hash`) download from Firebase Cloud Storage.
+1. **Synced media — Remove from Gallery**: permanently deletes the local media files (original, evidence, thumbnail; video + thumbnail) and tombstones the local record (hidden from the Gallery). The immutable cloud copy remains intact, and the cloud evidence ledger is reconciled to a deleted state through synchronization.
+2. **Unsynced media — permanent deletion**: because unsynced media has no cloud backup, deletion requires an explicit, prominent destructive warning confirming the media will be permanently lost with no recovery option. After confirmation, local files are deleted and the record is tombstoned.
+3. **Tombstone semantics**: a locally deleted record is retained locally as a hidden tombstone until its cloud ledger state is reconciled. A previously published cloud evidence item is reconciled to a deleted ledger state; an item that was never published produces no cloud deletion claim. A cloud tombstone is a ledger state only — it never deletes or modifies cloud artifacts.
+4. **Critical Invariant**: local deletion MUST NEVER delete Firebase Storage objects or Firestore documents. Cloud originals remain write-once immutable.
+5. **Storage Cleanup**: raw originals of already-synchronized photos can be cleared locally on demand to reclaim device space, while the derived evidence, thumbnail, and all metadata are preserved and the original remains recoverable from cloud storage.
+6. **Cloud Recovery**: cloud-backed media whose local files were removed can be recovered on demand via forensically verified (`sha256_hash`) download from Firebase Cloud Storage.
 
 ------------------------------------------------------------------------
 
@@ -717,20 +722,50 @@ This supports lifecycle documentation such as:
 The sync UI must be production-ready even when cloud synchronization is
 unavailable.
 
+## Account Deletion
+
+Account deletion is a coordinated lifecycle available directly in
+Settings:
+
+-   identity re-authentication before deletion is permitted
+-   the service classifies every site associated with the account:
+    sites owned solely by the user (including their cloud-stored media)
+    are permanently destroyed, while evidence contributed to shared
+    sites is retained for audit integrity
+-   a user who is the sole administrator of a shared site must designate
+    an active successor administrator before deletion can proceed
+-   after server-side deletion: local database records, cached media,
+    pending sync queues, and site preferences are purged, the session is
+    terminated, and the user is returned to the unauthenticated start
+    state
+
 ------------------------------------------------------------------------
 
 # 13. Geotagging
 
 Two layers are required for photos.
 
-## 13.1 EXIF
+## 13.1 EXIF & Metadata Policy
 
-Write machine-readable GPS metadata where supported:
+The authoritative evidence metadata is the capture-time snapshot
+(coordinates, accuracy, altitude and datum, verification status, GNSS
+telemetry, capture timestamp, address, integrity hashes). It is persisted
+in the local evidence record and the cloud ledger, and rendered as the
+burned-in geotag stamp.
 
--   GPSLatitude
--   GPSLongitude
--   GPSAltitude
--   GPSTimeStamp
+EXIF handling follows a strict original/derived boundary:
+
+-   The immutable original artifact is preserved exactly as captured,
+    including whatever EXIF metadata the camera produced.
+-   Derived evidence artifacts (evidence JPEG, thumbnail) MUST NOT
+    silently inherit camera EXIF. Orientation is baked into the pixels
+    first; all EXIF metadata is then stripped before encoding so derived
+    evidence cannot carry unverified device claims (device GPS, device
+    timestamps, make/model) that contradict the authoritative
+    capture-time metadata.
+-   Missing or unavailable capture-time values remain explicitly unknown
+    and are never reconstructed synthetically into EXIF or any other
+    metadata layer.
 
 ## 13.2 Canonical Evidence File Model & Pipeline
 
@@ -749,7 +784,8 @@ Camera Capture
              └──── Isolate.run ────→
                    Background Worker Isolate (image: ^4.8.0)
                     ├─ JPEG decode
-                    ├─ EXIF orientation baking
+                    ├─ EXIF orientation baking (into pixels)
+                    ├─ EXIF metadata stripping (derived artifacts carry no camera EXIF)
                     ├─ Aspect-ratio crop
                     ├─ HUD compositing
                     ├─ JPEG encode (95% quality)
@@ -827,7 +863,8 @@ CREATE TABLE sites (
   id TEXT PRIMARY KEY,
   site_code TEXT,
   name TEXT,
-  address TEXT
+  address TEXT,
+  creator_id TEXT
 );
 ```
 
@@ -837,6 +874,7 @@ CREATE TABLE sites (
 CREATE TABLE media (
   id TEXT PRIMARY KEY,
   site_id TEXT REFERENCES sites(id),
+  original_uri TEXT,
   uri TEXT NOT NULL,
   thumb_uri TEXT,
   type TEXT CHECK(type IN ('photo','video')),
@@ -844,11 +882,12 @@ CREATE TABLE media (
   lon REAL NOT NULL,
   accuracy_m REAL,
   low_accuracy INTEGER DEFAULT 0,
+  altitude_m REAL,
   activity_tag TEXT,
   observation_type TEXT CHECK(
     observation_type IN (
       'progress',
-      'non-conformity',
+      'nonConformity',
       'closed',
       'material',
       'general'
@@ -858,7 +897,16 @@ CREATE TABLE media (
   note TEXT,
   captured_at TEXT NOT NULL,
   sha256_hash TEXT,
-  synced INTEGER DEFAULT 0
+  evidence_sha256_hash TEXT,
+  captured_address TEXT,
+  creator_id TEXT,
+  verification_status TEXT,
+  is_altitude_msl INTEGER,
+  gnss_satellite_count INTEGER,
+  gnss_satellites_used_in_fix INTEGER,
+  gnss_fix_timestamp TEXT,
+  synced INTEGER DEFAULT 0,
+  is_deleted INTEGER DEFAULT 0
 );
 
 CREATE INDEX idx_media_lat ON media(lat);
@@ -868,9 +916,13 @@ CREATE INDEX idx_media_obs ON media(observation_type);
 CREATE INDEX idx_media_captured ON media(captured_at);
 ```
 
-The implementation may add synchronization fields such as sync state,
-error message, retry timestamp, and remote ID without changing the
-functional data model.
+`sha256_hash` is the integrity hash of the immutable original artifact;
+`evidence_sha256_hash` is the integrity hash of the derived evidence
+artifact. Nullable metadata columns (`accuracy_m`, `altitude_m`,
+`verification_status`, `is_altitude_msl`, GNSS telemetry) mean the value
+was not established at capture time and must remain unknown rather than
+being filled with synthetic values. Capture is gated on a first valid GPS
+fix, so recorded coordinates are always real observed values.
 
 ------------------------------------------------------------------------
 
@@ -901,14 +953,19 @@ metadata, including:
 -   longitude
 -   accuracy
 -   low-accuracy flag
+-   altitude and altitude datum
+-   verification status
+-   GNSS satellite telemetry and fix timestamp
 -   activity
 -   observation type
 -   linked media ID
 -   note
 -   capture timestamp
--   SHA-256 hash
+-   SHA-256 hash of the original artifact
+-   SHA-256 hash of the derived evidence artifact
+-   captured address
 -   creator/user ID
--   synchronization metadata
+-   deletion flag (tombstone state)
 
 Cloud Storage conceptual paths:
 
@@ -945,29 +1002,39 @@ Synchronization flow:
 ``` text
 Capture
   ↓
-Local file + local DB
+Local file + local DB (pending)
   ↓
-Sync queue
+Sync coordination (authenticated session, connectivity available)
   ↓
-Connectivity available
+Publish cloud evidence ledger document
   ↓
-Upload original
+Upload original (write-once, idempotent)
   ↓
-Upload thumbnail
-  ↓
-Write Firestore metadata
+Upload thumbnail (write-once, idempotent)
   ↓
 Confirm success
   ↓
 Mark local item synced
 ```
 
+Synchronization is session-gated and independent of Gallery visibility:
+records are processed according to the queue lifecycle regardless of
+their presentation state, and cloud publication (ledger document plus
+Storage artifacts) is distinct from local persistence.
+
 If synchronization fails:
 
 -   preserve local media
 -   preserve local metadata
--   mark sync as failed
--   expose Retry
+-   classify the failure: retryable failures re-attempt automatically
+    with exponential backoff; permanent failures mark the item failed and
+    remain available for explicit manual retry
+-   failed attempts must never delete or invalidate the local original
+
+Locally deleted evidence is reconciled with the cloud through tombstone
+propagation: a previously published cloud evidence item is reconciled to
+a deleted ledger state with the same retry/session protections, while an
+item that was never published produces no cloud deletion claim.
 
 Firebase availability must never determine whether an inspection photo
 is successfully captured locally.
@@ -1194,7 +1261,7 @@ Deliver:
 -   Native uncropped 4:3 optical viewfinder aspect ratio preserving sensor bounds
 -   Default 0.5x wide zoom (rear camera clamped to sensor minimum) and 1.0x fixed optical (front camera)
 -   Expandable camera side controls: Aspect Ratio cycling (4:3, 16:9, 1:1) and Capture Timer presets (Off, 3s, 5s, 10s)
--   95% JPEG quality compression with preserved EXIF geotagging
+-   95% JPEG quality compression; camera EXIF is preserved only on the immutable original artifact, while derived evidence artifacts carry no camera EXIF
 -   Live GPS acquisition stream (`geolocator: ^13.0.2`) with reverse geocoding and offline fallback (`geocoding: ^4.0.0`)
 -   User-configurable timestamp display preferences (Local/UTC, 24h/12h/ISO formats)
 -   Combined shutter lock: Camera Ready + Valid GPS Fix (shutter blocked before first GPS lock)
@@ -1278,7 +1345,7 @@ Deliver:
 -   Nearby search defaults (`nearbySettingsProvider` dynamically initializing `NearbySearchNotifier`)
 -   Storage cleanup: "Clear Synced Photo Originals Locally" (`StorageCleanupService`) safely deleting local originals while preserving evidence/thumbnail files and Firestore metadata
 -   Cloud media recovery: missing local files recovered on demand via `CloudMediaRecoveryService` with deterministic Cloud Storage path resolution and forensic SHA-256 verification against `MediaItem.sha256Hash`
--   Local media deletion semantics: synced media deletes local files + soft-deletes SQLite (`is_deleted = 1`); unsynced media deletes local files + hard-deletes SQLite with explicit destructive warning
+-   Local media deletion semantics: synced media deletes local files + tombstones SQLite (`is_deleted = 1`); unsynced media requires an explicit destructive warning and deletes local files + tombstones SQLite, with the cloud ledger reconciled through tombstone propagation for any previously published item
 -   Optional Google Photos Auto-Sync subsystem: Drift SQLite schema v6 (`google_photos_sync_entries`), least-privilege OAuth scope (`photoslibrary.appendonly`), application-owned `SiteLens Evidence` album management, background retry/backoff queue, Settings card UI, genuine `mediaItem.id` verification, startup un-queued media sweep, and strict decoupling from authoritative Firebase sync
 -   Modernized full-width `WatermarkDrawer` layout with scale alignment and single-line clean character drawing (`_drawCleanText`)
 -   Responsive & adaptive two-pane tablet/desktop layouts across all screens
@@ -1320,7 +1387,7 @@ Phase 1 is complete only when:
 -   capture is strictly blocked before first valid GPS fix
 -   low-accuracy capture is visually flagged and tagged in metadata
 -   geotag HUD card is permanently burned into saved evidence photo pixels
--   photo EXIF GPS metadata is written with 95% JPEG quality
+-   the immutable original keeps its capture-time camera metadata; derived evidence artifacts carry no camera EXIF and are encoded at 95% JPEG quality
 -   Google Minimap provides crisp Hybrid satellite/vector overlay at Zoom 18.0 with smooth 250ms cross-fade in a 1.24:1 aspect ratio container with 42% max width cap and equal-height metadata pairing
 -   `AppLifecycleState.inactive` preserves optical camera stream during OS screenshots
 

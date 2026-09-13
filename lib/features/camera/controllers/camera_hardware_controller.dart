@@ -2,8 +2,11 @@ import 'dart:async';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:permission_handler/permission_handler.dart';
+import '../../../core/services/permission_service.dart';
 import '../models/camera_hardware_state.dart';
 import '../models/camera_ui_state.dart';
+import '../models/gps_hardware_state.dart';
 import '../services/camera_hardware_service.dart';
 
 final cameraHardwareServiceProvider = Provider<CameraHardwareService>((ref) {
@@ -13,11 +16,13 @@ final cameraHardwareServiceProvider = Provider<CameraHardwareService>((ref) {
 final cameraHardwareProvider =
     StateNotifierProvider.autoDispose<CameraHardwareNotifier, CameraHardwareState>((ref) {
   final service = ref.watch(cameraHardwareServiceProvider);
-  return CameraHardwareNotifier(service);
+  final permissionService = ref.watch(permissionServiceProvider.notifier);
+  return CameraHardwareNotifier(service, permissionService: permissionService);
 });
 
 class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
   final CameraHardwareService _service;
+  final PermissionService? _permissionService;
   CameraController? _controller;
   Timer? _recordingTimer;
   XFile? _inFlightVideoFile;
@@ -25,7 +30,11 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
   bool _isPaused = false;
   Future<void>? _transitionLock;
 
-  CameraHardwareNotifier(this._service) : super(const CameraHardwareState()) {
+  CameraHardwareNotifier(
+    this._service, {
+    PermissionService? permissionService,
+  })  : _permissionService = permissionService,
+        super(const CameraHardwareState()) {
     initialize();
   }
 
@@ -57,6 +66,31 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
     return _synchronized(() async {
       if (_isPaused || !mounted) return;
       state = state.copyWith(status: CameraStatus.initializing);
+
+      // 1. Verify camera permission via PermissionService abstraction
+      if (_permissionService != null) {
+        final perm = await _permissionService.checkCameraPermission();
+        if (perm.isPermanentlyDenied) {
+          state = state.copyWith(
+            status: CameraStatus.permissionPermanentlyDenied,
+            errorMessage: 'Camera permission is permanently denied',
+          );
+          return;
+        } else if (perm.isRestricted) {
+          state = state.copyWith(
+            status: CameraStatus.permissionRestricted,
+            errorMessage: 'Camera access is restricted by device policy',
+          );
+          return;
+        } else if (!perm.isGranted && !perm.isLimited) {
+          state = state.copyWith(
+            status: CameraStatus.permissionDenied,
+            errorMessage: 'Camera permission is denied',
+          );
+          return;
+        }
+      }
+
       try {
         final cameras = await _service.getAvailableCameras();
         if (cameras.isEmpty) {
@@ -76,6 +110,32 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
         await _initControllerAtIndex(0);
       } catch (e) {
         if (mounted && !_isPaused) {
+          if (e is CameraException &&
+              (e.code == 'CameraAccessDenied' ||
+                  e.code == 'CameraAccessDeniedWithoutPrompt')) {
+            if (_permissionService != null) {
+              final perm = await _permissionService.checkCameraPermission();
+              if (perm.isPermanentlyDenied) {
+                state = state.copyWith(
+                  status: CameraStatus.permissionPermanentlyDenied,
+                  errorMessage: 'Camera permission is permanently denied',
+                );
+                return;
+              } else if (perm.isRestricted) {
+                state = state.copyWith(
+                  status: CameraStatus.permissionRestricted,
+                  errorMessage: 'Camera access is restricted by device policy',
+                );
+                return;
+              }
+            }
+            state = state.copyWith(
+              status: CameraStatus.permissionDenied,
+              errorMessage: 'Camera permission is denied: ${e.description}',
+            );
+            return;
+          }
+
           state = state.copyWith(
             status: CameraStatus.error,
             errorMessage: 'Camera initialization failed: $e',
@@ -138,6 +198,32 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
 
     if (initializedController == null) {
       if (mounted && !_isPaused) {
+        if (lastError is CameraException &&
+            (lastError.code == 'CameraAccessDenied' ||
+                lastError.code == 'CameraAccessDeniedWithoutPrompt')) {
+          if (_permissionService != null) {
+            final perm = await _permissionService.checkCameraPermission();
+            if (perm.isPermanentlyDenied) {
+              state = state.copyWith(
+                status: CameraStatus.permissionPermanentlyDenied,
+                errorMessage: 'Camera permission is permanently denied',
+              );
+              return;
+            } else if (perm.isRestricted) {
+              state = state.copyWith(
+                status: CameraStatus.permissionRestricted,
+                errorMessage: 'Camera access is restricted by device policy',
+              );
+              return;
+            }
+          }
+          state = state.copyWith(
+            status: CameraStatus.permissionDenied,
+            errorMessage: 'Camera permission is denied',
+          );
+          return;
+        }
+
         state = state.copyWith(
           status: CameraStatus.error,
           errorMessage: 'Failed to initialize camera: $lastError',
@@ -327,7 +413,7 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
     }
   }
 
-  Future<bool> startVideoRecording() async {
+  Future<bool> startVideoRecording({GpsHardwareState? recordingGpsState}) async {
     if (_controller == null) return false;
     if (_service.isRecordingVideo(_controller) || state.isRecordingVideo) return false;
 
@@ -348,6 +434,7 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
         status: CameraStatus.recordingVideo,
         recordingStartedAtUtc: startTime,
         recordingDurationSeconds: 0,
+        recordingGpsState: recordingGpsState,
       );
       return true;
     } catch (e) {
@@ -414,6 +501,7 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
           status: CameraStatus.unavailable,
           hasInterruptedRecording: state.isRecordingVideo || _inFlightVideoFile != null,
           recordingStoppedAtUtc: DateTime.now().toUtc(),
+          recordingGpsState: state.recordingGpsState,
         );
       }
     });
@@ -425,6 +513,31 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
 
     return _synchronized(() async {
       if (_isPaused || !mounted) return;
+
+      // 1. Check camera permission via PermissionService abstraction
+      if (_permissionService != null) {
+        final perm = await _permissionService.checkCameraPermission();
+        if (perm.isPermanentlyDenied) {
+          state = state.copyWith(
+            status: CameraStatus.permissionPermanentlyDenied,
+            errorMessage: 'Camera permission is permanently denied',
+          );
+          return;
+        } else if (perm.isRestricted) {
+          state = state.copyWith(
+            status: CameraStatus.permissionRestricted,
+            errorMessage: 'Camera access is restricted by device policy',
+          );
+          return;
+        } else if (!perm.isGranted && !perm.isLimited) {
+          state = state.copyWith(
+            status: CameraStatus.permissionDenied,
+            errorMessage: 'Camera permission is denied',
+          );
+          return;
+        }
+      }
+
       if (_controller != null && _controller!.value.isInitialized && state.status == CameraStatus.ready) {
         return;
       }
@@ -445,6 +558,32 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
         await _initControllerAtIndex(targetIndex);
       } catch (e) {
         if (mounted && !_isPaused) {
+          if (e is CameraException &&
+              (e.code == 'CameraAccessDenied' ||
+                  e.code == 'CameraAccessDeniedWithoutPrompt')) {
+            if (_permissionService != null) {
+              final perm = await _permissionService.checkCameraPermission();
+              if (perm.isPermanentlyDenied) {
+                state = state.copyWith(
+                  status: CameraStatus.permissionPermanentlyDenied,
+                  errorMessage: 'Camera permission is permanently denied',
+                );
+                return;
+              } else if (perm.isRestricted) {
+                state = state.copyWith(
+                  status: CameraStatus.permissionRestricted,
+                  errorMessage: 'Camera access is restricted by device policy',
+                );
+                return;
+              }
+            }
+            state = state.copyWith(
+              status: CameraStatus.permissionDenied,
+              errorMessage: 'Camera permission is denied: ${e.description}',
+            );
+            return;
+          }
+
           state = state.copyWith(
             status: CameraStatus.error,
             errorMessage: 'Failed to resume camera: $e',
@@ -454,17 +593,54 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
     });
   }
 
+  /// Requests camera permission via PermissionService and automatically reinitializes if granted.
+  Future<void> requestPermissionAndRetry() async {
+    if (_permissionService == null) {
+      await initialize();
+      return;
+    }
+    final status = await _permissionService.requestCameraPermission();
+    if (status.isGranted || status.isLimited) {
+      await initialize();
+    } else if (status.isPermanentlyDenied) {
+      state = state.copyWith(
+        status: CameraStatus.permissionPermanentlyDenied,
+        errorMessage: 'Camera permission is permanently denied',
+      );
+    } else if (status.isRestricted) {
+      state = state.copyWith(
+        status: CameraStatus.permissionRestricted,
+        errorMessage: 'Camera access is restricted by device policy',
+      );
+    } else {
+      state = state.copyWith(
+        status: CameraStatus.permissionDenied,
+        errorMessage: 'Camera permission is denied',
+      );
+    }
+  }
+
   /// Retries initializing the camera hardware and available optical lenses.
   Future<void> retry() async {
     _isPaused = false;
-    await initialize();
+    if (state.status == CameraStatus.permissionDenied) {
+      await requestPermissionAndRetry();
+    } else {
+      await initialize();
+    }
   }
 
-  /// Clears the interrupted-recording flag after the user has resolved it
-  /// (reviewed, kept, or explicitly discarded).
+  /// Clears the in-flight video reference once it no longer requires
+  /// interrupted-recording recovery: after the user resolved an interruption
+  /// (reviewed, kept, or explicitly discarded) or after a normal stop handed
+  /// the recording to the review flow (Cross-Cutting Audit C, C-1).
   void clearInterruptedRecording() {
     if (!mounted) return;
-    state = state.copyWith(hasInterruptedRecording: false);
+    _inFlightVideoFile = null;
+    state = state.copyWith(
+      hasInterruptedRecording: false,
+      clearRecordingGpsState: true,
+    );
   }
 
   @override

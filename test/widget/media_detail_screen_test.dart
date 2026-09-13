@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqlite3/open.dart';
+import 'package:video_player/video_player.dart';
 import 'package:sitelens/data/local/database/app_database.dart';
 import 'package:sitelens/data/repositories/media_repository.dart';
 import 'package:sitelens/data/repositories/site_repository.dart';
@@ -16,9 +17,13 @@ import 'package:sitelens/domain/models/enums.dart';
 import 'package:sitelens/domain/models/media_item.dart';
 import 'package:sitelens/domain/models/site_model.dart';
 import 'package:sitelens/core/services/auth_service.dart';
+import 'package:sitelens/features/camera/hud/hud_data.dart';
 import 'package:sitelens/features/camera/services/evidence_storage_service.dart';
+import 'package:sitelens/features/gallery/controllers/evidence_video_playback.dart';
 import 'package:sitelens/features/gallery/media_detail_screen.dart';
+import 'package:sitelens/features/gallery/widgets/local_video_player_widget.dart';
 import 'package:sitelens/features/gallery/widgets/media_tag_edit_modal.dart';
+import 'package:sitelens/shared/widgets/evidence_metadata_hud_card.dart';
 import 'package:sitelens/features/sites/site_controller.dart';
 import 'package:sitelens/features/sync/services/cloud_media_recovery_service.dart';
 
@@ -51,6 +56,60 @@ class FakeCloudMediaRecoveryService extends CloudMediaRecoveryService {
 class FakeFirebaseStorage implements FirebaseStorage {
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+/// Fake platform-backed video controller: no native calls, disposal counted.
+class FakeVideoController extends VideoPlayerController {
+  FakeVideoController() : super.file(File('/fake/evidence.mp4'));
+
+  int disposeCalls = 0;
+  bool _disposed = false;
+
+  @override
+  Future<void> initialize() async {
+    value = VideoPlayerValue(
+      duration: const Duration(seconds: 3),
+      size: const Size(1080, 1920),
+      isInitialized: true,
+    );
+  }
+
+  @override
+  Future<void> setLooping(bool looping) async {
+    if (_disposed) return;
+    value = value.copyWith(isLooping: looping);
+  }
+
+  @override
+  Future<void> play() async {
+    if (_disposed) return;
+    value = value.copyWith(isPlaying: true);
+  }
+
+  @override
+  Future<void> pause() async {
+    if (_disposed) return;
+    value = value.copyWith(isPlaying: false);
+  }
+
+  @override
+  Future<void> dispose() async {
+    disposeCalls++;
+    if (_disposed) return;
+    _disposed = true;
+    super.dispose();
+  }
+}
+
+/// Counts how many controllers the app actually creates (must stay at one).
+class CountingVideoControllerFactory {
+  final List<FakeVideoController> created = [];
+
+  VideoPlayerController call(File file) {
+    final controller = FakeVideoController();
+    created.add(controller);
+    return controller;
+  }
 }
 
 void main() {
@@ -120,6 +179,11 @@ void main() {
     lon: 88.30085,
     accuracyM: 4.0,
     lowAccuracy: false,
+    altitude: 18.2,
+    isAltitudeMsl: true,
+    verificationStatus: HudStatus.verified,
+    gnssSatelliteCount: 15,
+    gnssSatellitesUsedInFix: 10,
     activityTag: 'Safety Walk',
     observationType: ObservationType.general,
     note: 'Walkthrough of site perimeter',
@@ -176,11 +240,11 @@ void main() {
     await db.close();
   });
 
-  Widget createWidgetUnderTest(MediaItem item) {
+  Widget createWidgetUnderTest(MediaItem item, {EvidenceStorageService? customStorage}) {
     return ProviderScope(
       overrides: [
         authServiceProvider.overrideWithValue(MockAuthService()),
-        evidenceStorageServiceProvider.overrideWithValue(storageService),
+        evidenceStorageServiceProvider.overrideWithValue(customStorage ?? storageService),
         cloudMediaRecoveryServiceProvider.overrideWithValue(recoveryService),
         mediaRepositoryProvider.overrideWithValue(mediaRepo),
         siteRepositoryProvider.overrideWithValue(MockSiteRepository(testSite)),
@@ -203,9 +267,28 @@ void main() {
       expect(find.text('PHOTO EVIDENCE DETAIL'), findsOneWidget);
       expect(find.text('PROGRESS'), findsOneWidget);
       expect(find.text('Excavation'), findsOneWidget);
-      expect(find.textContaining('GPS PRECISION: ±3.5m'), findsOneWidget);
+      expect(find.textContaining('GPS STATUS: VERIFIED (±3.5m)'), findsOneWidget);
       expect(
           find.text('Trench excavation completed to bedrock'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets(
+        'Photo Evidence Detail does not render a redundant minimap HUD',
+        (tester) async {
+      await tester.pumpWidget(createWidgetUnderTest(testPhotoItem));
+      await tester.pumpAndSettle();
+
+      // Redundant Flutter-rendered minimap HUD must NOT be present
+      expect(find.text('EVIDENCE MINIMAP & METADATA'), findsNothing);
+      expect(find.byType(EvidenceMetadataHudCard), findsNothing);
+
+      // Existing capture & geospatial telemetry section and forensic integrity remain intact
+      expect(find.text('CAPTURE & GEOSPATIAL TELEMETRY'), findsOneWidget);
+      expect(find.text('FORENSIC INTEGRITY'), findsOneWidget);
+      expect(find.text('OBSERVATION & TAGS'), findsOneWidget);
 
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
@@ -237,7 +320,7 @@ void main() {
     });
 
     testWidgets(
-        'Unsynced deletion presents simple confirmation dialog and permanently deletes local files and DB row',
+        'Unsynced deletion presents simple confirmation dialog and permanently deletes local files and tombstones the DB row',
         (tester) async {
       await tester.pumpWidget(createWidgetUnderTest(testPhotoItem));
       await tester.pumpAndSettle();
@@ -255,11 +338,14 @@ void main() {
       await tester.tap(find.widgetWithText(ElevatedButton, 'Delete'));
       await tester.pumpAndSettle();
 
-      // Verify row in SQLite is deleted and all local media files unlinked
+      // C-2: local media files are unlinked and the row is tombstoned
+      // (is_deleted = 1) instead of physically destroyed, so the cloud ledger
+      // can always be reconciled by the tombstone synchronization.
       final raw = await (db.select(db.media)
             ..where((t) => t.id.equals(testPhotoItem.id)))
           .getSingleOrNull();
-      expect(raw, isNull);
+      expect(raw, isNotNull);
+      expect(raw!.isDeleted, 1);
       expect(storageService.deletedFiles.contains('media/orig_m1.jpg'), isTrue);
       expect(storageService.deletedFiles.contains('media/evid_m1.jpg'), isTrue);
       expect(
@@ -373,6 +459,104 @@ void main() {
 
       // Verify Save button is unlocked
       expect(find.text('Save Changes'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('F3: Detail screen never renders Closed-linked evidence card for non-Closed observation',
+        (tester) async {
+      final nonClosedWithLinkedId = testPhotoItem.copyWith(
+        id: 'm_non_closed',
+        observationType: ObservationType.general,
+        linkedMediaId: 'm1',
+      );
+
+      await tester.pumpWidget(createWidgetUnderTest(nonClosedWithLinkedId));
+      await tester.pumpAndSettle();
+
+      // Ensure that even if linkedMediaId is set, non-Closed observations never render the linked card
+      expect(find.text('LINKED BEFORE EVIDENCE (NON-CONFORMITY)'), findsNothing);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('F3: MediaTagEditModal: changing Closed -> General clears link and removes Evid_ID on save',
+        (tester) async {
+      // Seed a closed item linked to testPhotoItem ('m1')
+      final closedItem = MediaItem(
+        id: 'm_closed_1',
+        siteId: 'site-alpha',
+        type: MediaItemType.photo,
+        uri: 'media/evid_m1.jpg',
+        originalUri: 'media/orig_m1.jpg',
+        thumbUri: 'media/thumb_m1.jpg',
+        capturedAt: DateTime.utc(2026, 8, 15, 11, 30, 0),
+        lat: 22.56298,
+        lon: 88.30085,
+        accuracyM: 3.5,
+        lowAccuracy: false,
+        activityTag: 'Excavation',
+        observationType: ObservationType.closed,
+        linkedMediaId: 'm1',
+        note: 'Evid_ID: m1\nTrench defect rectified',
+        sha256Hash: 'hash_closed_1',
+        syncStatus: SyncStatusType.pending,
+        isDeleted: false,
+      );
+
+      await db.into(db.media).insert(
+            MediaCompanion.insert(
+              id: closedItem.id,
+              siteId: drift.Value(closedItem.siteId),
+              type: drift.Value(closedItem.type.name),
+              uri: closedItem.uri,
+              originalUri: drift.Value(closedItem.originalUri),
+              thumbUri: drift.Value(closedItem.thumbUri),
+              capturedAt: closedItem.capturedAt.toIso8601String(),
+              lat: closedItem.lat,
+              lon: closedItem.lon,
+              accuracyM: drift.Value(closedItem.accuracyM),
+              lowAccuracy: const drift.Value(0),
+              activityTag: drift.Value(closedItem.activityTag),
+              observationType: drift.Value(closedItem.observationType.name),
+              linkedMediaId: drift.Value(closedItem.linkedMediaId),
+              note: drift.Value(closedItem.note),
+              sha256Hash: drift.Value(closedItem.sha256Hash),
+              synced: drift.Value(closedItem.syncStatus.toInt()),
+            ),
+          );
+
+      await tester.pumpWidget(createWidgetUnderTest(closedItem));
+      await tester.pumpAndSettle();
+
+      // Verify linked before evidence card is visible
+      expect(find.text('LINKED BEFORE EVIDENCE (NON-CONFORMITY)'), findsOneWidget);
+
+      // Open Edit Tags modal
+      await tester.tap(find.byIcon(Icons.edit_note_rounded));
+      await tester.pumpAndSettle();
+
+      // Change observation from Closed to General
+      await tester.ensureVisible(find.text('General'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('General'));
+      await tester.pumpAndSettle();
+
+      // Tap Save Changes
+      await tester.tap(find.text('Save Changes'));
+      await tester.pumpAndSettle();
+
+      // Verify the reloaded detail screen no longer renders the linked card
+      expect(find.text('LINKED BEFORE EVIDENCE (NON-CONFORMITY)'), findsNothing);
+
+      // Verify database record has linkedMediaId == null and Evid_ID removed from note
+      final persisted = await mediaRepo.getMediaById('m_closed_1');
+      expect(persisted, isNotNull);
+      expect(persisted!.observationType, equals(ObservationType.general));
+      expect(persisted.linkedMediaId, isNull);
+      expect(persisted.note, equals('Trench defect rectified'));
 
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
@@ -596,6 +780,476 @@ void main() {
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
     });
+
+    testWidgets(
+        'F4: Immersive viewer displays fallback/error state when evidence file is unreadable or missing',
+        (tester) async {
+      final nonExistentPath = '/mock/non_existent/evidence_file.jpg';
+      final storage = FakeEvidenceStorageServiceWithFile(nonExistentPath);
+
+      await tester.pumpWidget(createWidgetUnderTest(testPhotoItem, customStorage: storage));
+      await tester.pumpAndSettle();
+
+      // Tap Fullscreen Zoom button to open immersive viewer
+      final fullscreenBtn = find.text('Fullscreen Zoom');
+      expect(fullscreenBtn, findsOneWidget);
+      await tester.tap(fullscreenBtn);
+      await tester.pumpAndSettle();
+
+      // Verify that immersive viewer displays fallback UI rather than crashing/blank
+      expect(find.text('PHOTO FILE NOT ACCESSIBLE'), findsOneWidget);
+      expect(find.byIcon(Icons.broken_image_rounded), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets(
+        'F4: Video MediaDetailScreen displays CAPTURE & GEOSPATIAL TELEMETRY and opens immersive viewer with metadata overlay',
+        (tester) async {
+      await tester.pumpWidget(createWidgetUnderTest(testSyncedVideoItem));
+      await tester.pumpAndSettle();
+
+      // Detail Screen Header
+      expect(find.text('VIDEO EVIDENCE DETAIL'), findsOneWidget);
+
+      // Status Badge shows canonical verification status
+      expect(find.textContaining('GPS STATUS: VERIFIED (±4.0m)'), findsOneWidget);
+
+      // CAPTURE & GEOSPATIAL TELEMETRY section
+      expect(find.text('CAPTURE & GEOSPATIAL TELEMETRY'), findsOneWidget);
+      expect(find.text('ALTITUDE'), findsOneWidget);
+      expect(find.textContaining('+18.2 m ASL'), findsOneWidget);
+      expect(find.text('SATELLITES'), findsOneWidget);
+      expect(find.textContaining('10 used / 15 visible'), findsOneWidget);
+
+      // Fullscreen Zoom button is available on video container
+      final fullscreenBtn = find.text('Fullscreen Zoom');
+      expect(fullscreenBtn, findsOneWidget);
+      await tester.tap(fullscreenBtn);
+      await tester.pumpAndSettle();
+
+      // Fullscreen Video route is opened
+      expect(find.text('FULLSCREEN VIDEO EVIDENCE'), findsOneWidget);
+      // Bottom metadata is the canonical metadata card — the same component the
+      // Photo immersive viewer renders.
+      expect(find.byType(StandaloneMetadataWidget), findsOneWidget);
+      // Canonical siteCode (from the persisted site), never the internal
+      // Firestore-style site document id.
+      expect(find.textContaining('SITE: SL-001', findRichText: true),
+          findsOneWidget);
+      expect(find.textContaining('site-alpha', findRichText: true), findsNothing);
+      // Accuracy + satellite count preserved
+      expect(find.textContaining('±4.0m • SATS: 10/15', findRichText: true),
+          findsOneWidget);
+      // Altitude rendered through canonical card semantics
+      expect(find.textContaining('Alt: +18.2m', findRichText: true),
+          findsWidgets);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+  });
+
+  group('Video Fullscreen Single-Owner Lifecycle', () {
+    Widget buildVideoDetail({
+      required EvidenceStorageService storage,
+      required VideoControllerFactory controllerFactory,
+    }) {
+      return ProviderScope(
+        overrides: [
+          authServiceProvider.overrideWithValue(MockAuthService()),
+          evidenceStorageServiceProvider.overrideWithValue(storage),
+          cloudMediaRecoveryServiceProvider.overrideWithValue(recoveryService),
+          mediaRepositoryProvider.overrideWithValue(mediaRepo),
+          siteRepositoryProvider
+              .overrideWithValue(MockSiteRepository(testSite)),
+          siteControllerProvider.overrideWith(
+            (ref) => SiteController(MockSiteRepository(testSite)),
+          ),
+          evidenceVideoControllerFactoryProvider
+              .overrideWithValue(controllerFactory),
+        ],
+        child: MaterialApp(
+          home: MediaDetailScreen(mediaItem: testSyncedVideoItem),
+        ),
+      );
+    }
+
+    final activeVideoSurface = find.byWidgetPredicate(
+      (w) => w is LocalVideoPlayerWidget && w.isActive,
+    );
+
+    testWidgets(
+        'single owned player is reused across fullscreen enter/exit/re-enter and repeated playback',
+        (tester) async {
+      final tempDir =
+          Directory.systemTemp.createTempSync('sitelens_video_fs_');
+      final videoFile = File('${tempDir.path}/orig_v1.mp4')
+        ..writeAsBytesSync(const [0, 1, 2, 3, 4]);
+      final storage = FakeEvidenceStorageServiceMap({
+        'media/orig_v1.mp4': videoFile.path,
+      });
+      final factory = CountingVideoControllerFactory();
+
+      await tester.pumpWidget(
+        buildVideoDetail(storage: storage, controllerFactory: factory.call),
+      );
+      await tester.pumpAndSettle();
+
+      // ONE controller, never disposed while the screen is alive.
+      expect(factory.created, hasLength(1));
+      expect(factory.created.single.disposeCalls, 0);
+      expect(activeVideoSurface, findsOneWidget);
+
+      // Enter fullscreen -> still ONE player; the inline surface is parked.
+      await tester.tap(find.text('Fullscreen Zoom'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('FULLSCREEN VIDEO EVIDENCE'), findsOneWidget);
+      expect(factory.created, hasLength(1));
+      expect(activeVideoSurface, findsOneWidget);
+      // The inline surface still exists (kept alive) but is parked offstage.
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is LocalVideoPlayerWidget && !w.isActive,
+          skipOffstage: false,
+        ),
+        findsOneWidget,
+      );
+
+      // Repeated playback stays on the same single controller.
+      await tester.tap(activeVideoSurface);
+      await tester.pumpAndSettle();
+      expect(factory.created.single.value.isPlaying, isTrue);
+
+      await tester.tap(activeVideoSurface);
+      await tester.pumpAndSettle();
+      expect(factory.created.single.value.isPlaying, isFalse);
+      expect(factory.created, hasLength(1));
+
+      // Exit fullscreen -> still ONE player, nothing disposed.
+      await tester.tap(find.byIcon(Icons.close_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('FULLSCREEN VIDEO EVIDENCE'), findsNothing);
+      expect(factory.created, hasLength(1));
+      expect(factory.created.single.disposeCalls, 0);
+
+      // Re-enter fullscreen -> no second player is created.
+      await tester.tap(find.text('Fullscreen Zoom'));
+      await tester.pumpAndSettle();
+      expect(find.text('FULLSCREEN VIDEO EVIDENCE'), findsOneWidget);
+      expect(factory.created, hasLength(1));
+
+      // Screen teardown disposes the single owned player exactly once.
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+      expect(factory.created.single.disposeCalls, 1);
+
+      tempDir.deleteSync(recursive: true);
+    });
+
+    testWidgets(
+        'missing video file yields a truthful failure state without creating a player',
+        (tester) async {
+      final factory = CountingVideoControllerFactory();
+
+      await tester.pumpWidget(
+        buildVideoDetail(
+          storage: storageService,
+          controllerFactory: factory.call,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // No controller is ever created for a missing file.
+      expect(factory.created, isEmpty);
+      expect(find.text('VIDEO UNAVAILABLE'), findsOneWidget);
+
+      // Fullscreen still opens and remains truthful.
+      await tester.tap(find.text('Fullscreen Zoom'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('FULLSCREEN VIDEO EVIDENCE'), findsOneWidget);
+      expect(factory.created, isEmpty);
+      expect(find.text('VIDEO UNAVAILABLE'), findsWidgets);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets(
+        'disposing the screen while fullscreen is open disposes the single player exactly once',
+        (tester) async {
+      final tempDir =
+          Directory.systemTemp.createTempSync('sitelens_video_fs2_');
+      final videoFile = File('${tempDir.path}/orig_v1.mp4')
+        ..writeAsBytesSync(const [9, 9, 9]);
+      final storage = FakeEvidenceStorageServiceMap({
+        'media/orig_v1.mp4': videoFile.path,
+      });
+      final factory = CountingVideoControllerFactory();
+
+      await tester.pumpWidget(
+        buildVideoDetail(storage: storage, controllerFactory: factory.call),
+      );
+      await tester.pumpAndSettle();
+      expect(factory.created, hasLength(1));
+
+      await tester.tap(find.text('Fullscreen Zoom'));
+      await tester.pumpAndSettle();
+      expect(find.text('FULLSCREEN VIDEO EVIDENCE'), findsOneWidget);
+
+      // Tear down the whole app while the fullscreen route is on top.
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+
+      expect(factory.created, hasLength(1));
+      expect(factory.created.single.disposeCalls, 1);
+
+      tempDir.deleteSync(recursive: true);
+    });
+  });
+
+  group('Canonical Metadata Card Parity (Photo & Video)', () {
+    Widget buildDetail({
+      required SiteRepository siteRepository,
+      EvidenceStorageService? storage,
+      MediaItem? item,
+    }) {
+      final factory = CountingVideoControllerFactory();
+      return ProviderScope(
+        overrides: [
+          authServiceProvider.overrideWithValue(MockAuthService()),
+          evidenceStorageServiceProvider
+              .overrideWithValue(storage ?? storageService),
+          cloudMediaRecoveryServiceProvider.overrideWithValue(recoveryService),
+          mediaRepositoryProvider.overrideWithValue(mediaRepo),
+          siteRepositoryProvider.overrideWithValue(siteRepository),
+          siteControllerProvider.overrideWith(
+            (ref) => SiteController(siteRepository),
+          ),
+          evidenceVideoControllerFactoryProvider
+              .overrideWithValue(factory.call),
+        ],
+        child: MaterialApp(
+          home: MediaDetailScreen(mediaItem: item ?? testSyncedVideoItem),
+        ),
+      );
+    }
+
+    Future<void> openFullscreen(
+        WidgetTester tester, String expectedTitle) async {
+      final fullscreenBtn = find.text('Fullscreen Zoom');
+      expect(fullscreenBtn, findsOneWidget);
+      await tester.tap(fullscreenBtn);
+      await tester.pumpAndSettle();
+      expect(find.text(expectedTitle), findsOneWidget);
+    }
+
+    // Equivalent Photo and Video items carrying identical persisted
+    // capture-time metadata, differing only in media type / URI.
+    MediaItem parityItem(MediaItemType type) {
+      final isVideo = type == MediaItemType.video;
+      return MediaItem(
+        id: isVideo ? 'parity-video' : 'parity-photo',
+        siteId: 'site-alpha',
+        type: type,
+        uri: isVideo ? 'media/orig_parity.mp4' : 'media/evid_parity.jpg',
+        originalUri:
+            isVideo ? 'media/orig_parity.mp4' : 'media/orig_parity.jpg',
+        capturedAt: DateTime.utc(2026, 8, 15, 12, 0, 0),
+        lat: 22.56298,
+        lon: 88.30085,
+        accuracyM: 4.0,
+        lowAccuracy: false,
+        altitude: 18.2,
+        isAltitudeMsl: true,
+        verificationStatus: HudStatus.verified,
+        gnssSatelliteCount: 15,
+        gnssSatellitesUsedInFix: 10,
+        sha256Hash:
+            'c3d4e5f678901234567890abcdef1234567890abcdef1234567890abcdefa1b2',
+        syncStatus: SyncStatusType.pending,
+        isDeleted: false,
+      );
+    }
+
+    testWidgets(
+        'Photo and Video fullscreen render the exact same canonical metadata card component',
+        (tester) async {
+      Future<void> assertFullscreenCard(String title, MediaItemType type) async {
+        await tester.pumpWidget(
+          buildDetail(
+            siteRepository: MockSiteRepository(testSite),
+            item: parityItem(type),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // The runtime card must NOT be mounted in the normal Detail body.
+        expect(find.byType(StandaloneMetadataWidget), findsNothing);
+
+        await openFullscreen(tester, title);
+        expect(find.byType(StandaloneMetadataWidget), findsOneWidget);
+
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpAndSettle();
+      }
+
+      await assertFullscreenCard(
+          'FULLSCREEN VIDEO EVIDENCE', MediaItemType.video);
+      await assertFullscreenCard(
+          'IMMERSIVE EVIDENCE VIEWER', MediaItemType.photo);
+    });
+
+    testWidgets(
+        'Photo and Video fullscreen render identical common metadata fields',
+        (tester) async {
+      Future<void> assertCardFields(
+          String title, MediaItemType type) async {
+        await tester.pumpWidget(
+          buildDetail(
+            siteRepository: MockSiteRepository(testSite),
+            item: parityItem(type),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await openFullscreen(tester, title);
+
+        // Canonical siteCode (never the internal site document id).
+        expect(find.textContaining('SITE: SL-001', findRichText: true),
+            findsOneWidget);
+        expect(find.textContaining('site-alpha', findRichText: true),
+            findsNothing);
+        // UTC + local capture timestamps
+        expect(
+          find.textContaining('UTC: 2026-08-15 12:00:00 UTC • Local:',
+              findRichText: true),
+          findsOneWidget,
+        );
+        // Coordinates + altitude with datum
+        expect(find.textContaining('Lat 22.562980° N', findRichText: true),
+            findsOneWidget);
+        expect(find.textContaining('Long 88.300850° E', findRichText: true),
+            findsOneWidget);
+        expect(find.textContaining('Alt: +18.2m', findRichText: true),
+            findsWidgets);
+        // Verification status badge
+        expect(find.text('VERIFIED'), findsOneWidget);
+        // Accuracy + satellite count preserved
+        expect(find.textContaining('±4.0m • SATS: 10/15', findRichText: true),
+            findsOneWidget);
+        // Persisted forensic hash
+        expect(find.textContaining('SHA: c3d4e5f6', findRichText: true),
+            findsOneWidget);
+
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpAndSettle();
+      }
+
+      await assertCardFields(
+          'FULLSCREEN VIDEO EVIDENCE', MediaItemType.video);
+      await assertCardFields('IMMERSIVE EVIDENCE VIEWER', MediaItemType.photo);
+    });
+
+    testWidgets(
+        'Photo and Video fall back truthfully when siteCode is unavailable (never to siteId)',
+        (tester) async {
+      Future<void> assertFallback(
+        SiteModel site,
+        String title,
+        MediaItemType type,
+      ) async {
+        await tester.pumpWidget(
+          buildDetail(
+            siteRepository: MockSiteRepository(site),
+            item: parityItem(type),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await openFullscreen(tester, title);
+
+        expect(find.textContaining('SITE: SITE', findRichText: true),
+            findsOneWidget);
+        expect(find.textContaining('SL-001', findRichText: true), findsNothing);
+        expect(find.textContaining('site-alpha', findRichText: true),
+            findsNothing);
+        expect(find.textContaining('UNASSIGNED', findRichText: true),
+            findsNothing);
+
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpAndSettle();
+      }
+
+      // 1. Site record missing entirely (photo).
+      await assertFallback(
+        const SiteModel(
+          id: 'unrelated-site',
+          siteCode: 'ZZ-999',
+          name: 'Unrelated',
+          address: 'Elsewhere',
+        ),
+        'IMMERSIVE EVIDENCE VIEWER',
+        MediaItemType.photo,
+      );
+      // 2. Site record present but its code is blank (video).
+      await assertFallback(
+        const SiteModel(
+          id: 'site-alpha',
+          siteCode: '',
+          name: 'Sector Alpha',
+          address: '100 Construction Way',
+        ),
+        'FULLSCREEN VIDEO EVIDENCE',
+        MediaItemType.video,
+      );
+      // 3. The canonical "UNASSIGNED" sentinel counts as unavailable (video).
+      await assertFallback(
+        const SiteModel(
+          id: 'site-alpha',
+          siteCode: 'UNASSIGNED',
+          name: 'Sector Alpha',
+          address: '100 Construction Way',
+        ),
+        'FULLSCREEN VIDEO EVIDENCE',
+        MediaItemType.video,
+      );
+    });
+
+    testWidgets(
+        'runtime card uses persisted capture-time metadata and never rewrites the MP4',
+        (tester) async {
+      final tempDir = Directory.systemTemp.createTempSync('sitelens_card_');
+      final videoFile = File('${tempDir.path}/orig_parity.mp4')
+        ..writeAsBytesSync(const [7, 14, 21, 28, 35, 42]);
+      final before = videoFile.readAsBytesSync();
+      final storage = FakeEvidenceStorageServiceMap({
+        'media/orig_parity.mp4': videoFile.path,
+      });
+
+      await tester.pumpWidget(
+        buildDetail(
+          siteRepository: MockSiteRepository(testSite),
+          storage: storage,
+          item: parityItem(MediaItemType.video),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await openFullscreen(tester, 'FULLSCREEN VIDEO EVIDENCE');
+
+      // Persisted capture-time timestamp is shown (not a runtime "now" value).
+      expect(
+        find.textContaining('UTC: 2026-08-15 12:00:00 UTC', findRichText: true),
+        findsOneWidget,
+      );
+      // MP4 bytes are never rewritten by the runtime metadata card.
+      expect(videoFile.readAsBytesSync(), equals(before));
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+      tempDir.deleteSync(recursive: true);
+    });
   });
 }
 
@@ -662,7 +1316,10 @@ class MockSiteRepository implements SiteRepository {
   Future<void> saveSite(SiteModel site) async {}
 
   @override
-  Future<void> deleteSite(String id) async {}
+  Future<void> deleteSite(String id, {String? creatorId}) async {}
+
+  @override
+  Future<bool> hasMediaForSite(String siteId) async => false;
 
   @override
   Future<void> seedDefaultSitesIfEmpty() async {}
@@ -703,6 +1360,9 @@ class MockAuthService implements AuthService {
 
   @override
   Future<void> sendPasswordResetEmail(String email) async {}
+
+  @override
+  Future<SessionVerificationResult> verifySession() async => const SessionVerificationResult.valid();
 
   @override
   Future<void> signOut() async {}

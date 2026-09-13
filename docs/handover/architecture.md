@@ -285,13 +285,43 @@ SiteLens uses **Option B: Canonical HUD Data + Canonical HUD Layout Specificatio
 2. **Boundary Crossing (`Isolate.run`)**:
    - Only `originalBytes`, `hudPngBytes`, and optional `targetAspectRatio` cross into the background isolate via `_IsolateInput`.
 3. **Background Worker Isolate (CPU-Heavy Processing)**:
-   - Pure-Dart `package:image` decodes `originalBytes`, bakes EXIF orientation, applies aspect-ratio center crop if requested, alpha-composites `hudPngBytes`, encodes Evidence JPEG at quality 95, computes Evidence SHA-256, and generates 200px thumbnail.
+   - Pure-Dart `package:image` decodes `originalBytes`, bakes EXIF orientation into the pixels, applies aspect-ratio center crop if requested, strips all EXIF metadata from the derived artifacts, alpha-composites `hudPngBytes`, encodes Evidence JPEG at quality 95, computes Evidence SHA-256, and generates 200px thumbnail.
 4. **UI Isolate (Persistence Stage)**:
    - `_IsolateOutput` returned to UI isolate; `EvidenceStorageService` saves `orig_<id>.jpg`, `evid_<id>.jpg`, and `thumb_<id>.jpg` atomically.
 
+### EXIF / Derived-Artifact Metadata Policy
+
+- The immutable original (`orig_<id>`) is preserved exactly as captured,
+  including whatever EXIF metadata the camera produced.
+- Derived artifacts (`evid_<id>`, `thumb_<id>`) must not silently inherit
+  camera EXIF: orientation is baked into the pixels first, then all EXIF
+  metadata is stripped before encoding, so derived evidence cannot carry
+  unverified device claims (device GPS, timestamps, make/model) that
+  contradict the canonical capture-time metadata.
+- Canonical evidence metadata lives in the capture-time snapshot, the
+  local ledger, and the burned-in HUD — never in reconstructed EXIF.
+
+### Capture-Time Metadata Authority
+
+- A synchronous metadata snapshot taken at the shutter instant is the
+  authoritative record for evidence: coordinates, accuracy, altitude and
+  its datum (MSL/WGS84/unknown), verification status, GNSS satellite
+  telemetry, GNSS fix timestamp, capture timestamp, resolved address, and
+  the original/evidence SHA-256 hashes.
+- Values that were not established at capture time remain unknown
+  (persisted as null) and are never replaced with synthetic or default
+  values. GPS positions are never fabricated: unavailable or stale
+  location data keeps the corresponding fields unknown rather than
+  producing a valid-looking position.
+- Video recordings snapshot the GPS authority at recording start and
+  resolve the capture-time state at stop from the same capture-window
+  authority; a normal stop is never reclassified as an interruption.
+- The burned-in HUD and all display surfaces are renderings of this
+  snapshot, not independent metadata sources.
+
 ## 11. Local Persistence
 
-Use SQLite through Drift.
+Use SQLite through Drift. The verified schema version is v8.
 
 ### Sites
 
@@ -300,7 +330,8 @@ sites (
   id TEXT PRIMARY KEY,
   site_code TEXT,
   name TEXT,
-  address TEXT
+  address TEXT,
+  creator_id TEXT
 )
 ```
 
@@ -309,23 +340,38 @@ sites (
 ``` sql
 media (
   id TEXT PRIMARY KEY,
-  site_id TEXT,
-  uri TEXT NOT NULL,
-  thumb_uri TEXT,
-  type TEXT,
+  site_id TEXT REFERENCES sites(id),
+  original_uri TEXT DEFAULT '',          -- relative path of the immutable original
+  uri TEXT NOT NULL,                     -- derived evidence artifact
+  thumb_uri TEXT,                        -- derived thumbnail
+  type TEXT,                             -- 'photo' | 'video'
   lat REAL NOT NULL,
   lon REAL NOT NULL,
-  accuracy_m REAL,
+  accuracy_m REAL,                       -- null = unknown
   low_accuracy INTEGER DEFAULT 0,
+  altitude_m REAL,                       -- null = unknown
   activity_tag TEXT,
-  observation_type TEXT,
-  linked_media_id TEXT,
+  observation_type TEXT,                 -- 'progress'|'nonConformity'|'closed'|'material'|'general'
+  linked_media_id TEXT REFERENCES media(id),
   note TEXT,
   captured_at TEXT NOT NULL,
-  sha256_hash TEXT,
-  synced INTEGER DEFAULT 0
+  sha256_hash TEXT,                      -- SHA-256 of the original artifact
+  evidence_sha256_hash TEXT,             -- SHA-256 of the derived evidence artifact
+  captured_address TEXT,                 -- reverse-geocoded address at capture time
+  creator_id TEXT,                       -- creator user UID (sync authorization + isolation)
+  verification_status TEXT,              -- 'verified'|'degraded'|'pending'; null = unknown
+  is_altitude_msl INTEGER,               -- 1 = MSL, 0 = WGS84, null = unknown datum
+  gnss_satellite_count INTEGER,
+  gnss_satellites_used_in_fix INTEGER,
+  gnss_fix_timestamp TEXT,
+  synced INTEGER DEFAULT 0,              -- 0 pending, 2 syncing, 1 synced, 3 failed
+  is_deleted INTEGER DEFAULT 0           -- hidden tombstone state
 )
 ```
+
+Nullable metadata columns mean "not established at capture time" and are
+never back-filled with synthetic values. Capture is gated on a first valid
+GPS fix, so coordinates are always real observed values.
 
 ## 12. Canonical Three-Tier Evidence File Model & Downstream Pipeline
 
@@ -421,6 +467,20 @@ Create media link
 
 The system must never create the link without user confirmation.
 
+Link semantics and integrity rules:
+
+- `linked_media_id` is a same-site, same-creator relationship: link
+  candidates and enforced links are restricted to records from the same
+  site and the same creator (creator/site isolation is enforced on every
+  persistence and update path).
+- A `Closed` observation must be linked to an eligible open
+  `Non-Conformity` on the same site before it can be saved; the link and
+  the `Evid_ID` note line are sanitized/normalized on every write path so
+  the persisted relationship and the human-readable note cannot diverge.
+- Linking requires explicit user confirmation; suggestions are advisory
+  only and dismissing a suggestion never alters an explicitly confirmed
+  link.
+
 ## 15. Gallery
 
 The Gallery operates against the local database and must support:
@@ -459,6 +519,16 @@ sites/{siteId}/media/{mediaId}
 Firestore stores cloud metadata and synchronization state; it does not
 replace the local operational database.
 
+An evidence ledger document carries the cloud representation of the
+capture-time metadata (identity, storage paths, coordinates, accuracy,
+altitude and datum, verification status, GNSS telemetry, activity,
+observation type, linked media, note, capture timestamp, original and
+evidence SHA-256 hashes, captured address, creator, deletion flag).
+Ledger documents are created before artifact upload (binding Storage
+artifacts to the document creator via Security Rules) and are reconciled
+against the local authoritative values on every synchronization attempt;
+immutable forensic fields conflict rather than overwrite.
+
 ### Cloud Storage
 
 Recommended conceptual paths:
@@ -468,41 +538,80 @@ sites/{siteId}/media/{mediaId}/original
 sites/{siteId}/media/{mediaId}/thumbnail
 ```
 
-Exact conventions can be refined during implementation.
+Storage objects are write-once: uploads are idempotent (verified against
+the recorded artifact hashes before any upload) and existing objects are
+never overwritten or deleted by the client.
+
+### Atomicity & Failure Consistency
+
+- Local artifact writes are atomic (temporary file + flush + rename), and
+  persistence verifies that required artifacts physically exist before a
+  database record is committed.
+- If the processing or persistence pipeline fails, no misleading evidence
+  record is committed: derived artifacts are cleaned up while the
+  immutable original is preserved for photos; failed video persistence
+  cleans up its unpersisted artifacts.
+- Partial cloud publication (a ledger document without its Storage
+  artifacts) is a recoverable transient state: uploads are retried
+  idempotently and recovery downloads fail safely when an artifact is
+  absent.
 
 ## 17. Synchronization
 
-Synchronization is asynchronous.
+Synchronization is asynchronous and session-gated: the coordinator exists
+only for an authenticated application session, and unauthenticated startup
+never initializes it.
 
 ``` text
-Local Media
+Capture
     ↓
-Sync Queue
+Local file + local DB (pending)
     ↓
-Connectivity?
- ┌──┴──┐
- No    Yes
- ↓      ↓
-Queue  Upload original
-        ↓
-     Upload thumbnail
-        ↓
-     Firestore metadata
-        ↓
-     Confirm success
-        ↓
-     Mark local record synced
+Sync coordination (authenticated session + connectivity)
+    ↓
+Site provisioned in Firestore (if created offline)
+    ↓
+Firestore evidence ledger document published (before artifact upload,
+so Storage rules can bind artifacts to the document creator)
+    ↓
+Upload original (idempotent; verified against recorded SHA-256 metadata)
+    ↓
+Upload thumbnail (idempotent; verified against recorded hash)
+    ↓
+Mark local record synced
 ```
 
-Support:
+Lifecycle states on the local record: `pending → syncing → synced |
+failed`. `syncing` is transient; records stuck in it after a crash are
+reset to `pending` at the next authenticated startup or sign-in.
 
--   pending
--   uploading
--   synced
--   failed
--   retrying
+Failure handling:
 
-A failed upload must never delete or invalidate the local original.
+- **Retryable failures** (network, transient Firebase errors) use
+  exponential backoff with jitter, up to a bounded attempt count.
+- **Permanent failures** (integrity conflicts, quota, exhausted retries,
+  unclassified errors) mark the record `failed` and suppress it from
+  automatic cycles; an explicit manual retry re-evaluates it.
+- Permission-denied/unauthenticated errors are resolved through session
+  verification: a confirmed-invalid session terminates the session;
+  a valid session means a resource-level (site membership) denial.
+- A failed upload must never delete or invalidate the local original.
+
+Triggers for a sync cycle: new unsynced local records, connectivity
+restoration, app foreground resume, sign-in, and manual retry. Foreground
+resume and sign-in also re-run crash recovery. Session generation is
+tracked so an authentication change mid-cycle aborts processing of
+further items.
+
+Deleted records participate in the same lifecycle through tombstone
+propagation (see the storage lifecycle section): a locally deleted record
+that was previously published has its cloud ledger document reconciled to
+`is_deleted = true` with the same retry/backoff/session protection; a
+record that was never published requires no cloud write (no cloud
+deletion claim may exist for evidence that was never published).
+Gallery/history visibility is independent of synchronization: local
+records are synchronized according to the queue lifecycle regardless of
+their presentation state.
 
 ## 18. Data Authority
 
@@ -629,16 +738,40 @@ Settings include:
 -   cloud media recovery & SHA-256 verification pipeline
 -   sync queue
 
-### Storage Lifecycle & Deletion Architecture (M7-02-II-B)
+### Storage Lifecycle & Deletion Architecture
 
 1. **Local Media Artifacts**:
    - Photo: Raw original (`orig_{id}.jpg`), derived evidence with stamp (`evid_{id}.jpg`), and gallery thumbnail (`thumb_{id}.jpg`).
    - Video: Video file (`orig_{id}.mp4`) and first-frame thumbnail (`thumb_{id}.jpg`).
-2. **Delete from Device**: Physically removes all local media files (`orig_*`, `evid_*`, `thumb_*` for photos; `orig_*`, `thumb_*` for videos) belonging to the item from device storage to fully reclaim storage space. The SQLite database record is preserved (`is_deleted = 0`) to maintain cloud identity and enable subsequent on-demand recovery, while the immutable cloud backup remains intact.
-3. **Remove from Gallery / Archive**: Physically removes all local media files belonging to the item and marks the SQLite record as soft-deleted (`is_deleted = 1`) to remove/hide the item from the local Gallery/Archive presentation, while preserving the immutable cloud copy.
-4. **Cloud Permanence Invariant**: Neither local deletion operation deletes the cloud copy. Local deletion NEVER invokes Firebase Storage deletion (`storage.rules` enforces `allow delete: if false;`) or Firestore document deletion. Cloud copies remain write-once immutable.
-5. **Destructive Warning**: Unsynced media deletion strictly requires an explicit destructive warning dialog before local files are unlinked.
+2. **User-facing deletion operations**:
+   - **Synced media** ("Remove from Gallery"): physically removes all local media files belonging to the item and marks the record as deleted (`is_deleted = 1`), hiding it from the Gallery, while the immutable cloud copy remains intact.
+   - **Unsynced media**: requires an explicit destructive warning dialog before local files are unlinked, because the media has no cloud backup. After confirmation the local files are removed and the record is marked deleted (`is_deleted = 1`).
+3. **Tombstone propagation**: a deleted record is retained locally as a hidden tombstone until its cloud ledger state is reconciled — a previously published Firestore evidence document is updated to `is_deleted = true` through the synchronization lifecycle (retry/backoff/session-safe, idempotent), and a record that was never published produces no cloud write. A cloud tombstone is a ledger state only: it never deletes or replaces Storage artifacts, and Firestore evidence documents themselves are never physically deleted by the client. Physical row removal is an account-deletion concern only.
+4. **Cloud Permanence Invariant**: local deletion never deletes or modifies Firebase Storage objects (`storage.rules` enforces `allow delete: if false;`) or Firestore documents. Cloud copies remain write-once immutable.
+5. **Storage cleanup (space reclamation)**: local raw originals of already-synchronized photos can be cleared on demand (`StorageCleanupService`), preserving the derived evidence/thumbnail artifacts and all metadata; cleared originals remain recoverable from the write-once cloud original.
 6. **Cloud Recovery**: `CloudMediaRecoveryService` provides atomic download from Firebase Cloud Storage, SHA-256 validation against `MediaItem.sha256Hash`, and atomic promotion to local storage for both photos and videos.
+
+### Account Deletion
+
+Account deletion is a coordinated lifecycle, not merely an authentication
+deletion. A single server-authoritative callable (`deleteUserAccount`,
+App-Check protected, identity derived exclusively from the caller's
+authenticated session) classifies every site associated with the caller:
+
+- **Sole-member sites** (no other active members) are permanently
+  destroyed: the site's entire Cloud Storage prefix, its Firestore media
+  documents, its membership roster, and the site document are purged.
+- **Shared sites** retain the contributed evidence for audit integrity;
+  the deleting user's membership is removed. If the caller is the sole
+  active administrator of a shared site, deletion fails safely until an
+  active member is designated as successor admin; a valid successor is
+  promoted as part of the deletion.
+
+After server-side success the deletion flow completes Firebase
+Authentication deletion, purges the local SQLite database, local media
+files, and active-site preferences, signs out, and navigates the user to
+the unauthenticated start state. Support enquiries are anonymized rather
+than deleted.
 
 Device/application settings are local unless future requirements justify
 cloud preferences.

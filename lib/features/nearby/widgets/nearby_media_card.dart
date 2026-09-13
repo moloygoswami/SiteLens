@@ -11,11 +11,17 @@ import '../../gallery/media_detail_screen.dart';
 class NearbyMediaCard extends ConsumerStatefulWidget {
   final NearbyMediaResult result;
   final VoidCallback? onTap;
+  final bool isPicker;
+  final bool isEligible;
+  final VoidCallback? onSelect;
 
   const NearbyMediaCard({
     super.key,
     required this.result,
     this.onTap,
+    this.isPicker = false,
+    this.isEligible = false,
+    this.onSelect,
   });
 
   @override
@@ -50,16 +56,35 @@ class _NearbyMediaCardState extends ConsumerState<NearbyMediaCard> {
   }
 
   void _navigateToDetail() {
-    if (widget.onTap != null) {
-      widget.onTap!();
-      return;
-    }
-
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => MediaDetailScreen(mediaItem: widget.result.item),
       ),
     );
+  }
+
+  void _handleCardTap() {
+    if (widget.isPicker) {
+      if (widget.isEligible) {
+        if (widget.onSelect != null) {
+          widget.onSelect!();
+        } else if (widget.onTap != null) {
+          widget.onTap!();
+        }
+      } else {
+        if (widget.onTap != null) {
+          widget.onTap!();
+        }
+      }
+      return;
+    }
+
+    if (widget.onTap != null) {
+      widget.onTap!();
+      return;
+    }
+
+    _navigateToDetail();
   }
 
   @override
@@ -72,22 +97,29 @@ class _NearbyMediaCardState extends ConsumerState<NearbyMediaCard> {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: _navigateToDetail,
+        onTap: _handleCardTap,
         borderRadius: BorderRadius.circular(12),
         child: Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
             color: AppColors.surfaceContainer,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.border, width: 1.0),
+            border: Border.all(
+              color: widget.isPicker && widget.isEligible
+                  ? AppColors.primary.withAlpha(120)
+                  : AppColors.border,
+              width: 1.0,
+            ),
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // 1. Thumbnail Box
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Container(
+              // 1. Thumbnail Box (tapping opens detail inspection)
+              GestureDetector(
+                onTap: _navigateToDetail,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
                   width: 72,
                   height: 72,
                   color: Colors.black,
@@ -124,6 +156,7 @@ class _NearbyMediaCardState extends ConsumerState<NearbyMediaCard> {
                   ),
                 ),
               ),
+            ),
 
               const SizedBox(width: 12),
 
@@ -232,15 +265,60 @@ class _NearbyMediaCardState extends ConsumerState<NearbyMediaCard> {
                 ),
               ),
 
-              // 3. Arrow Indicator
-              const Padding(
-                padding: EdgeInsets.only(top: 24, left: 4),
-                child: Icon(
-                  Icons.chevron_right_rounded,
-                  size: 20,
-                  color: AppColors.textMuted,
+              // 3. Arrow Indicator or Picker Selection Action
+              if (widget.isPicker)
+                Padding(
+                  padding: const EdgeInsets.only(top: 18, left: 6),
+                  child: widget.isEligible
+                      ? ElevatedButton.icon(
+                          onPressed: () {
+                            if (widget.onSelect != null) {
+                              widget.onSelect!();
+                            } else if (widget.onTap != null) {
+                              widget.onTap!();
+                            }
+                          },
+                          icon: const Icon(Icons.check_circle_rounded, size: 14),
+                          label: const Text(
+                            'Select',
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        )
+                      : Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: AppColors.surfaceContainerHigh,
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: AppColors.border),
+                          ),
+                          child: Text(
+                            item.observationType == ObservationType.nonConformity
+                                ? 'RESOLVED'
+                                : 'INELIGIBLE',
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textMuted,
+                            ),
+                          ),
+                        ),
+                )
+              else
+                const Padding(
+                  padding: EdgeInsets.only(top: 24, left: 4),
+                  child: Icon(
+                    Icons.chevron_right_rounded,
+                    size: 20,
+                    color: AppColors.textMuted,
+                  ),
                 ),
-              ),
             ],
           ),
         ),

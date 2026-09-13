@@ -855,5 +855,62 @@ void main() {
       expect(userAController.state.results.any((r) => r.item.id == 'item-A-owned'), isTrue);
       expect(userAController.state.results.any((r) => r.item.id == 'item-B-owned'), isFalse);
     });
+
+    test('19. LAT-001: legacy NULL-creator co-located row is visible to an authenticated nearby search', () async {
+      // Pre-attribution legacy row: NULL creator_id, same site, same location.
+      await mediaRepo.insertMedia(MediaItem(
+        id: 'item-legacy-null-creator',
+        siteId: testSiteA,
+        originalUri: 'media/orig_legacy.jpg',
+        uri: 'media/evid_legacy.jpg',
+        thumbUri: 'media/thumb_legacy.jpg',
+        type: MediaItemType.photo,
+        lat: centerLat + (2.0 / 111320.0),
+        lon: centerLon,
+        accuracyM: 1.0,
+        lowAccuracy: false,
+        activityTag: 'Excavation',
+        observationType: ObservationType.progress,
+        capturedAt: DateTime.utc(2026, 8, 15, 11, 0, 0),
+        creatorId: null,
+        syncStatus: SyncStatusType.pending,
+        isDeleted: false,
+      ));
+
+      await mediaRepo.insertMedia(MediaItem(
+        id: 'item-B-intruder',
+        siteId: testSiteA,
+        originalUri: 'media/orig_B2.jpg',
+        uri: 'media/evid_B2.jpg',
+        thumbUri: 'media/thumb_B2.jpg',
+        type: MediaItemType.photo,
+        lat: centerLat + (3.0 / 111320.0),
+        lon: centerLon,
+        accuracyM: 1.0,
+        lowAccuracy: false,
+        activityTag: 'Excavation',
+        observationType: ObservationType.progress,
+        capturedAt: DateTime.utc(2026, 8, 15, 12, 0, 0),
+        creatorId: 'user-B',
+        syncStatus: SyncStatusType.pending,
+        isDeleted: false,
+      ));
+
+      final results = await mediaRepo.findNearbyMedia(
+        centerLat: centerLat,
+        centerLon: centerLon,
+        radiusMeters: 50.0,
+        excludeMediaId: sourceItem.id,
+        creatorId: 'user-A',
+      );
+
+      final ids = results.map((r) => r.item.id).toSet();
+      // NULL-creator legacy row stays visible (ownership parity with sync queries).
+      expect(ids.contains('item-legacy-null-creator'), isTrue);
+      // Cross-creator isolation is unchanged.
+      expect(ids.contains('item-B-intruder'), isFalse);
+      // The source photo itself is still excluded.
+      expect(ids.contains(sourceItem.id), isFalse);
+    });
   });
 }

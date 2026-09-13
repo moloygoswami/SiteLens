@@ -40,6 +40,15 @@ class GpsStatusExplainerSheet extends StatelessWidget {
         accent = AppColors.statusRed;
         showRecovery = true;
         break;
+      case GpsBlockReason.permissionUnknown:
+        title = 'Location permission unknown';
+        body = 'SiteLens could not determine whether location access is granted. '
+            'Check your device settings and grant location access to capture '
+            'evidence. This is not a confirmed denial.';
+        icon = Icons.help_outline_rounded;
+        accent = AppColors.statusAmber;
+        showRecovery = true;
+        break;
       case GpsBlockReason.serviceDisabled:
         title = 'Location service is off';
         body = 'Turn on your device\'s location service to capture evidence. '
@@ -48,6 +57,15 @@ class GpsStatusExplainerSheet extends StatelessWidget {
         icon = Icons.location_disabled_rounded;
         accent = AppColors.statusRed;
         showRecovery = true;
+        break;
+      case GpsBlockReason.lastKnownOnly:
+        title = 'Last known location only';
+        body = 'SiteLens has a cached last-known location, but evidence capture '
+            'requires a live GPS fix. Move to an open area with a clear view of '
+            'the sky and wait for a live fix.';
+        icon = Icons.location_history_rounded;
+        accent = AppColors.statusAmber;
+        showRecovery = false;
         break;
       case GpsBlockReason.searching:
       case null:
@@ -61,14 +79,6 @@ class GpsStatusExplainerSheet extends StatelessWidget {
         icon = Icons.location_searching_rounded;
         accent = gps.isDegraded ? AppColors.statusAmber : AppColors.statusAmber;
         showRecovery = false;
-        break;
-      case GpsBlockReason.cameraUnavailable:
-        title = 'Camera unavailable';
-        body = 'No camera hardware is available, so no valid evidence can be captured. '
-            'Check camera permissions and try again.';
-        icon = Icons.no_photography_rounded;
-        accent = AppColors.statusRed;
-        showRecovery = true;
         break;
     }
 

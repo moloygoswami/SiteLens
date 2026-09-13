@@ -59,6 +59,11 @@ class FakeAuthService implements AuthService {
   @override
   Future<void> sendPasswordResetEmail(String email) async {}
 
+  SessionVerificationResult verificationResult = const SessionVerificationResult.valid();
+
+  @override
+  Future<SessionVerificationResult> verifySession() async => verificationResult;
+
   @override
   Future<void> signOut() async {
     setUser(null);

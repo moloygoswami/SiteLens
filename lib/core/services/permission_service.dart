@@ -23,6 +23,11 @@ class SiteLensPermissionStatus {
   bool get isPermanentlyDenied =>
       camera.isPermanentlyDenied || location.isPermanentlyDenied;
 
+  bool get isCameraGranted => camera.isGranted || camera.isLimited;
+  bool get isCameraDenied => camera.isDenied;
+  bool get isCameraPermanentlyDenied => camera.isPermanentlyDenied;
+  bool get isCameraRestricted => camera.isRestricted;
+
   SiteLensPermissionStatus copyWith({
     PermissionStatus? camera,
     PermissionStatus? location,
@@ -43,6 +48,17 @@ class SiteLensPermissionStatus {
 class PermissionService extends StateNotifier<SiteLensPermissionStatus> {
   PermissionService() : super(const SiteLensPermissionStatus()) {
     checkAllPermissions();
+  }
+
+  Future<PermissionStatus> checkCameraPermission() async {
+    try {
+      final status = await Permission.camera.status;
+      state = state.copyWith(camera: status);
+      return status;
+    } catch (e) {
+      debugPrint('Error checking camera permission: $e');
+      return state.camera;
+    }
   }
 
   Future<SiteLensPermissionStatus> checkAllPermissions() async {
@@ -86,7 +102,7 @@ class PermissionService extends StateNotifier<SiteLensPermissionStatus> {
 
   Future<PermissionStatus> requestCameraPermission() async {
     final res = await Permission.camera.request();
-    await checkAllPermissions();
+    await checkCameraPermission();
     return res;
   }
 

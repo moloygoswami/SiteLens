@@ -10,6 +10,8 @@ import 'models/review_tag_state.dart';
 import 'widgets/observation_selector.dart';
 import 'widgets/review_media_preview.dart';
 import 'widgets/smart_link_card.dart';
+import '../../domain/models/media_item.dart';
+import '../nearby/nearby_search_screen.dart';
 
 class ReviewTagScreen extends ConsumerStatefulWidget {
   final PendingCapturePayload payload;
@@ -29,12 +31,15 @@ class _ReviewTagScreenState extends ConsumerState<ReviewTagScreen> {
   late PendingCapturePayload _currentPayload;
   String? _resolvedEvidencePath;
   String? _processingError;
+  bool _isPopping = false;
 
   @override
   void initState() {
     super.initState();
     _activityController = TextEditingController();
-    _noteController = TextEditingController();
+    _noteController = TextEditingController(
+      text: ref.read(reviewTagControllerProvider).note,
+    );
     _currentPayload = widget.payload;
 
     _listenToProcessingFuture();
@@ -167,8 +172,29 @@ class _ReviewTagScreenState extends ConsumerState<ReviewTagScreen> {
           .read(reviewTagControllerProvider.notifier)
           .retake(_currentPayload);
       if (mounted) {
-        Navigator.of(context).pop(false);
+        setState(() => _isPopping = true);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            Navigator.of(context).pop(false);
+          }
+        });
       }
+    }
+  }
+
+  Future<void> _openNearbyPicker() async {
+    final selected = await Navigator.of(context).push<MediaItem>(
+      MaterialPageRoute(
+        builder: (_) => NearbySearchScreen(
+          initialLat: _currentPayload.metadataSnapshot.latitude,
+          initialLon: _currentPayload.metadataSnapshot.longitude,
+          initialSiteId: _currentPayload.metadataSnapshot.siteId,
+          isPicker: true,
+        ),
+      ),
+    );
+    if (selected != null && mounted) {
+      ref.read(reviewTagControllerProvider.notifier).linkBeforeItem(selected);
     }
   }
 
@@ -211,15 +237,35 @@ class _ReviewTagScreenState extends ConsumerState<ReviewTagScreen> {
           backgroundColor: AppColors.textPrimary,
         ),
       );
-      Navigator.of(context).pop(true);
+      setState(() => _isPopping = true);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          Navigator.of(context).pop(true);
+        }
+      });
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<ReviewTagState>(reviewTagControllerProvider, (previous, next) {
+      if (_noteController.text != next.note) {
+        _noteController.text = next.note;
+        _noteController.selection = TextSelection.collapsed(
+          offset: next.note.length,
+        );
+      }
+    });
+
     final reviewState = ref.watch(reviewTagControllerProvider);
 
-    return Scaffold(
+    return PopScope(
+      canPop: _isPopping,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+        await _handleRetake();
+      },
+      child: Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: AppColors.surface,
@@ -345,8 +391,10 @@ class _ReviewTagScreenState extends ConsumerState<ReviewTagScreen> {
           },
         ),
       ),
-    );
-  }
+    ),
+  );
+}
+
 
   Widget _buildFormFields(ReviewTagState reviewState) {
     return Column(
@@ -411,96 +459,193 @@ class _ReviewTagScreenState extends ConsumerState<ReviewTagScreen> {
           },
         ),
         if (reviewState.observationType == ObservationType.closed) ...[
-          if (reviewState.isSearchingSmartLink)
-            Container(
-              margin: const EdgeInsets.symmetric(vertical: 8),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: AppColors.surfaceContainerHigh,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: AppColors.border),
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 8),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceContainer,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: reviewState.isLinked
+                    ? AppColors.primary.withAlpha(80)
+                    : AppColors.border,
               ),
-              child: const Row(
-                children: [
-                  SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                  SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'Scanning for eligible open Non-Conformity captures within 10m...',
-                      style: TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 11,
-                        color: AppColors.textSecondary,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.travel_explore_rounded,
+                              size: 16, color: AppColors.primaryLight),
+                          SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'BEFORE REFERENCE REQUIRED',
+                              style: TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.primaryLight,
+                                letterSpacing: 0.5,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
                       ),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      onPressed: _openNearbyPicker,
+                      icon: const Icon(Icons.travel_explore_rounded, size: 14),
+                      label: const Text(
+                        'Find Nearby Evidence',
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.primaryLight,
+                        side: const BorderSide(color: AppColors.primaryLight, width: 1.2),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                // Existing linked BEFORE evidence remains authoritative; a Smart-Link
+                // suggestion is presented separately and never displaces the link.
+                if (reviewState.isLinked) ...[
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppColors.statusGreen.withAlpha(20),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: AppColors.statusGreen.withAlpha(80)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.check_circle_rounded,
+                            color: AppColors.statusGreenLight, size: 16),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'SELECTED BEFORE EVIDENCE',
+                                style: TextStyle(
+                                  fontFamily: 'monospace',
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppColors.statusGreenLight,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                reviewState.linkedCandidate?.activityTag != null
+                                    ? 'Non-Conformity • ${reviewState.linkedCandidate!.activityTag}'
+                                    : 'Non-Conformity Reference',
+                                style: const TextStyle(
+                                  fontFamily: 'monospace',
+                                  fontSize: 11,
+                                  color: AppColors.textPrimary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () {
+                            final notifier = ref
+                                .read(reviewTagControllerProvider.notifier);
+                            // Discard the pending closure selection, then
+                            // immediately re-surface eligible BEFORE
+                            // candidates so the correct one can be selected
+                            // without losing the Smart-Link flow.
+                            notifier.unlinkBeforeItem();
+                            notifier.searchSmartLink(_currentPayload);
+                          },
+                          style: TextButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            padding: const EdgeInsets.symmetric(horizontal: 6),
+                          ),
+                          child: const Text(
+                            'Unlink',
+                            style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
-              ),
-            )
-          else if (reviewState.suggestedBeforeMatch != null)
-            SmartLinkCard(
-              candidate: reviewState.suggestedBeforeMatch!,
-              distanceMeters: reviewState.suggestedDistanceMeters ?? 0.0,
-              isLinked: reviewState.isLinked,
-              onLink: () {
-                ref
-                    .read(reviewTagControllerProvider.notifier)
-                    .linkSuggestedMatch();
-              },
-              onDismiss: () {
-                ref
-                    .read(reviewTagControllerProvider.notifier)
-                    .unlinkSuggestedMatch();
-              },
-            )
-          else
-            Container(
-              margin: const EdgeInsets.symmetric(vertical: 8),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: AppColors.statusRed.withAlpha(20),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: AppColors.statusRed.withAlpha(80)),
-              ),
-              child: const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+                if (reviewState.isSearchingSmartLink) ...[
+                  const Row(
                     children: [
-                      Icon(Icons.warning_amber_rounded,
-                          size: 16, color: AppColors.statusRed),
-                      SizedBox(width: 6),
-                      Text(
-                        'NO OPEN NON-CONFORMITY WITHIN 10M',
-                        style: TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.statusRed,
-                          letterSpacing: 0.5,
+                      SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Scanning for eligible open Non-Conformity captures within 10m...',
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 11,
+                            color: AppColors.textSecondary,
+                          ),
                         ),
                       ),
                     ],
                   ),
-                  SizedBox(height: 6),
-                  Text(
-                    'No open Non-Conformity found within 10m. Closed observations cannot be saved without an eligible BEFORE photo. Please select another observation type or discard this capture.',
+                ],
+                if (reviewState.suggestedBeforeMatch != null &&
+                    reviewState.suggestedBeforeMatch!.id !=
+                        reviewState.linkedMediaId) ...[
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: SmartLinkCard(
+                      candidate: reviewState.suggestedBeforeMatch!,
+                      distanceMeters: reviewState.suggestedDistanceMeters ?? 0.0,
+                      isLinked: false,
+                      onLink: () {
+                        ref
+                            .read(reviewTagControllerProvider.notifier)
+                            .linkSuggestedMatch();
+                      },
+                      onDismiss: () {
+                        ref
+                            .read(reviewTagControllerProvider.notifier)
+                            .dismissSuggestedMatch();
+                      },
+                    ),
+                  ),
+                ],
+                if (!reviewState.isLinked &&
+                    !reviewState.isSearchingSmartLink &&
+                    reviewState.suggestedBeforeMatch == null) ...[
+                  const Text(
+                    'No 10m auto-match found. Tap "Find Nearby Evidence" to search and select the corresponding open Non-Conformity.',
                     style: TextStyle(
                       fontSize: 12,
-                      color: AppColors.textPrimary,
+                      color: AppColors.textSecondary,
                       height: 1.3,
                     ),
                   ),
                 ],
-              ),
+              ],
             ),
+          ),
         ],
         const SizedBox(height: 18),
         Row(

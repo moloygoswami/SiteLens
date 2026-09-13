@@ -1,69 +1,118 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
-import '../../../app/theme.dart';
 
-class LocalVideoPlayerWidget extends StatefulWidget {
-  final File videoFile;
+import '../../../app/theme.dart';
+import '../controllers/evidence_video_playback.dart';
+
+/// Renders the video surface for a single shared [EvidenceVideoPlayback].
+///
+/// This widget does NOT own the player. It never creates and never disposes a
+/// [VideoPlayerController]; ownership stays with the [EvidenceVideoPlayback]
+/// instance, which is shared by the inline detail surface and the fullscreen
+/// surface so exactly one ExoPlayer exists per video.
+class LocalVideoPlayerWidget extends StatelessWidget {
+  /// The shared playback owner (borrowed for the widget's lifetime).
+  final EvidenceVideoPlayback playback;
+
+  /// When false, the platform video surface is not attached (used while the
+  /// fullscreen route owns the visible surface). The borrowed controller keeps
+  /// its state; only the inline texture is parked.
+  final bool isActive;
 
   const LocalVideoPlayerWidget({
     super.key,
-    required this.videoFile,
+    required this.playback,
+    this.isActive = true,
   });
 
   @override
-  State<LocalVideoPlayerWidget> createState() => _LocalVideoPlayerWidgetState();
-}
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: playback,
+      builder: (context, _) {
+        if (playback.status == EvidenceVideoStatus.failed) {
+          return _buildFallback();
+        }
 
-class _LocalVideoPlayerWidgetState extends State<LocalVideoPlayerWidget> {
-  VideoPlayerController? _controller;
-  bool _isInitialized = false;
-  bool _hasError = false;
+        final VideoPlayerController? controller = playback.controller;
+        if (controller == null || !controller.value.isInitialized) {
+          return _buildLoading();
+        }
 
-  @override
-  void initState() {
-    super.initState();
-    _initPlayer();
+        if (!isActive) {
+          return Container(color: Colors.black);
+        }
+
+        return _buildPlayer(controller);
+      },
+    );
   }
 
-  Future<void> _initPlayer() async {
-    if (!widget.videoFile.existsSync()) {
-      setState(() => _hasError = true);
-      return;
-    }
+  Widget _buildPlayer(VideoPlayerController controller) {
+    final isPlaying = controller.value.isPlaying;
+    final aspectRatio =
+        controller.value.aspectRatio > 0 ? controller.value.aspectRatio : 16 / 9;
 
-    try {
-      _controller = VideoPlayerController.file(widget.videoFile);
-      await _controller!.initialize();
-      _controller!.setLooping(true);
-      if (mounted) {
-        setState(() {
-          _isInitialized = true;
-          _hasError = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() => _hasError = true);
-      }
-    }
+    return GestureDetector(
+      onTap: () => playback.togglePlayPause(),
+      child: Container(
+        color: Colors.black,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            Center(
+              child: AspectRatio(
+                aspectRatio: aspectRatio,
+                child: VideoPlayer(controller),
+              ),
+            ),
+
+            // Play / Pause Overlay Icon when paused
+            if (!isPlaying)
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: Colors.black.withAlpha(160),
+                  shape: BoxShape.circle,
+                  border:
+                      Border.all(color: Colors.white.withAlpha(180), width: 1.5),
+                ),
+                child: const Icon(
+                  Icons.play_arrow_rounded,
+                  size: 36,
+                  color: Colors.white,
+                ),
+              ),
+
+            // Bottom Video Scrubber / Progress Indicator
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: VideoProgressIndicator(
+                controller,
+                allowScrubbing: true,
+                colors: const VideoProgressColors(
+                  playedColor: AppColors.primary,
+                  bufferedColor: Colors.white24,
+                  backgroundColor: Colors.black54,
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 4),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
-  @override
-  void dispose() {
-    _controller?.dispose();
-    super.dispose();
-  }
-
-  void _togglePlayPause() {
-    if (_controller == null || !_isInitialized) return;
-    setState(() {
-      if (_controller!.value.isPlaying) {
-        _controller!.pause();
-      } else {
-        _controller!.play();
-      }
-    });
+  Widget _buildLoading() {
+    return Container(
+      color: Colors.black,
+      child: const Center(
+        child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary),
+      ),
+    );
   }
 
   Widget _buildFallback() {
@@ -82,77 +131,6 @@ class _LocalVideoPlayerWidgetState extends State<LocalVideoPlayerWidget> {
                 fontSize: 11,
                 fontWeight: FontWeight.w700,
                 color: AppColors.textMuted,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_hasError) {
-      return _buildFallback();
-    }
-
-    if (!_isInitialized || _controller == null) {
-      return Container(
-        color: Colors.black,
-        child: const Center(
-          child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary),
-        ),
-      );
-    }
-
-    final isPlaying = _controller!.value.isPlaying;
-
-    return GestureDetector(
-      onTap: _togglePlayPause,
-      child: Container(
-        color: Colors.black,
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            Center(
-              child: AspectRatio(
-                aspectRatio: _controller!.value.aspectRatio > 0
-                    ? _controller!.value.aspectRatio
-                    : 16 / 9,
-                child: VideoPlayer(_controller!),
-              ),
-            ),
-
-            // Play / Pause Overlay Icon when paused
-            if (!isPlaying)
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: Colors.black.withAlpha(160),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white.withAlpha(180), width: 1.5),
-                ),
-                child: const Icon(
-                  Icons.play_arrow_rounded,
-                  size: 36,
-                  color: Colors.white,
-                ),
-              ),
-
-            // Bottom Video Scrubber / Progress Indicator
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: VideoProgressIndicator(
-                _controller!,
-                allowScrubbing: true,
-                colors: const VideoProgressColors(
-                  playedColor: AppColors.primary,
-                  bufferedColor: Colors.white24,
-                  backgroundColor: Colors.black54,
-                ),
-                padding: const EdgeInsets.symmetric(vertical: 4),
               ),
             ),
           ],

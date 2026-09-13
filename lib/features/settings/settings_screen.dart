@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../app/router.dart';
 import '../../app/theme.dart';
 import '../../core/controllers/gps_settings_controller.dart';
 import '../../core/controllers/map_type_settings_controller.dart';
@@ -606,9 +605,6 @@ class SettingsScreen extends ConsumerWidget {
 
     if (confirm == true && context.mounted) {
       await ref.read(authServiceProvider).signOut();
-      if (context.mounted) {
-        Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.root, (route) => false);
-      }
     }
   }
 }

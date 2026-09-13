@@ -3,10 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../app/theme.dart';
 import '../../app/router.dart';
+import '../../core/services/auth_service.dart';
 import '../../core/services/permission_service.dart';
 import '../../core/services/session_service.dart';
 import '../../shared/utils/responsive_layout.dart';
 import '../../shared/widgets/primary_button.dart';
+import '../auth/session_router.dart';
 
 class PermissionOnboardingScreen extends ConsumerStatefulWidget {
   const PermissionOnboardingScreen({super.key});
@@ -20,6 +22,7 @@ class _PermissionOnboardingScreenState
     extends ConsumerState<PermissionOnboardingScreen>
     with WidgetsBindingObserver {
   bool _isRequesting = false;
+  bool _isNavigating = false;
 
   @override
   void initState() {
@@ -35,10 +38,10 @@ class _PermissionOnboardingScreenState
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.resumed && !_isNavigating) {
       // Recheck permissions on resume (PRD Section 5.6)
       ref.read(permissionServiceProvider.notifier).checkAllPermissions().then((status) {
-        if (status.areCorePermissionsGranted && mounted) {
+        if (status.areCorePermissionsGranted && mounted && !_isNavigating) {
           _proceedToSiteSetup();
         }
       });
@@ -46,16 +49,22 @@ class _PermissionOnboardingScreenState
   }
 
   Future<void> _proceedToSiteSetup() async {
-    final sessionUser = ref.read(sessionServiceProvider).user;
+    if (_isNavigating) return;
+    _isNavigating = true;
+
+    final sessionUser = ref.read(sessionServiceProvider).user ?? ref.read(authServiceProvider).currentUser;
     if (sessionUser != null) {
       await ref.read(sessionServiceProvider.notifier).completeOnboarding(sessionUser.uid);
     }
     if (mounted) {
-      Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.root, (route) => false);
+      if (context.findAncestorWidgetOfExactType<SessionRouter>() == null) {
+        Navigator.of(context).pushReplacementNamed(AppRoutes.siteSetup);
+      }
     }
   }
 
   Future<void> _handleRequestPermissions() async {
+    if (_isNavigating) return;
     setState(() => _isRequesting = true);
     final service = ref.read(permissionServiceProvider.notifier);
 
@@ -419,8 +428,9 @@ class _PermissionOnboardingScreenState
   }
 
   void _checkProgression() {
+    if (_isNavigating) return;
     final status = ref.read(permissionServiceProvider);
-    if (status.areCorePermissionsGranted && mounted) {
+    if (status.areCorePermissionsGranted && mounted && !_isNavigating) {
       _proceedToSiteSetup();
     } else if (status.isPermanentlyDenied && mounted) {
       Navigator.of(context).pushNamed(AppRoutes.recovery);

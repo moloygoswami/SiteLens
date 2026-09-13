@@ -1,3 +1,4 @@
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sitelens/features/sync/models/sync_state.dart';
 import 'package:sitelens/features/sync/services/sync_coordinator.dart';
@@ -14,4 +15,10 @@ class FakeSyncCoordinator extends StateNotifier<SyncState>
 
   @override
   Future<void> triggerSync({bool isManual = false}) async {}
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

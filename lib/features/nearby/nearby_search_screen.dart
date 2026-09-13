@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/theme.dart';
+import '../../domain/models/enums.dart';
 import '../../domain/models/media_item.dart';
 import 'controllers/nearby_search_controller.dart';
 import 'models/nearby_search_state.dart';
@@ -14,12 +15,18 @@ class NearbySearchScreen extends ConsumerStatefulWidget {
   final MediaItem? sourceMedia;
   final double? initialLat;
   final double? initialLon;
+  final String? initialSiteId;
+  final bool isPicker;
+  final void Function(MediaItem)? onSelectCandidate;
 
   const NearbySearchScreen({
     super.key,
     this.sourceMedia,
     this.initialLat,
     this.initialLon,
+    this.initialSiteId,
+    this.isPicker = false,
+    this.onSelectCandidate,
   });
 
   @override
@@ -27,6 +34,45 @@ class NearbySearchScreen extends ConsumerStatefulWidget {
 }
 
 class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
+  @override
+  void initState() {
+    super.initState();
+    if (widget.sourceMedia == null &&
+        (widget.initialLat != null || widget.initialSiteId != null)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final notifier = ref.read(
+            nearbySearchControllerProvider(widget.sourceMedia).notifier);
+        notifier.setTargetLocation(
+          siteId: widget.initialSiteId,
+          lat: widget.initialLat,
+          lon: widget.initialLon,
+        );
+      });
+    }
+  }
+
+  void _handleCandidateSelected(MediaItem item, NearbySearchState searchState) {
+    if (!searchState.isEligibleCandidate(item)) {
+      ScaffoldMessenger.of(context).removeCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            item.observationType != ObservationType.nonConformity
+                ? 'Only open Non-Conformity evidence can be selected for Closed observations.'
+                : 'This Non-Conformity has already been resolved.',
+          ),
+          backgroundColor: AppColors.statusRed,
+        ),
+      );
+      return;
+    }
+
+    if (widget.onSelectCandidate != null) {
+      widget.onSelectCandidate!(item);
+    }
+    Navigator.of(context).pop(item);
+  }
   @override
   Widget build(BuildContext context) {
     final searchState = ref.watch(nearbySearchControllerProvider(widget.sourceMedia));
@@ -109,6 +155,36 @@ class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
                   _buildSourceAnchorCard(widget.sourceMedia!)
                 else
                   _buildCoordinateAnchorCard(searchState.centerLat, searchState.centerLon),
+
+                if (widget.isPicker)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withAlpha(25),
+                      border: const Border(
+                        bottom: BorderSide(color: AppColors.primary, width: 1),
+                      ),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.touch_app_rounded, size: 16, color: AppColors.primaryLight),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'PICKER MODE: Select an open Non-Conformity as BEFORE reference',
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.primaryLight,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
 
                 // 2. Dynamic Radius Selector
                 Padding(
@@ -469,6 +545,7 @@ class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
   }
 
   Widget _buildCoordinateAnchorCard(double lat, double lon) {
+    final siteStr = widget.initialSiteId != null ? ' • ${widget.initialSiteId}' : '';
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -480,13 +557,16 @@ class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
         children: [
           const Icon(Icons.my_location_rounded, size: 16, color: AppColors.primary),
           const SizedBox(width: 10),
-          Text(
-            'SPATIAL ORIGIN: ${lat.toStringAsFixed(5)}, ${lon.toStringAsFixed(5)}',
-            style: const TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              color: AppColors.textPrimary,
+          Expanded(
+            child: Text(
+              'SPATIAL ORIGIN: ${lat.toStringAsFixed(5)}, ${lon.toStringAsFixed(5)}$siteStr',
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textPrimary,
+              ),
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ],
@@ -497,20 +577,9 @@ class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
   Widget _buildResultsBody(NearbySearchState state, NearbySearchNotifier controller) {
     if (state.isLoading) {
       return const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(strokeWidth: 2.5, color: AppColors.primary),
-            SizedBox(height: 12),
-            Text(
-              'Scanning spatial database...',
-              style: TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 11,
-                color: AppColors.textSecondary,
-              ),
-            ),
-          ],
+        child: CircularProgressIndicator(
+          strokeWidth: 2.5,
+          color: AppColors.primary,
         ),
       );
     }
@@ -522,22 +591,21 @@ class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.error_outline_rounded, size: 40, color: AppColors.statusRed),
-              const SizedBox(height: 8),
+              const Icon(Icons.error_outline_rounded, color: AppColors.statusRed, size: 36),
+              const SizedBox(height: 12),
               Text(
                 state.errorMessage!,
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                style: const TextStyle(color: AppColors.textSecondary, fontSize: 13),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
               ElevatedButton.icon(
                 onPressed: () => controller.executeSearch(),
                 icon: const Icon(Icons.refresh_rounded, size: 16),
-                label: const Text('Retry Query'),
+                label: const Text('Try Again'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
                   foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadii.pill)),
                 ),
               ),
             ],
@@ -546,7 +614,7 @@ class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
       );
     }
 
-    // View Mode Switch: Map View (PRD Section 11.5)
+    // View Mode Switch: Map View (PRD Section 11.7)
     if (state.viewMode == NearbyViewMode.map) {
       return NearbyMapView(
         centerLat: state.centerLat,
@@ -627,6 +695,7 @@ class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
             title: 'BEFORE / OPEN NON-CONFORMITY',
             color: AppColors.statusRed,
             items: state.beforeResults,
+            searchState: state,
           ),
 
         // Group 2: After (Resolved Non-Conformities)
@@ -635,6 +704,7 @@ class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
             title: 'AFTER / RESOLUTION',
             color: AppColors.statusGreen,
             items: state.afterResults,
+            searchState: state,
           ),
 
         // Group 3: Progress Observations
@@ -643,6 +713,7 @@ class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
             title: 'PROGRESS DOCUMENTATION',
             color: AppColors.primary,
             items: state.progressResults,
+            searchState: state,
           ),
 
         // Group 4: Material & General
@@ -651,6 +722,7 @@ class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
             title: 'MATERIAL & GENERAL',
             color: AppColors.textSecondary,
             items: state.otherResults,
+            searchState: state,
           ),
       ],
     );
@@ -660,6 +732,7 @@ class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
     required String title,
     required Color color,
     required List<dynamic> items,
+    required NearbySearchState searchState,
   }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 20),
@@ -704,7 +777,17 @@ class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
 
           // Cards list
           for (final result in items) ...[
-            NearbyMediaCard(result: result),
+            NearbyMediaCard(
+              result: result,
+              isPicker: widget.isPicker,
+              isEligible: searchState.isEligibleCandidate(result.item),
+              onSelect: widget.isPicker
+                  ? () => _handleCandidateSelected(result.item, searchState)
+                  : null,
+              onTap: widget.isPicker
+                  ? () => _handleCandidateSelected(result.item, searchState)
+                  : null,
+            ),
             const SizedBox(height: 8),
           ],
         ],

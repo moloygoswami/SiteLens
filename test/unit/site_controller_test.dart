@@ -1,4 +1,5 @@
 import 'dart:ffi';
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite3/open.dart';
@@ -8,10 +9,43 @@ import 'package:sitelens/data/repositories/site_repository.dart';
 import 'package:sitelens/features/sites/site_controller.dart';
 import 'package:sitelens/domain/models/site_model.dart';
 
+class FailingSiteRepository implements SiteRepository {
+  bool shouldFailLoad = false;
+  bool shouldFailSave = false;
+
+  @override
+  Future<List<SiteModel>> getAllSites({String? creatorId}) async {
+    if (shouldFailLoad) {
+      throw Exception('Database disk I/O failure');
+    }
+    return [];
+  }
+
+  @override
+  Future<SiteModel?> getSiteById(String id) async => null;
+
+  @override
+  Future<void> saveSite(SiteModel site) async {
+    if (shouldFailSave) {
+      throw Exception('Disk full error');
+    }
+  }
+
+  @override
+  Future<void> deleteSite(String id, {String? creatorId}) async {}
+
+  @override
+  Future<bool> hasMediaForSite(String siteId) async => false;
+
+  @override
+  Future<void> seedDefaultSitesIfEmpty() async {}
+}
+
 void main() {
   late AppDatabase db;
   late SiteRepository siteRepo;
   late SiteController siteController;
+  const testUserId = 'test-user-001';
 
   setUpAll(() {
     open.overrideFor(OperatingSystem.linux, () => DynamicLibrary.open('libsqlite3.so.0'));
@@ -21,42 +55,47 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     db = AppDatabase(NativeDatabase.memory());
     siteRepo = LocalSiteRepository(db);
-    // Explicit test fixture insertion
+
+    // Test fixtures scoped to testUserId
     await siteRepo.saveSite(const SiteModel(
       id: 'site-4092',
       siteCode: '4092',
       name: 'Metro Line 3 Pier 42 Construction',
       address: 'Park Street Crossway, Sector 5, Kolkata',
+      creatorId: testUserId,
     ));
     await siteRepo.saveSite(const SiteModel(
       id: 'site-1088',
       siteCode: '1088',
       name: 'Flyover Viaduct Segment B',
       address: 'EM Bypass Junction, Kolkata',
+      creatorId: testUserId,
     ));
     await siteRepo.saveSite(const SiteModel(
       id: 'site-7721',
       siteCode: '7721',
       name: 'High-Rise Tower Block A Foundation',
       address: 'Rajarhat Main Blvd, New Town',
+      creatorId: testUserId,
     ));
-    siteController = SiteController(siteRepo);
+    siteController = SiteController(siteRepo, initialUserId: testUserId);
   });
 
   tearDown(() async {
     await db.close();
   });
 
-  group('SiteController & SiteRepository Tests', () {
-    test('Loads available test sites successfully', () async {
+  group('SiteController & SiteRepository Core Tests', () {
+    test('Loads available test sites successfully for authenticated user', () async {
       await siteController.loadSitesAndActiveContext();
 
       expect(siteController.state.availableSites.length, equals(3));
       expect(siteController.state.activeSite, isNotNull);
       expect(siteController.state.activeSite?.siteCode, equals('4092'));
+      expect(siteController.state.errorMessage, isNull);
     });
 
-    test('Can switch active site and persist', () async {
+    test('Can switch active site and persist with user-scoped key', () async {
       await siteController.loadSitesAndActiveContext();
 
       const newSite = SiteModel(
@@ -64,14 +103,15 @@ void main() {
         siteCode: '1088',
         name: 'Flyover Viaduct Segment B',
         address: 'EM Bypass Junction, Kolkata',
+        creatorId: testUserId,
       );
 
       await siteController.setActiveSite(newSite);
       expect(siteController.state.activeSite?.id, equals('site-1088'));
 
-      // Verify persistence in SharedPreferences
+      // Verify persistence in SharedPreferences with user-scoped key
       final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getString('sitelens_active_site_id'), equals('site-1088'));
+      expect(prefs.getString('sitelens_active_site_id_$testUserId'), equals('site-1088'));
     });
 
     test('Can add and select custom offline site with 20-character Firestore-compatible auto-ID', () async {
@@ -83,18 +123,271 @@ void main() {
 
       final active = siteController.state.activeSite;
       expect(active?.siteCode, equals('9901'));
+      expect(active?.creatorId, equals(testUserId));
       expect(active?.id.length, equals(20));
       expect(RegExp(r'^[a-zA-Z0-9]{20}$').hasMatch(active!.id), isTrue);
       expect(siteController.state.availableSites.length, equals(4));
     });
 
-    test('Can delete cached site', () async {
+    test('Can delete cached site scoped to user', () async {
       await siteController.loadSitesAndActiveContext();
       expect(siteController.state.availableSites.length, equals(3));
 
       await siteController.deleteSite('site-4092');
       expect(siteController.state.availableSites.length, equals(2));
       expect(siteController.state.availableSites.any((s) => s.id == 'site-4092'), isFalse);
+    });
+  });
+
+  group('Per-User Site Isolation Tests', () {
+    test('User A sites are never visible to User B (strict fail-closed isolation)', () async {
+      const userA = 'user-alpha';
+      const userB = 'user-beta';
+
+      // Insert sites for User A
+      await siteRepo.saveSite(const SiteModel(
+        id: 'site-alpha-1',
+        siteCode: 'A100',
+        name: 'Alpha Pier 1',
+        address: 'Alpha St',
+        creatorId: userA,
+      ));
+      await siteRepo.saveSite(const SiteModel(
+        id: 'site-alpha-2',
+        siteCode: 'A200',
+        name: 'Alpha Pier 2',
+        address: 'Alpha Rd',
+        creatorId: userA,
+      ));
+
+      // Insert site for User B
+      await siteRepo.saveSite(const SiteModel(
+        id: 'site-beta-1',
+        siteCode: 'B100',
+        name: 'Beta Bridge',
+        address: 'Beta Blvd',
+        creatorId: userB,
+      ));
+
+      // Controller for User A
+      final controllerA = SiteController(siteRepo, initialUserId: userA);
+      await controllerA.loadSitesAndActiveContext();
+      expect(controllerA.state.availableSites.length, equals(2));
+      expect(controllerA.state.availableSites.every((s) => s.creatorId == userA), isTrue);
+      expect(controllerA.state.availableSites.any((s) => s.id == 'site-beta-1'), isFalse);
+
+      // Controller for User B
+      final controllerB = SiteController(siteRepo, initialUserId: userB);
+      await controllerB.loadSitesAndActiveContext();
+      expect(controllerB.state.availableSites.length, equals(1));
+      expect(controllerB.state.availableSites.first.id, equals('site-beta-1'));
+      expect(controllerB.state.availableSites.first.creatorId, equals(userB));
+      // User A's sites are completely invisible to User B
+      expect(controllerB.state.availableSites.any((s) => s.id == 'site-alpha-1'), isFalse);
+      expect(controllerB.state.availableSites.any((s) => s.id == 'site-alpha-2'), isFalse);
+
+      // Unauthenticated / null creatorId strictly returns empty list (no unrestricted all-sites fallback)
+      final unauthenticatedSites = await siteRepo.getAllSites(creatorId: null);
+      expect(unauthenticatedSites, isEmpty);
+
+      final emptyCreatorSites = await siteRepo.getAllSites(creatorId: '');
+      expect(emptyCreatorSites, isEmpty);
+    });
+
+    test('User B cannot delete User A site even if site ID is known', () async {
+      const userA = 'user-alpha';
+      const userB = 'user-beta';
+
+      await siteRepo.saveSite(const SiteModel(
+        id: 'site-alpha-protected',
+        siteCode: 'PROT1',
+        name: 'Protected Site',
+        address: 'Protected Way',
+        creatorId: userA,
+      ));
+
+      final controllerB = SiteController(siteRepo, initialUserId: userB);
+      // User B attempts to delete site-alpha-protected
+      await controllerB.deleteSite('site-alpha-protected');
+
+      // Verify site-alpha-protected still exists in DB for User A
+      final sitesA = await siteRepo.getAllSites(creatorId: userA);
+      expect(sitesA.any((s) => s.id == 'site-alpha-protected'), isTrue);
+    });
+
+    test('resetSession clears state completely on sign-out', () async {
+      await siteController.loadSitesAndActiveContext();
+      expect(siteController.state.availableSites.length, equals(3));
+      expect(siteController.state.activeSite, isNotNull);
+
+      siteController.resetSession();
+
+      expect(siteController.state.availableSites, isEmpty);
+      expect(siteController.state.activeSite, isNull);
+      expect(siteController.state.isLoading, isFalse);
+      expect(siteController.currentUserId, isNull);
+    });
+
+    test('updateUser switches context to new user and reloads sites', () async {
+      const newUser = 'user-new-002';
+      await siteRepo.saveSite(const SiteModel(
+        id: 'site-new-1',
+        siteCode: 'NEW1',
+        name: 'New Site',
+        address: 'New St',
+        creatorId: newUser,
+      ));
+
+      siteController.updateUser(newUser);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(siteController.currentUserId, equals(newUser));
+      expect(siteController.state.availableSites.length, equals(1));
+      expect(siteController.state.availableSites.first.id, equals('site-new-1'));
+    });
+  });
+
+  group('Load Error Handling & Retry Tests', () {
+    test('Surface load error explicitly and support functional retry path', () async {
+      final failingRepo = FailingSiteRepository();
+      final controller = SiteController(failingRepo, initialUserId: 'user-retry');
+
+      // Trigger failure
+      failingRepo.shouldFailLoad = true;
+      await controller.loadSitesAndActiveContext();
+
+      expect(controller.state.isLoading, isFalse);
+      expect(controller.state.errorMessage, contains('Failed to load sites'));
+      expect(controller.state.errorMessage, contains('Database disk I/O failure'));
+      expect(controller.state.availableSites, isEmpty);
+      expect(controller.state.activeSite, isNull);
+
+      // Now resolve failure and retry
+      failingRepo.shouldFailLoad = false;
+      await controller.loadSitesAndActiveContext();
+
+      expect(controller.state.isLoading, isFalse);
+      expect(controller.state.errorMessage, isNull);
+    });
+  });
+
+  group('Create-Site Error & Validation Tests', () {
+    test('Rejects empty site code or empty site name', () async {
+      expect(
+        () => siteController.addCustomOfflineSite(
+          siteCode: '',
+          name: 'Valid Name',
+          address: 'Valid Address',
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      expect(
+        () => siteController.addCustomOfflineSite(
+          siteCode: '   ',
+          name: 'Valid Name',
+          address: 'Valid Address',
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      expect(
+        () => siteController.addCustomOfflineSite(
+          siteCode: '5012',
+          name: '',
+          address: 'Valid Address',
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('Prevents duplicate site code within same user scope', () async {
+      // 4092 already exists in setUp for testUserId
+      expect(
+        () => siteController.addCustomOfflineSite(
+          siteCode: '4092',
+          name: 'Another Pier',
+          address: 'Another Address',
+        ),
+        throwsA(isA<DuplicateSiteCodeException>()),
+      );
+
+      // Case insensitive check
+      expect(
+        () => siteController.addCustomOfflineSite(
+          siteCode: ' 4092 ',
+          name: 'Another Pier',
+          address: 'Another Address',
+        ),
+        throwsA(isA<DuplicateSiteCodeException>()),
+      );
+    });
+
+    test('Allows identical site code across different users', () async {
+      const otherUser = 'user-other';
+      final otherController = SiteController(siteRepo, initialUserId: otherUser);
+
+      // otherUser can create 4092 without collision
+      final created = await otherController.addCustomOfflineSite(
+        siteCode: '4092',
+        name: 'Other User Pier 42',
+        address: 'Other Address',
+      );
+
+      expect(created.siteCode, equals('4092'));
+      expect(created.creatorId, equals(otherUser));
+    });
+
+    test('Handles DB save failure gracefully by updating state and rethrowing', () async {
+      final failingRepo = FailingSiteRepository();
+      failingRepo.shouldFailSave = true;
+      final controller = SiteController(failingRepo, initialUserId: 'user-save-fail');
+
+      await expectLater(
+        () => controller.addCustomOfflineSite(
+          siteCode: '9999',
+          name: 'Failing Site',
+          address: 'Failing Address',
+        ),
+        throwsA(isA<Exception>()),
+      );
+
+      expect(controller.state.errorMessage, contains('Failed to add site'));
+    });
+  });
+
+  group('Delete-Site Media Foreign Key Integrity Tests', () {
+    test('Cannot delete site referenced by media in database', () async {
+      // Insert a media item referencing site-4092
+      await db.into(db.media).insert(
+        MediaCompanion.insert(
+          id: 'media-001',
+          uri: 'file:///data/orig_001.jpg',
+          lat: 22.57,
+          lon: 88.36,
+          capturedAt: DateTime.now().toUtc().toIso8601String(),
+          siteId: const Value('site-4092'),
+          creatorId: const Value(testUserId),
+        ),
+      );
+
+      // Attempting to delete site-4092 must throw SiteReferencedByMediaException
+      expect(
+        () => siteController.deleteSite('site-4092'),
+        throwsA(isA<SiteReferencedByMediaException>()),
+      );
+
+      // Verify site-4092 is preserved in DB and still in controller
+      await siteController.loadSitesAndActiveContext();
+      expect(siteController.state.availableSites.any((s) => s.id == 'site-4092'), isTrue);
+    });
+
+    test('Can delete site when no media references it', () async {
+      // site-7721 has no media references
+      await siteController.deleteSite('site-7721');
+
+      await siteController.loadSitesAndActiveContext();
+      expect(siteController.state.availableSites.any((s) => s.id == 'site-7721'), isFalse);
     });
   });
 }

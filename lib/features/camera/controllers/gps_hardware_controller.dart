@@ -76,12 +76,18 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
         permissionStatus: permission,
       );
 
-      if (!serviceEnabled ||
-          (permission == LocationPermission.denied ||
-              permission == LocationPermission.deniedForever)) {
+      final bool granted = permission == LocationPermission.whileInUse ||
+          permission == LocationPermission.always;
+
+      if (!serviceEnabled || !granted) {
+        // Cannot acquire: denied, denied-forever, or an indeterminate
+        // permission. Drop any latched fix; blockReason distinguishes the
+        // specific cause for the UI (denied / unknown / service off) and never
+        // collapses unknown or service-off into denied.
         state = state.copyWith(
           fixStatus: GPSFixStatus.searching,
           hasValidFix: false,
+          isLastKnownSeed: false,
           clearFix: true,
         );
         return;
@@ -194,6 +200,7 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
       timestampUtc: position.timestamp.toUtc(),
       distanceToSiteMeters: distance,
       clearError: true,
+      isLastKnownSeed: isInitial,
     );
 
     _restartStalenessWatchdog();
@@ -201,10 +208,14 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
     refreshGnssStatus();
   }
 
-  /// Returns the position with the best (lowest) reported horizontal accuracy
+  /// Returns the raw position with the best (lowest) reported horizontal accuracy
   /// among recent valid positions within [window] (default: 5 seconds).
   /// If multiple positions have the same best accuracy, the newest position is preferred.
-  /// Falls back to the current valid fix or null if no fix is available.
+  ///
+  /// Returns null when no raw position is available in the window — even if a
+  /// valid fix is still latched. Callers must then keep the current GPS state
+  /// as-is so unknown accuracy/altitude/fix-timestamp remain unknown
+  /// (Cross-Cutting Audit A, F-A2: never synthesize concrete values).
   Position? getBestRecentPosition({Duration window = const Duration(seconds: 5)}) {
     final now = clock.now();
     final cutoff = now.subtract(window);
@@ -221,21 +232,33 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
       return candidates.first;
     }
 
-    if (state.hasValidFix && state.latitude != null && state.longitude != null) {
-      return Position(
-        latitude: state.latitude!,
-        longitude: state.longitude!,
-        timestamp: state.timestampUtc ?? now,
-        accuracy: state.accuracyMeters ?? 0.0,
-        altitude: state.altitudeMeters ?? 0.0,
-        altitudeAccuracy: 0.0,
-        heading: state.headingDegrees ?? 0.0,
-        headingAccuracy: 0.0,
-        speed: 0.0,
-        speedAccuracy: 0.0,
-      );
-    }
     return null;
+  }
+
+  /// Applies the best recent raw position to a capture GPS state.
+  ///
+  /// Production seam shared by both shutter paths (photo capture and video
+  /// stop). When [bestPosition] is null — no raw position available in the
+  /// capture window — the incoming state is returned unchanged so unknown
+  /// accuracy/altitude/fix-timestamp stay unknown instead of being upgraded to
+  /// 0.0/now (Cross-Cutting Audit A, F-A2).
+  static GpsHardwareState applyBestRecentPosition(
+    GpsHardwareState gpsState,
+    Position? bestPosition,
+  ) {
+    if (bestPosition == null || !gpsState.hasValidFix) {
+      return gpsState;
+    }
+    return gpsState.copyWith(
+      latitude: bestPosition.latitude,
+      longitude: bestPosition.longitude,
+      altitudeMeters:
+          (gpsState.isAltitudeMsl && gpsState.altitudeMeters != null)
+              ? gpsState.altitudeMeters
+              : bestPosition.altitude,
+      accuracyMeters: bestPosition.accuracy,
+      timestampUtc: bestPosition.timestamp.toUtc(),
+    );
   }
 
   /// Fetches fresh GNSS status and updates state.
@@ -256,16 +279,23 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
   void _restartStalenessWatchdog() {
     _stalenessTimer?.cancel();
     if (!mounted) return;
-    _stalenessTimer = Timer.periodic(stalenessTimeout, (_) {
+    _stalenessTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) {
         _stalenessTimer?.cancel();
+        _stalenessTimer = null;
         return;
       }
       final lastEmit = _lastEmitTime;
-      if (lastEmit == null) return;
+      if (lastEmit == null) {
+        _stalenessTimer?.cancel();
+        _stalenessTimer = null;
+        setStaleOrSearching();
+        return;
+      }
       final elapsed = clock.now().difference(lastEmit);
       if (elapsed >= stalenessTimeout) {
         _stalenessTimer?.cancel();
+        _stalenessTimer = null;
         setStaleOrSearching();
       }
     });
@@ -301,28 +331,108 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
   }
 
   void pauseLocationStream() {
+    if (!mounted) return;
     _positionSubscription?.pause();
     _stalenessTimer?.cancel();
     _stalenessTimer = null;
     _service.stopGnssUpdates();
   }
 
-  void resumeLocationStream() {
+  /// Resumes the location stream after backgrounding, explicitly revalidating
+  /// permission, location-service availability, subscription state, and
+  /// live-fix provenance before any acquisition can occur.
+  ///
+  /// Truthful recovery: permission and service state are re-read from the OS
+  /// (both can change while backgrounded). A non-granted, indeterminate, or
+  /// service-disabled state cancels the stream and drops any latched fix so no
+  /// stale/cached coordinate can be mistaken for a live fix. A previously valid
+  /// fix is kept only while still fresh; otherwise it is cleared and the state
+  /// transitions back through Acquiring until a new live position arrives.
+  Future<void> resumeLocationStream() async {
+    if (!mounted) return;
+
     _service.startGnssUpdates();
     refreshGnssStatus();
-    if (_positionSubscription?.isPaused ?? false) {
-      _positionSubscription?.resume();
-    } else if (_positionSubscription == null) {
+
+    // 1. Revalidate permission + location service from the OS.
+    final bool serviceEnabled = await _service.isLocationServiceEnabled();
+    final LocationPermission permission = await _service.checkPermission();
+    if (!mounted) return;
+
+    state = state.copyWith(
+      isLocationServiceEnabled: serviceEnabled,
+      permissionStatus: permission,
+    );
+
+    final bool granted = permission == LocationPermission.whileInUse ||
+        permission == LocationPermission.always;
+
+    if (!serviceEnabled || !granted) {
+      // Cannot acquire: stop the stream and drop any latched fix so no stale or
+      // cached coordinate can be promoted to a live fix.
+      final existing = _positionSubscription;
+      _positionSubscription = null;
+      await existing?.cancel();
+      _stalenessTimer?.cancel();
+      _stalenessTimer = null;
+      _recentPositions.clear();
+      _lastEmitTime = null;
+      if (!mounted) return;
+      state = state.copyWith(
+        fixStatus: GPSFixStatus.searching,
+        hasValidFix: false,
+        isLastKnownSeed: false,
+        clearFix: true,
+      );
+      return;
+    }
+
+    // 2. Revalidate the latched fix: keep it only while still fresh, otherwise
+    //    drop to Acquiring. A live fix is never inferred from cached data.
+    if (state.hasValidFix) {
+      final lastEmit = _lastEmitTime;
+      final bool isStale;
+      if (lastEmit != null) {
+        isStale = clock.now().difference(lastEmit) >= stalenessTimeout;
+      } else if (state.timestampUtc != null) {
+        isStale = clock.now().toUtc().difference(state.timestampUtc!) >= stalenessTimeout;
+      } else {
+        isStale = true;
+      }
+
+      if (isStale) {
+        setStaleOrSearching();
+      } else {
+        _restartStalenessWatchdog();
+      }
+    } else {
+      state = state.copyWith(
+        fixStatus: GPSFixStatus.searching,
+        hasValidFix: false,
+        isLastKnownSeed: false,
+        clearFix: true,
+      );
+    }
+
+    // 3. Revalidate the subscription: never create a duplicate stream.
+    final subscription = _positionSubscription;
+    if (subscription == null) {
       _startStream();
+    } else if (subscription.isPaused) {
+      subscription.resume();
     }
   }
 
   @override
   void dispose() {
-    _positionSubscription?.cancel();
+    if (!mounted) return; // idempotent cleanup
+    final subscription = _positionSubscription;
+    _positionSubscription = null;
+    subscription?.cancel();
     _stalenessTimer?.cancel();
     _stalenessTimer = null;
     _recentPositions.clear();
+    _lastEmitTime = null;
     _service.stopGnssUpdates();
     super.dispose();
   }

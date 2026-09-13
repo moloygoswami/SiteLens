@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:sitelens/core/services/auth_service.dart';
@@ -37,10 +38,32 @@ class FakeConnectivity implements Connectivity {
 
 class FakeMediaRepository implements MediaRepository {
   final List<MediaItem> _items = [];
+  final _countController = StreamController<int>.broadcast();
+  final _tombstoneCountController = StreamController<int>.broadcast();
+
+  int _pendingCount() =>
+      _items.where((i) => !i.isDeleted && i.syncStatus == SyncStatusType.pending).length;
+
+  int _tombstoneCandidateCount() =>
+      _items.where((i) => i.isDeleted && i.syncStatus != SyncStatusType.syncing).length;
 
   void setItems(List<MediaItem> items) {
     _items.clear();
     _items.addAll(items);
+    _emitCount();
+  }
+
+  void _emitCount() {
+    if (!_countController.isClosed) {
+      _countController.add(_pendingCount());
+    }
+    _emitTombstoneCount();
+  }
+
+  void _emitTombstoneCount() {
+    if (!_tombstoneCountController.isClosed) {
+      _tombstoneCountController.add(_tombstoneCandidateCount());
+    }
   }
 
   @override
@@ -50,14 +73,14 @@ class FakeMediaRepository implements MediaRepository {
         _items[i] = _items[i].copyWith(syncStatus: SyncStatusType.pending);
       }
     }
+    _emitCount();
   }
 
   @override
-  Stream<int> watchUnsyncedCount({String? creatorId}) {
-    return Stream.value(
-      _items.where((i) => !i.isDeleted && i.syncStatus != SyncStatusType.synced).length,
-    );
-  }
+  Stream<int> watchUnsyncedCount({String? creatorId}) => _countController.stream;
+
+  @override
+  Stream<int> watchTombstoneCandidateCount() => _tombstoneCountController.stream;
 
   @override
   Future<List<MediaItem>> getPendingOrFailedMedia({String? creatorId}) async {
@@ -72,11 +95,36 @@ class FakeMediaRepository implements MediaRepository {
   }
 
   @override
+  Future<List<MediaItem>> getTombstoneSyncCandidates({String? creatorId}) async {
+    return _items.where((i) {
+      if (!i.isDeleted) return false;
+      if (i.syncStatus == SyncStatusType.syncing) return false;
+      if (creatorId != null && i.creatorId != null && i.creatorId != creatorId) {
+        return false;
+      }
+      return true;
+    }).toList();
+  }
+
+  @override
   Future<void> updateSyncStatus(String mediaId, SyncStatusType status) async {
     final index = _items.indexWhere((i) => i.id == mediaId);
     if (index != -1) {
       _items[index] = _items[index].copyWith(syncStatus: status);
     }
+    _emitCount();
+  }
+
+  @override
+  Future<void> deletePermanently(String mediaId) async {
+    // C-2 semantics: permanent user deletion converts the row into a hidden
+    // tombstone candidate instead of destroying it, so the cloud ledger can
+    // always be reconciled by the existing tombstone synchronization.
+    final index = _items.indexWhere((i) => i.id == mediaId);
+    if (index != -1) {
+      _items[index] = _items[index].copyWith(isDeleted: true);
+    }
+    _emitCount();
   }
 
   @override
@@ -137,6 +185,11 @@ class FakeAuthService implements AuthService {
   @override
   Future<void> sendPasswordResetEmail(String email) async {}
 
+  SessionVerificationResult verificationResult = const SessionVerificationResult.valid();
+
+  @override
+  Future<SessionVerificationResult> verifySession() async => verificationResult;
+
   @override
   Future<void> signOut() async {
     setUser(null);
@@ -148,6 +201,11 @@ class FakeCloudSyncService implements CloudSyncService {
   final List<String> syncedMediaIds = [];
   Exception? exceptionToThrow;
   Future<void> Function(MediaItem item)? onSync;
+
+  int tombstoneCallCount = 0;
+  final List<String> tombstonedMediaIds = [];
+  Exception? tombstoneExceptionToThrow;
+  Future<void> Function(MediaItem item)? onTombstone;
 
   @override
   Future<void> syncMediaItem({
@@ -164,6 +222,18 @@ class FakeCloudSyncService implements CloudSyncService {
     }
     if (exceptionToThrow != null) {
       throw exceptionToThrow!;
+    }
+  }
+
+  @override
+  Future<void> syncTombstone({required MediaItem item, required String currentUserId}) async {
+    tombstoneCallCount++;
+    tombstonedMediaIds.add(item.id);
+    if (onTombstone != null) {
+      await onTombstone!(item);
+    }
+    if (tombstoneExceptionToThrow != null) {
+      throw tombstoneExceptionToThrow!;
     }
   }
 
@@ -789,6 +859,626 @@ void main() {
       // User B has 1 pending, 0 failed
       expect(coordinator.state.pendingCount, equals(1));
       expect(coordinator.state.failedCount, equals(0));
+
+      coordinator.dispose();
+    });
+  });
+
+  group('F1 Offline Capture Auto-Sync Tests', () {
+    test('New pending evidence while online auto-syncs without manual badge action or connectivity event', () async {
+      mockRepo.setItems([]);
+      final coordinator = SyncCoordinator(
+        mediaRepo: mockRepo,
+        cloudSyncService: mockCloudSync,
+        storageService: mockStorage,
+        authService: fakeAuth,
+        connectivity: fakeConnectivity,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      // Capture completes: a new pending item is committed to the local queue
+      final newItem = MediaItem(
+        id: 'm-new-online',
+        siteId: 'site-1',
+        originalUri: 'media/orig_m-new-online.jpg',
+        uri: 'media/evid_m-new-online.jpg',
+        type: MediaItemType.photo,
+        lat: 22.5,
+        lon: 88.3,
+        capturedAt: DateTime.now(),
+        creatorId: 'user-123',
+        syncStatus: SyncStatusType.pending,
+      );
+      mockRepo.setItems([newItem]);
+
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      // Uploaded exactly once, without any manual/connectivity trigger
+      expect(mockCloudSync.syncCallCount, equals(1));
+      expect(mockCloudSync.syncedMediaIds, equals(['m-new-online']));
+      final items = await mockRepo.getPendingOrFailedMedia(creatorId: 'user-123');
+      expect(items, isEmpty);
+
+      coordinator.dispose();
+    });
+
+    test('Capture while offline stays pending and uploads only after reconnect', () async {
+      fakeConnectivity.currentResults = [ConnectivityResult.none];
+      mockRepo.setItems([]);
+      final coordinator = SyncCoordinator(
+        mediaRepo: mockRepo,
+        cloudSyncService: mockCloudSync,
+        storageService: mockStorage,
+        authService: fakeAuth,
+        connectivity: fakeConnectivity,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      // Offline capture commits locally and must remain queued
+      final offlineItem = MediaItem(
+        id: 'm-offline-cap',
+        siteId: 'site-1',
+        originalUri: 'media/orig_m-offline-cap.jpg',
+        uri: 'media/evid_m-offline-cap.jpg',
+        type: MediaItemType.photo,
+        lat: 22.5,
+        lon: 88.3,
+        capturedAt: DateTime.now(),
+        creatorId: 'user-123',
+        syncStatus: SyncStatusType.pending,
+      );
+      mockRepo.setItems([offlineItem]);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(mockCloudSync.syncCallCount, equals(0));
+      expect(mockRepo._items.first.syncStatus, equals(SyncStatusType.pending));
+
+      // Reconnection drives the existing pipeline
+      fakeConnectivity.emit([ConnectivityResult.wifi]);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(mockCloudSync.syncCallCount, equals(1));
+      expect(mockRepo._items.first.syncStatus, equals(SyncStatusType.synced));
+
+      coordinator.dispose();
+    });
+  });
+
+  group('F1 Foreground Resume Sync Tests', () {
+    test('Authenticated resume with pending work triggers the existing sync path', () async {
+      mockRepo.setItems([]);
+      final coordinator = SyncCoordinator(
+        mediaRepo: mockRepo,
+        cloudSyncService: mockCloudSync,
+        storageService: mockStorage,
+        authService: fakeAuth,
+        connectivity: fakeConnectivity,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(mockCloudSync.syncCallCount, equals(0));
+
+      // Seed a failed (non-suppressed) item: the pending-count edge trigger does
+      // not fire for failed items, so only a resume event can drive this sync.
+      final failedItem = MediaItem(
+        id: 'm-resume-pending',
+        siteId: 'site-1',
+        originalUri: 'media/orig_m-resume.jpg',
+        uri: 'media/evid_m-resume.jpg',
+        type: MediaItemType.photo,
+        lat: 22.5,
+        lon: 88.3,
+        capturedAt: DateTime.now(),
+        creatorId: 'user-123',
+        syncStatus: SyncStatusType.failed,
+      );
+      mockRepo.setItems([failedItem]);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(mockCloudSync.syncCallCount, equals(0));
+
+      // Foreground resume drives the existing triggerSync pipeline
+      coordinator.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(mockCloudSync.syncCallCount, equals(1));
+      expect(mockCloudSync.syncedMediaIds, equals(['m-resume-pending']));
+      expect(mockRepo._items.first.syncStatus, equals(SyncStatusType.synced));
+
+      coordinator.dispose();
+    });
+
+    test('Unauthenticated resume does not start evidence synchronization', () async {
+      final loggedOutAuth = FakeAuthService(null);
+      mockRepo.setItems([
+        MediaItem(
+          id: 'm-logged-out',
+          siteId: 'site-1',
+          originalUri: 'media/orig_lo.jpg',
+          uri: 'media/evid_lo.jpg',
+          type: MediaItemType.photo,
+          lat: 22.5,
+          lon: 88.3,
+          capturedAt: DateTime.now(),
+          creatorId: 'user-123',
+          syncStatus: SyncStatusType.pending,
+        ),
+      ]);
+      final coordinator = SyncCoordinator(
+        mediaRepo: mockRepo,
+        cloudSyncService: mockCloudSync,
+        storageService: mockStorage,
+        authService: loggedOutAuth,
+        connectivity: fakeConnectivity,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      coordinator.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(mockCloudSync.syncCallCount, equals(0));
+      expect(mockRepo._items.first.syncStatus, equals(SyncStatusType.pending));
+
+      coordinator.dispose();
+    });
+
+    test('Resume during an already-running sync does not create a duplicate concurrent sync', () async {
+      mockRepo.setItems([
+        MediaItem(
+          id: 'm-resume-mid',
+          siteId: 'site-1',
+          originalUri: 'media/orig_mid.jpg',
+          uri: 'media/evid_mid.jpg',
+          type: MediaItemType.photo,
+          lat: 22.5,
+          lon: 88.3,
+          capturedAt: DateTime.now(),
+          creatorId: 'user-123',
+          syncStatus: SyncStatusType.pending,
+        ),
+      ]);
+      final coordinator = SyncCoordinator(
+        mediaRepo: mockRepo,
+        cloudSyncService: mockCloudSync,
+        storageService: mockStorage,
+        authService: fakeAuth,
+        connectivity: fakeConnectivity,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      mockCloudSync.syncCallCount = 0;
+      mockCloudSync.syncedMediaIds.clear();
+
+      int activeConcurrentSyncs = 0;
+      int maxConcurrentSyncs = 0;
+      mockCloudSync.onSync = (item) async {
+        activeConcurrentSyncs++;
+        if (activeConcurrentSyncs > maxConcurrentSyncs) {
+          maxConcurrentSyncs = activeConcurrentSyncs;
+        }
+        // Resume event fires mid-flight
+        coordinator.didChangeAppLifecycleState(AppLifecycleState.resumed);
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        activeConcurrentSyncs--;
+      };
+
+      // Re-queue item as pending and drive one cycle
+      mockRepo.setItems([
+        MediaItem(
+          id: 'm-resume-mid',
+          siteId: 'site-1',
+          originalUri: 'media/orig_mid.jpg',
+          uri: 'media/evid_mid.jpg',
+          type: MediaItemType.photo,
+          lat: 22.5,
+          lon: 88.3,
+          capturedAt: DateTime.now(),
+          creatorId: 'user-123',
+          syncStatus: SyncStatusType.pending,
+        ),
+      ]);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      expect(maxConcurrentSyncs, equals(1));
+      expect(mockCloudSync.syncCallCount, equals(1));
+      expect(mockRepo._items.first.syncStatus, equals(SyncStatusType.synced));
+
+      coordinator.dispose();
+    });
+
+    test('Session-generation protection still prevents cross-user processing on resume', () async {
+      final userAItem1 = MediaItem(
+        id: 'm-userA-1',
+        siteId: 'site-1',
+        originalUri: 'media/orig_A1.jpg',
+        uri: 'media/evid_A1.jpg',
+        type: MediaItemType.photo,
+        lat: 22.5,
+        lon: 88.3,
+        capturedAt: DateTime.now(),
+        creatorId: 'user-123',
+        syncStatus: SyncStatusType.pending,
+      );
+      final userAItem2 = MediaItem(
+        id: 'm-userA-2',
+        siteId: 'site-1',
+        originalUri: 'media/orig_A2.jpg',
+        uri: 'media/evid_A2.jpg',
+        type: MediaItemType.photo,
+        lat: 22.5,
+        lon: 88.3,
+        capturedAt: DateTime.now(),
+        creatorId: 'user-123',
+        syncStatus: SyncStatusType.pending,
+      );
+      mockRepo.setItems([userAItem1, userAItem2]);
+      final coordinator = SyncCoordinator(
+        mediaRepo: mockRepo,
+        cloudSyncService: mockCloudSync,
+        storageService: mockStorage,
+        authService: fakeAuth,
+        connectivity: fakeConnectivity,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      mockCloudSync.syncCallCount = 0;
+      mockCloudSync.syncedMediaIds.clear();
+
+      mockCloudSync.onSync = (item) async {
+        if (item.id == 'm-userA-1') {
+          fakeAuth.setUser(null); // Logout mid-batch
+          coordinator.didChangeAppLifecycleState(AppLifecycleState.resumed);
+        }
+      };
+      mockRepo.setItems([userAItem1, userAItem2]);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      // Item 1 completed; item 2 must NOT be processed under the stale session
+      expect(mockCloudSync.syncedMediaIds, equals(['m-userA-1']));
+      final remaining = await mockRepo.getPendingOrFailedMedia();
+      expect(remaining.single.id, equals('m-userA-2'));
+      expect(remaining.single.syncStatus, equals(SyncStatusType.pending));
+
+      coordinator.dispose();
+    });
+  });
+
+  group('F2 Unexpected Exception Suppression Tests', () {
+    test('Unexpected exception is suppressed from automatic cycles; manual retry re-evaluates', () async {
+      final item = MediaItem(
+        id: 'm-unexpected',
+        siteId: 'site-1',
+        originalUri: 'media/orig_unx.jpg',
+        uri: 'media/evid_unx.jpg',
+        type: MediaItemType.photo,
+        lat: 22.5,
+        lon: 88.3,
+        capturedAt: DateTime.now(),
+        creatorId: 'user-123',
+        syncStatus: SyncStatusType.pending,
+      );
+      mockRepo.setItems([item]);
+      mockCloudSync.exceptionToThrow = Exception('Unexpected internal failure');
+
+      final coordinator = SyncCoordinator(
+        mediaRepo: mockRepo,
+        cloudSyncService: mockCloudSync,
+        storageService: mockStorage,
+        authService: fakeAuth,
+        connectivity: fakeConnectivity,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      // First automatic cycle processes once, fails, and marks failed honestly
+      expect(mockCloudSync.syncCallCount, equals(1));
+      expect(mockRepo._items.first.syncStatus, equals(SyncStatusType.failed));
+
+      // Subsequent automatic cycles must NOT repeatedly process the item
+      await coordinator.triggerSync(isManual: false);
+      await coordinator.triggerSync(isManual: false);
+      expect(mockCloudSync.syncCallCount, equals(1));
+
+      // Manual retry explicitly re-evaluates the suppressed item
+      mockCloudSync.exceptionToThrow = null;
+      await coordinator.triggerSync(isManual: true);
+      expect(mockCloudSync.syncCallCount, equals(2));
+      expect(mockRepo._items.first.syncStatus, equals(SyncStatusType.synced));
+
+      coordinator.dispose();
+    });
+
+    test('Retryable failures retain backoff: automatic cycles skip until manual retry', () async {
+      final item = MediaItem(
+        id: 'm-retryable',
+        siteId: 'site-1',
+        originalUri: 'media/orig_rt.jpg',
+        uri: 'media/evid_rt.jpg',
+        type: MediaItemType.photo,
+        lat: 22.5,
+        lon: 88.3,
+        capturedAt: DateTime.now(),
+        creatorId: 'user-123',
+        syncStatus: SyncStatusType.pending,
+      );
+      mockRepo.setItems([item]);
+      mockCloudSync.exceptionToThrow = RetryableSyncException('Transient network failure');
+
+      final coordinator = SyncCoordinator(
+        mediaRepo: mockRepo,
+        cloudSyncService: mockCloudSync,
+        storageService: mockStorage,
+        authService: fakeAuth,
+        connectivity: fakeConnectivity,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      // Failed once, returned to pending with backoff scheduled
+      expect(mockCloudSync.syncCallCount, equals(1));
+      expect(mockRepo._items.first.syncStatus, equals(SyncStatusType.pending));
+
+      // An immediate automatic cycle respects backoff and skips the item
+      await coordinator.triggerSync(isManual: false);
+      expect(mockCloudSync.syncCallCount, equals(1));
+
+      // Manual retry clears backoff and processes the item
+      mockCloudSync.exceptionToThrow = null;
+      await coordinator.triggerSync(isManual: true);
+      expect(mockCloudSync.syncCallCount, equals(2));
+      expect(mockRepo._items.first.syncStatus, equals(SyncStatusType.synced));
+
+      coordinator.dispose();
+    });
+  });
+
+  group('B-1 Tombstone Synchronization Tests', () {
+    MediaItem syncedDeletedItem({String creatorId = 'user-123', String id = 'm-tombstone'}) => MediaItem(
+          id: id,
+          siteId: 'site-1',
+          originalUri: 'media/orig_$id.jpg',
+          uri: 'media/evid_$id.jpg',
+          type: MediaItemType.photo,
+          lat: 22.5,
+          lon: 88.3,
+          capturedAt: DateTime.now(),
+          creatorId: creatorId,
+          syncStatus: SyncStatusType.synced,
+          isDeleted: true,
+        );
+
+    SyncCoordinator buildCoordinator() => SyncCoordinator(
+          mediaRepo: mockRepo,
+          cloudSyncService: mockCloudSync,
+          storageService: mockStorage,
+          authService: fakeAuth,
+          connectivity: fakeConnectivity,
+        );
+
+    /// Deterministic B-1 test pattern: construct an idle coordinator first
+    /// (settles the constructor's initial cycle), then seed the tombstone —
+    /// the tombstone-count edge trigger runs exactly one discovery cycle.
+    Future<SyncCoordinator> buildAndSeed(List<MediaItem> items) async {
+      final coordinator = buildCoordinator();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      mockRepo.setItems(items);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      return coordinator;
+    }
+
+    test('Discovers a synced locally-deleted item, routes it to the tombstone path, and never touches artifact sync or its status', () async {
+      final coordinator = await buildAndSeed([syncedDeletedItem()]);
+
+      expect(mockCloudSync.tombstoneCallCount, equals(1));
+      expect(mockCloudSync.tombstonedMediaIds, contains('m-tombstone'));
+      // The artifact pipeline (files, uploads, hashing) is never invoked for a
+      // tombstone — the cloud ledger write is the only operation.
+      expect(mockCloudSync.syncCallCount, equals(0));
+
+      // The deleted row's artifact-sync status is never written: no false
+      // "synced" claim and no failed/pending churn on a tombstoned row.
+      final row = mockRepo._items.single;
+      expect(row.isDeleted, isTrue);
+      expect(row.syncStatus, equals(SyncStatusType.synced));
+
+      coordinator.dispose();
+    });
+
+    test('Repeated tombstone synchronization is idempotent and keeps the row state stable', () async {
+      final coordinator = await buildAndSeed([syncedDeletedItem()]);
+      expect(mockCloudSync.tombstoneCallCount, equals(1));
+
+      // A later manual cycle rediscovers the candidate; the cloud-side
+      // reconciliation is a no-op for an already-tombstoned document.
+      await coordinator.triggerSync(isManual: true);
+
+      expect(mockCloudSync.tombstoneCallCount, equals(2));
+      final row = mockRepo._items.single;
+      expect(row.syncStatus, equals(SyncStatusType.synced));
+      expect(row.isDeleted, isTrue);
+
+      coordinator.dispose();
+    });
+
+    test('Retryable tombstone failure preserves backoff/manual-retry semantics and never mutates the deleted row status', () async {
+      mockCloudSync.tombstoneExceptionToThrow = RetryableSyncException('Transient network failure');
+      final coordinator = await buildAndSeed([syncedDeletedItem()]);
+
+      expect(mockCloudSync.tombstoneCallCount, equals(1));
+      final row = mockRepo._items.single;
+      expect(row.syncStatus, equals(SyncStatusType.synced));
+      expect(row.isDeleted, isTrue);
+
+      // An immediate automatic cycle respects the scheduled backoff
+      mockCloudSync.tombstoneCallCount = 0;
+      await coordinator.triggerSync(isManual: false);
+      expect(mockCloudSync.tombstoneCallCount, equals(0));
+
+      // Manual retry clears backoff and re-evaluates the tombstone
+      mockCloudSync.tombstoneExceptionToThrow = null;
+      await coordinator.triggerSync(isManual: true);
+      expect(mockCloudSync.tombstoneCallCount, equals(1));
+
+      coordinator.dispose();
+    });
+
+    test('Permanent tombstone failure is suppressed from automatic cycles until manual retry', () async {
+      mockCloudSync.tombstoneExceptionToThrow = PermanentSyncException('Session revoked');
+      final coordinator = await buildAndSeed([syncedDeletedItem()]);
+
+      expect(mockCloudSync.tombstoneCallCount, equals(1));
+      expect(coordinator.state.lastError, isNotNull);
+      // Deleted rows never enter the pending/failed badge counts.
+      expect(coordinator.state.failedCount, equals(0));
+
+      mockCloudSync.tombstoneCallCount = 0;
+      await coordinator.triggerSync(isManual: false);
+      expect(mockCloudSync.tombstoneCallCount, equals(0)); // Suppressed
+
+      mockCloudSync.tombstoneExceptionToThrow = null;
+      await coordinator.triggerSync(isManual: true);
+      expect(mockCloudSync.tombstoneCallCount, equals(1)); // Manual re-evaluates
+
+      coordinator.dispose();
+    });
+
+    test('Tombstones of another creator remain dormant', () async {
+      final coordinator = await buildAndSeed([syncedDeletedItem(creatorId: 'user-OTHER')]);
+
+      expect(mockCloudSync.tombstoneCallCount, equals(0));
+
+      coordinator.dispose();
+    });
+
+    test('Logout during a tombstone batch aborts subsequent tombstone processing', () async {
+      mockCloudSync.onTombstone = (item) async {
+        if (item.id == 'm-t1') {
+          fakeAuth.setUser(null);
+        }
+      };
+      final coordinator = await buildAndSeed([
+        syncedDeletedItem(id: 'm-t1'),
+        syncedDeletedItem(id: 'm-t2'),
+      ]);
+
+      // Only the first tombstone was processed before the session terminated.
+      expect(mockCloudSync.tombstonedMediaIds, equals(['m-t1']));
+
+      coordinator.dispose();
+    });
+
+    test('Soft-deleting a synced item while online edge-triggers a sync cycle', () async {
+      final coordinator = buildCoordinator();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(mockCloudSync.tombstoneCallCount, equals(0));
+
+      // Removal from gallery tombstones the row: the tombstone-count stream
+      // edge-triggers the existing sync pipeline (B-1 discovery).
+      mockRepo.setItems([syncedDeletedItem()]);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(mockCloudSync.tombstoneCallCount, equals(1));
+
+      coordinator.dispose();
+    });
+
+    test('C-2: permanently deleting a published (failed) evidence item propagates its tombstone', () async {
+      final publishedFailedItem = MediaItem(
+        id: 'm-failed',
+        siteId: 'site-1',
+        originalUri: 'media/orig_m-failed.jpg',
+        uri: 'media/evid_m-failed.jpg',
+        type: MediaItemType.photo,
+        lat: 22.5,
+        lon: 88.3,
+        capturedAt: DateTime.now(),
+        creatorId: 'user-123',
+        syncStatus: SyncStatusType.failed, // published: site + ledger doc already created
+        isDeleted: false,
+      );
+      mockRepo.setItems([publishedFailedItem]);
+
+      // User permanently deletes the evidence before it ever synced.
+      await mockRepo.deletePermanently('m-failed');
+
+      final coordinator = buildCoordinator();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      // The tombstone propagated through the existing B-1 path...
+      expect(mockCloudSync.tombstoneCallCount, equals(1));
+      expect(mockCloudSync.tombstonedMediaIds, contains('m-failed'));
+      // ...while the artifact pipeline correctly skipped the deleted row.
+      expect(mockCloudSync.syncCallCount, equals(0));
+
+      // The hidden tombstone row retains its state; the cloud ledger is the
+      // only thing reconciled (is_deleted: true — proven at service level).
+      final row = mockRepo._items.single;
+      expect(row.isDeleted, isTrue);
+      expect(row.syncStatus, SyncStatusType.failed);
+
+      coordinator.dispose();
+    });
+
+    test('C-2: permanently deleting never-published evidence discovers the candidate but the cloud write is a verified no-op', () async {
+      final neverPublishedItem = MediaItem(
+        id: 'm-never-published',
+        siteId: 'site-1',
+        originalUri: 'media/orig_m-never.jpg',
+        uri: 'media/evid_m-never.jpg',
+        type: MediaItemType.photo,
+        lat: 22.5,
+        lon: 88.3,
+        capturedAt: DateTime.now(),
+        creatorId: 'user-123',
+        syncStatus: SyncStatusType.pending,
+        isDeleted: false,
+      );
+      mockRepo.setItems([neverPublishedItem]);
+      await mockRepo.deletePermanently('m-never-published');
+
+      final coordinator = buildCoordinator();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      // The candidate rides the same pipeline; CloudSyncService.syncTombstone
+      // performs no Firestore write for a nonexistent document (proven at
+      // service level: 'No-op for a never-published item'), so no cloud
+      // deletion record is created and nothing is claimed.
+      expect(mockCloudSync.tombstoneCallCount, equals(1));
+      expect(mockCloudSync.syncCallCount, equals(0));
+
+      final row = mockRepo._items.single;
+      expect(row.isDeleted, isTrue);
+      expect(row.syncStatus, SyncStatusType.pending);
+
+      coordinator.dispose();
+    });
+
+    test('C-2: tombstone failure after permanent deletion preserves the recoverable row (deferred propagation)', () async {
+      final publishedFailedItem = MediaItem(
+        id: 'm-failed-deferred',
+        siteId: 'site-1',
+        originalUri: 'media/orig_m-failed-deferred.jpg',
+        uri: 'media/evid_m-failed-deferred.jpg',
+        type: MediaItemType.photo,
+        lat: 22.5,
+        lon: 88.3,
+        capturedAt: DateTime.now(),
+        creatorId: 'user-123',
+        syncStatus: SyncStatusType.failed,
+        isDeleted: false,
+      );
+      mockRepo.setItems([publishedFailedItem]);
+      await mockRepo.deletePermanently('m-failed-deferred');
+
+      mockCloudSync.tombstoneExceptionToThrow = RetryableSyncException('Offline');
+      final coordinator = buildCoordinator();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      // The propagation failed, but the tombstone row was NOT destroyed: the
+      // deferred path remains recoverable.
+      expect(mockCloudSync.tombstoneCallCount, equals(1));
+      final row = mockRepo._items.single;
+      expect(row.isDeleted, isTrue);
+      expect(row.syncStatus, SyncStatusType.failed);
+
+      // A later retry succeeds — the ledger is still reconciled eventually.
+      mockCloudSync.tombstoneExceptionToThrow = null;
+      await coordinator.triggerSync(isManual: true);
+      expect(mockCloudSync.tombstoneCallCount, equals(2));
 
       coordinator.dispose();
     });

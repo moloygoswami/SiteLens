@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/constants/app_constants.dart';
 import '../../../core/utils/gps_utils.dart';
 
 enum CameraCaptureMode {
@@ -160,6 +161,7 @@ class GpsUiFixture {
   final String timestampUtc;
   final String sectorName;
   final String geofenceStatus;
+  final double lowAccuracyThresholdMeters;
 
   /// Physical address resolved from capture coordinates. Null while geocoding
   /// is in-flight; the live camera_screen.dart always passes the live value.
@@ -177,11 +179,12 @@ class GpsUiFixture {
     required this.timestampUtc,
     this.sectorName = '',
     this.geofenceStatus = '',
+    this.lowAccuracyThresholdMeters = AppConstants.gpsDefaultLowAccuracyThresholdMeters,
     this.resolvedAddress,
   });
 
   bool get isLocked => status == GPSFixStatus.high || status == GPSFixStatus.weak;
-  bool get isDegraded => status == GPSFixStatus.poor || (accuracyMeters != null && accuracyMeters! > 20.0);
+  bool get isDegraded => (accuracyMeters == null && hasFix) || (accuracyMeters != null && accuracyMeters! > lowAccuracyThresholdMeters);
   bool get isSearching => status == GPSFixStatus.searching;
   bool get hasFix => status == GPSFixStatus.high || status == GPSFixStatus.weak || status == GPSFixStatus.poor;
 
@@ -192,9 +195,12 @@ class GpsUiFixture {
     switch (blockReason) {
       case GpsBlockReason.permissionDenied:
         return 'Location permission denied — enable it to capture evidence';
+      case GpsBlockReason.permissionUnknown:
+        return 'Location permission unknown — check device settings to capture evidence';
       case GpsBlockReason.serviceDisabled:
         return 'Location service is off — enable it to capture evidence';
-      case GpsBlockReason.cameraUnavailable:
+      case GpsBlockReason.lastKnownOnly:
+        return 'Last known location only — waiting for a live GPS fix';
       case GpsBlockReason.searching:
       case null:
         break;
@@ -206,7 +212,9 @@ class GpsUiFixture {
 
   String get pillLabel {
     if (blockReason == GpsBlockReason.permissionDenied) return 'GPS: Denied';
+    if (blockReason == GpsBlockReason.permissionUnknown) return 'GPS: Unknown';
     if (blockReason == GpsBlockReason.serviceDisabled) return 'GPS: Off';
+    if (blockReason == GpsBlockReason.lastKnownOnly) return 'GPS: Last known';
     if (isSearching) return 'GPS: Searching…';
     final accStr = accuracyMeters != null
         ? '±${accuracyMeters! == accuracyMeters!.roundToDouble() ? accuracyMeters!.toInt() : accuracyMeters!.toStringAsFixed(1)}m'

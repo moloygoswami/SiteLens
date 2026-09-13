@@ -1,8 +1,45 @@
+import 'dart:async';
+import 'dart:io';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+
+enum SessionTerminationReason {
+  userDisabled('Your account has been disabled by an administrator.'),
+  userNotFound('Your account was not found or has been deleted.'),
+  sessionRevoked('Your session has expired or was revoked. Please sign in again.'),
+  unauthenticated('Your session is no longer authenticated. Please sign in again.');
+
+  final String defaultMessage;
+  const SessionTerminationReason(this.defaultMessage);
+}
+
+class SessionVerificationResult {
+  final bool isValid;
+  final bool isNetworkUnreachable;
+  final SessionTerminationReason? reason;
+  final String? message;
+
+  const SessionVerificationResult.valid()
+      : isValid = true,
+        isNetworkUnreachable = false,
+        reason = null,
+        message = null;
+
+  const SessionVerificationResult.invalid(
+    this.reason, {
+    this.message,
+  })  : isValid = false,
+        isNetworkUnreachable = false;
+
+  const SessionVerificationResult.networkUnreachable()
+      : isValid = false,
+        isNetworkUnreachable = true,
+        reason = null,
+        message = 'Network unreachable';
+}
 
 class AuthUser {
   final String uid;
@@ -189,6 +226,46 @@ class AuthService {
     } catch (e) {
       debugPrint('Google Sign-In Error: $e');
       rethrow;
+    }
+  }
+
+  /// Verifies whether the active Firebase session is still valid with Firebase servers.
+  Future<SessionVerificationResult> verifySession() async {
+    final user = _firebaseAuth.currentUser;
+    if (user == null) {
+      return const SessionVerificationResult.invalid(SessionTerminationReason.unauthenticated);
+    }
+    try {
+      await user.reload();
+      final fresh = _firebaseAuth.currentUser;
+      if (fresh == null) {
+        return const SessionVerificationResult.invalid(SessionTerminationReason.userNotFound);
+      }
+      return const SessionVerificationResult.valid();
+    } on FirebaseAuthException catch (e) {
+      debugPrint('AuthService.verifySession FirebaseAuthException: ${e.code} - ${e.message}');
+      if (e.code == 'user-disabled') {
+        return SessionVerificationResult.invalid(SessionTerminationReason.userDisabled, message: e.message);
+      } else if (e.code == 'user-not-found') {
+        return SessionVerificationResult.invalid(SessionTerminationReason.userNotFound, message: e.message);
+      } else if (e.code == 'token-expired' ||
+          e.code == 'user-token-expired' ||
+          e.code == 'invalid-user-token' ||
+          e.code == 'user-mismatch' ||
+          e.code == 'credential-already-in-use') {
+        return SessionVerificationResult.invalid(SessionTerminationReason.sessionRevoked, message: e.message);
+      } else if (e.code == 'network-request-failed') {
+        return const SessionVerificationResult.networkUnreachable();
+      } else {
+        return const SessionVerificationResult.networkUnreachable();
+      }
+    } on SocketException catch (_) {
+      return const SessionVerificationResult.networkUnreachable();
+    } on TimeoutException catch (_) {
+      return const SessionVerificationResult.networkUnreachable();
+    } catch (e) {
+      debugPrint('AuthService.verifySession unexpected error: $e');
+      return const SessionVerificationResult.networkUnreachable();
     }
   }
 

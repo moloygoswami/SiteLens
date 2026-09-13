@@ -92,5 +92,34 @@ void main() {
       expect(satelliteKey.length, equals(64));
       expect(normalKey, isNot(equals(satelliteKey)));
     });
+
+    test('F2: computeCacheKey uses canonicalZoom (18) and canonicalStyleVersion (v2) by default', () {
+      final defaultKey = MapThumbnailService.computeCacheKey(
+        lat: 22.56286,
+        lon: 88.30082,
+        mapType: 'satellite',
+      );
+      final explicitCanonicalKey = MapThumbnailService.computeCacheKey(
+        lat: 22.56286,
+        lon: 88.30082,
+        zoom: MapThumbnailPolicy.canonicalZoom,
+        mapType: 'satellite',
+        styleVersion: MapThumbnailPolicy.canonicalStyleVersion,
+      );
+
+      expect(MapThumbnailPolicy.canonicalZoom, 18);
+      expect(MapThumbnailPolicy.canonicalStyleVersion, 'v2');
+      expect(defaultKey, equals(explicitCanonicalKey));
+
+      // Key must NOT match stale 16 / v1 parameters
+      final oldMismatchedKey = MapThumbnailService.computeCacheKey(
+        lat: 22.56286,
+        lon: 88.30082,
+        zoom: 16,
+        mapType: 'satellite',
+        styleVersion: 'v1',
+      );
+      expect(defaultKey, isNot(equals(oldMismatchedKey)));
+    });
   });
 }

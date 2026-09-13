@@ -82,6 +82,9 @@ class WidgetMockAuthService implements AuthService {
   }
 
   @override
+  Future<SessionVerificationResult> verifySession() async => const SessionVerificationResult.valid();
+
+  @override
   Future<void> signOut() async {
     _currentUser = null;
     _controller.add(null);

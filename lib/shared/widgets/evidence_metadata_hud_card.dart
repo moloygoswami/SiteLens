@@ -184,6 +184,8 @@ class StandaloneMetadataWidget extends StatelessWidget {
 
     final displaySha = hudData.displaySha256;
     final siteCode = hudData.siteCodeText;
+    final accuracyText = hudData.accuracyText;
+    final satellitesText = hudData.satellitesText;
     final isHighContrast = hudData.isHighContrast;
     final isGpsLocked = hudData.isGpsLocked;
 
@@ -317,7 +319,7 @@ class StandaloneMetadataWidget extends StatelessWidget {
                           TextSpan(
                             text: rawAddress.isNotEmpty
                                 ? rawAddress
-                                : 'RESOLVING...',
+                                : 'UNKNOWN LOCATION',
                             style: TextStyle(
                               fontWeight: FontWeight.w400,
                               fontStyle: hudData.isAddressResolving
@@ -493,6 +495,51 @@ class StandaloneMetadataWidget extends StatelessWidget {
                       height: HudLayoutSpec.lineHeight,
                     ),
                   ),
+
+                  // Line 6 (optional): Accuracy & GNSS satellite telemetry tail
+                  if (accuracyText != null || satellitesText != null) ...[
+                    const SizedBox(height: HudLayoutSpec.refLineSpacing),
+                    Text.rich(
+                      TextSpan(
+                        children: [
+                          if (accuracyText != null)
+                            TextSpan(
+                              text: accuracyText,
+                              style: TextStyle(
+                                fontWeight: FontWeight.w400,
+                                color: Colors.white.withAlpha(230),
+                              ),
+                            ),
+                          if (accuracyText != null && satellitesText != null)
+                            TextSpan(
+                              text: ' • ',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w400,
+                                color: Colors.white.withAlpha(180),
+                              ),
+                            ),
+                          if (satellitesText != null)
+                            TextSpan(
+                              text: satellitesText,
+                              style: TextStyle(
+                                fontWeight: FontWeight.w400,
+                                color: Colors.white.withAlpha(180),
+                              ),
+                            ),
+                        ],
+                      ),
+                      softWrap: true,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontFeatures: const [ui.FontFeature.tabularFigures()],
+                        fontSize: smallFontSize,
+                        letterSpacing: 0.05,
+                        height: HudLayoutSpec.lineHeight,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             );
@@ -669,6 +716,7 @@ class EvidenceMetadataHudCard extends StatelessWidget {
     double? availableWidth,
     VoidCallback? onTap,
     bool isHighContrast = false,
+    bool showMinimap = true,
   }) {
     final hasValidFix =
         gps.isLocked && gps.latitude != 0.0 && gps.longitude != 0.0;
@@ -686,6 +734,8 @@ class EvidenceMetadataHudCard extends StatelessWidget {
       captureTime: DateTime.now(),
       headingDegrees: gps.headingDegrees,
       isHighContrast: isHighContrast,
+      showMinimap: showMinimap,
+      lowAccuracyThresholdMeters: gps.lowAccuracyThresholdMeters,
     );
     return EvidenceMetadataHudCard(
       key: key,
@@ -710,6 +760,16 @@ class EvidenceMetadataHudCard extends StatelessWidget {
         final maxAllowedWidth = isLandscape
             ? math.min(HudLayoutSpec.refMaxLandscapeWidth, targetWidth)
             : math.min(parentWidth, targetWidth);
+
+        if (!hudData.showMinimap) {
+          return ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: maxAllowedWidth),
+            child: StandaloneMetadataWidget(
+              hudData: hudData,
+              onTap: onTap,
+            ),
+          );
+        }
 
         return ConstrainedBox(
           constraints: BoxConstraints(maxWidth: maxAllowedWidth),

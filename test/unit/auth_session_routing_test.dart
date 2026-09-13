@@ -81,6 +81,11 @@ class MockAuthService implements AuthService {
     lastPasswordResetEmail = email;
   }
 
+  SessionVerificationResult verificationResult = const SessionVerificationResult.valid();
+
+  @override
+  Future<SessionVerificationResult> verifySession() async => verificationResult;
+
   @override
   Future<void> signOut() async {
     emitUser(null);
@@ -180,12 +185,57 @@ void main() {
       expect(sessionState.isOnboardingCompleted, isTrue);
     });
 
+    test('4b. Authenticated + onboarding complete with revoked permissions keeps authenticatedReady (not onboardingRequired)', () async {
+      SharedPreferences.setMockInitialValues({
+        'sitelens_onboarding_completed_uid-revoked': true,
+      });
+
+      // Core permissions are revoked / denied
+      mockPermission.mockStatus = const SiteLensPermissionStatus(
+        camera: PermissionStatus.denied,
+        location: PermissionStatus.denied,
+        photos: PermissionStatus.denied,
+      );
+
+      const user = AuthUser(uid: 'uid-revoked', email: 'revoked@sitelens.local');
+      mockAuth.emitUser(user);
+      await pumpEventQueue();
+
+      final sessionState = container.read(sessionServiceProvider);
+      expect(sessionState.status, equals(SessionStatus.authenticatedReady));
+      expect(sessionState.isOnboardingCompleted, isTrue);
+    });
+
     test('5. Session restored after restart is not incorrectly treated as first login', () async {
       SharedPreferences.setMockInitialValues({
         'sitelens_onboarding_completed_uid-session-restored': true,
       });
 
       const user = AuthUser(uid: 'uid-session-restored', email: 'restored@sitelens.local');
+      mockAuth.emitUser(user);
+      await pumpEventQueue();
+
+      final sessionState = container.read(sessionServiceProvider);
+      expect(sessionState.status, equals(SessionStatus.authenticatedReady));
+      expect(sessionState.isOnboardingCompleted, isTrue);
+    });
+
+    test('5b. Resume after onboarding completion does not return to onboardingRequired', () async {
+      SharedPreferences.setMockInitialValues({
+        'sitelens_onboarding_completed_uid-resumed': true,
+      });
+
+      const user = AuthUser(uid: 'uid-resumed', email: 'resumed@sitelens.local');
+      mockAuth.emitUser(user);
+      await pumpEventQueue();
+
+      expect(container.read(sessionServiceProvider).status, equals(SessionStatus.authenticatedReady));
+
+      // Simulate re-evaluating state on resume even if permission state changed
+      mockPermission.mockStatus = const SiteLensPermissionStatus(
+        camera: PermissionStatus.denied,
+        location: PermissionStatus.granted,
+      );
       mockAuth.emitUser(user);
       await pumpEventQueue();
 

@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/utils/closed_evidence_integrity.dart';
 import '../../../data/local/database/app_database.dart';
 import '../../../data/local/database/database_provider.dart';
 import '../../../data/repositories/media_repository.dart';
@@ -16,13 +17,6 @@ class SiteAssociationException implements Exception {
   String toString() => 'SiteAssociationException: $message';
 }
 
-class MediaPersistenceException implements Exception {
-  final String message;
-  MediaPersistenceException(this.message);
-
-  @override
-  String toString() => 'MediaPersistenceException: $message';
-}
 
 final mediaPersistenceCoordinatorProvider = Provider<MediaPersistenceCoordinator>((ref) {
   final db = ref.watch(appDatabaseProvider);
@@ -64,6 +58,14 @@ class MediaPersistenceCoordinator {
       );
     }
 
+    // 1b. Strict GPS Fix & Non-(0,0) Coordinate Validation
+    if (!payload.metadataSnapshot.hasValidCoordinates) {
+      await _storageService.cleanupPartialArtifacts(payload.mediaId);
+      throw MediaPersistenceException(
+        'Persistence Error: Evidence capture requires a valid GPS fix. Cannot persist invalid or (0,0) GPS coordinates.',
+      );
+    }
+
     // 2. Phase 2: File Existence & Non-Zero Size Verification
     final filesVerified = await _storageService.verifyArtifactsExist(
       originalRelativePath: payload.originalFilePath,
@@ -91,6 +93,11 @@ class MediaPersistenceCoordinator {
       accuracyM: payload.metadataSnapshot.accuracyMeters,
       lowAccuracy: payload.metadataSnapshot.lowAccuracy,
       altitude: payload.metadataSnapshot.altitudeMeters, // Real capture elevation (vuln-0002)
+      isAltitudeMsl: payload.metadataSnapshot.isAltitudeMsl,
+      verificationStatus: payload.metadataSnapshot.verificationStatus,
+      gnssSatelliteCount: payload.metadataSnapshot.gnssSatelliteCount,
+      gnssSatellitesUsedInFix: payload.metadataSnapshot.gnssSatellitesUsedInFix,
+      gnssFixTimestampUtc: payload.metadataSnapshot.gnssFixTimestampUtc,
       activityTag: null,
       observationType: ObservationType.general,
       linkedMediaId: null,
@@ -143,7 +150,7 @@ class MediaPersistenceCoordinator {
       );
     }
 
-    // 2. Phase 1b: Linked Media Existence Validation
+    // 2. Phase 1b: Linked Media Existence, Creator & Site Isolation Validation
     if (linkedMediaId != null && linkedMediaId.trim().isNotEmpty) {
       final cleanLinkedId = linkedMediaId.trim();
       final linkedEntry = await (_db.select(_db.media)
@@ -155,6 +162,33 @@ class MediaPersistenceCoordinator {
           'Persistence Error: Linked BEFORE media "$cleanLinkedId" does not exist or has been deleted.',
         );
       }
+
+      // Creator isolation: linked candidate must belong to same creator
+      if (snapshot.creatorId != null &&
+          snapshot.creatorId!.isNotEmpty &&
+          linkedEntry.creatorId != null &&
+          linkedEntry.creatorId!.isNotEmpty &&
+          linkedEntry.creatorId != snapshot.creatorId) {
+        throw MediaPersistenceException(
+          'Persistence Error: Linked BEFORE media "$cleanLinkedId" belongs to another creator (${linkedEntry.creatorId}). Cross-user linking prohibited.',
+        );
+      }
+
+      // Site isolation: linked candidate must belong to same site
+      if (linkedEntry.siteId != null &&
+          linkedEntry.siteId!.isNotEmpty &&
+          linkedEntry.siteId != siteId) {
+        throw MediaPersistenceException(
+          'Persistence Error: Linked BEFORE media "$cleanLinkedId" belongs to another site (${linkedEntry.siteId}). Site isolation violation.',
+        );
+      }
+    }
+
+    // Phase 1c: Strict GPS Fix & Non-(0,0) Validation
+    if (!snapshot.hasValidCoordinates) {
+      throw MediaPersistenceException(
+        'Persistence Error: Evidence capture requires a valid GPS fix. Cannot persist invalid or (0,0) GPS coordinates.',
+      );
     }
 
     // 2. Phase 2: File Existence Verification
@@ -177,9 +211,13 @@ class MediaPersistenceCoordinator {
       );
     }
 
-    // 3. Phase 3: Construct Immutable MediaItem
+    // 3. Phase 3: Construct Immutable MediaItem with Enforced Closed Evidence Integrity
     final cleanActivity = activityTag?.trim() ?? '';
-    final cleanNote = note?.trim() ?? '';
+    final validated = ClosedEvidenceIntegrity.enforceIntegrity(
+      observationType: observationType,
+      linkedMediaId: linkedMediaId,
+      note: note,
+    );
 
     final mediaItem = MediaItem(
       id: payload.mediaId,
@@ -193,10 +231,15 @@ class MediaPersistenceCoordinator {
       accuracyM: snapshot.accuracyMeters,
       lowAccuracy: snapshot.lowAccuracy,
       altitude: snapshot.altitudeMeters, // Real capture elevation (vuln-0002)
+      isAltitudeMsl: snapshot.isAltitudeMsl,
+      verificationStatus: snapshot.verificationStatus,
+      gnssSatelliteCount: snapshot.gnssSatelliteCount,
+      gnssSatellitesUsedInFix: snapshot.gnssSatellitesUsedInFix,
+      gnssFixTimestampUtc: snapshot.gnssFixTimestampUtc,
       activityTag: cleanActivity.isNotEmpty ? cleanActivity : null,
       observationType: observationType,
-      linkedMediaId: linkedMediaId,
-      note: cleanNote.isNotEmpty ? cleanNote : null,
+      linkedMediaId: validated.linkedMediaId,
+      note: validated.note,
       capturedAt: snapshot.capturedAtUtc,
       sha256Hash: payload.sha256Hash,
       evidenceSha256Hash: payload.mediaType == MediaItemType.video
@@ -215,6 +258,24 @@ class MediaPersistenceCoordinator {
       });
       return mediaItem;
     } catch (e) {
+      // Consistency Recovery on DB Failure:
+      // Rollback occurred automatically in transaction.
+      // For photo evidence, clean up only derived files while preserving the immutable original camera JPEG.
+      // For video evidence, clean up unpersisted temporary artifacts.
+      if (payload.isPhoto) {
+        try {
+          await _storageService.cleanupPartialArtifacts(payload.mediaId);
+        } catch (_) {}
+      } else {
+        try {
+          await _storageService.deleteLocalMediaFiles(
+            mediaId: payload.mediaId,
+            originalUri: payload.originalFilePath,
+            uri: evidenceRelPath,
+            thumbUri: payload.thumbnailFilePath,
+          );
+        } catch (_) {}
+      }
       throw MediaPersistenceException('SQLite transaction failed: $e');
     }
   }
@@ -233,6 +294,13 @@ class MediaPersistenceCoordinator {
           'Persistence Error: Site "$siteId" does not exist in local database.',
         );
       }
+    }
+
+    // Phase 1c: Strict GPS Fix & Non-(0,0) Validation
+    if (!snapshot.hasValidCoordinates) {
+      throw MediaPersistenceException(
+        'Persistence Error: Evidence capture requires a valid GPS fix. Cannot persist invalid or (0,0) GPS coordinates.',
+      );
     }
 
     final evidenceRelPath = payload.evidenceFilePath ?? payload.originalFilePath;
@@ -260,6 +328,12 @@ class MediaPersistenceCoordinator {
       lon: snapshot.longitude,
       accuracyM: snapshot.accuracyMeters,
       lowAccuracy: snapshot.lowAccuracy,
+      altitude: snapshot.altitudeMeters,
+      isAltitudeMsl: snapshot.isAltitudeMsl,
+      verificationStatus: snapshot.verificationStatus,
+      gnssSatelliteCount: snapshot.gnssSatelliteCount,
+      gnssSatellitesUsedInFix: snapshot.gnssSatellitesUsedInFix,
+      gnssFixTimestampUtc: snapshot.gnssFixTimestampUtc,
       activityTag: null,
       observationType: ObservationType.general,
       linkedMediaId: null,
@@ -281,6 +355,20 @@ class MediaPersistenceCoordinator {
       });
       return mediaItem;
     } catch (e) {
+      if (payload.isPhoto) {
+        try {
+          await _storageService.cleanupPartialArtifacts(payload.mediaId);
+        } catch (_) {}
+      } else {
+        try {
+          await _storageService.deleteLocalMediaFiles(
+            mediaId: payload.mediaId,
+            originalUri: payload.originalFilePath,
+            uri: evidenceRelPath,
+            thumbUri: payload.thumbnailFilePath,
+          );
+        } catch (_) {}
+      }
       throw MediaPersistenceException('Failed to save interrupted recording for later: $e');
     }
   }

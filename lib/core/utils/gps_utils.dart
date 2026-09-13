@@ -14,11 +14,16 @@ enum GpsBlockReason {
   /// Location permission is denied (or denied forever).
   permissionDenied,
 
+  /// The OS could not determine the location permission state. This is NOT a
+  /// denial and must never be reported as one.
+  permissionUnknown,
+
   /// The device's location service is switched off.
   serviceDisabled,
 
-  /// The camera is unavailable or initializing, independent of GPS state.
-  cameraUnavailable,
+  /// Only a cached/last-known location is available — no live fix has been
+  /// received yet. Cached coordinates never unlock evidence capture.
+  lastKnownOnly,
 }
 
 class GPSUtils {
@@ -94,15 +99,22 @@ class GPSUtils {
   }
 
   /// Formats Altitude with clean positive (+) or negative (-) sign and truthful datum label:
-  /// e.g. "+18.4 m ASL" (when MSL is established) or "-43.4 m (WGS84)" (when ellipsoidal),
-  /// or "—" if unavailable.
+  /// e.g. "+18.4 m ASL" (when MSL is established), "-43.4 m (WGS84)" (when ellipsoidal),
+  /// "+18.4 m" (when datum is unknown), or "—" if unavailable.
   static String formatAltitude(
     double? altitudeMeters, {
-    bool isMsl = true,
+    bool? isMsl,
   }) {
     if (altitudeMeters == null) return '—';
     final sign = altitudeMeters >= 0 ? '+' : '';
-    final datumSuffix = isMsl ? 'm ASL' : 'm (WGS84)';
+    final String datumSuffix;
+    if (isMsl == true) {
+      datumSuffix = 'm ASL';
+    } else if (isMsl == false) {
+      datumSuffix = 'm (WGS84)';
+    } else {
+      datumSuffix = 'm';
+    }
     return '$sign${altitudeMeters.toStringAsFixed(1)} $datumSuffix';
   }
 
@@ -114,7 +126,7 @@ class GPSUtils {
     double lon, {
     double? altitudeMeters,
     String? altitudeDisplay,
-    bool isMsl = true,
+    bool? isMsl,
     int decimals = coordinateDecimalPrecision,
   }) {
     final latStr = formatSingleCoordinate(lat, isLatitude: true, decimals: decimals);

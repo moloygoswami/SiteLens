@@ -187,17 +187,15 @@ void main() {
       // Verify header changed to chronological history
       expect(find.text('CHRONOLOGICAL LIFECYCLE HISTORY'), findsOneWidget);
 
-      // Verify LocationTimelineView rendered all 3 steps in order
-      expect(find.text('STEP #1'), findsOneWidget);
-      expect(find.text('STEP #2'), findsOneWidget);
-      expect(find.text('STEP #3'), findsOneWidget);
+      // Lifecycle presentation: no artificial sequential step labels/numbering.
+      expect(find.textContaining('STEP #'), findsNothing);
 
-      // Verify activities
+      // Verify items render in chronological order via activities…
       expect(find.text('Excavation'), findsOneWidget);
       expect(find.text('Rebar Foundation'), findsOneWidget);
       expect(find.text('Concrete Pour'), findsOneWidget);
 
-      // Verify time delta badges
+      // …and positional time deltas (INITIAL CAPTURE first, then elapsed deltas).
       expect(find.text('INITIAL CAPTURE'), findsOneWidget);
       expect(find.text('+3 h later'), findsOneWidget);
       expect(find.text('+1 d 20h later'), findsOneWidget);

@@ -105,6 +105,15 @@ _IsolateOutput _processImageWorker(_IsolateInput input) {
   // 1. Bake EXIF orientation so orientation is canonicalized
   var orientedImage = img.bakeOrientation(decoded);
 
+  // 1.1 EXIF policy (Cross-Cutting Audit A, F-A1): SiteLens evidence artifacts
+  // must not silently inherit unverified original-camera EXIF (GPS, DateTime,
+  // Make/Model, Software, ...). Orientation has already been baked into the
+  // pixels above; canonical evidence metadata lives in
+  // EvidenceMetadataSnapshot / Drift / Firestore and is burned visually into
+  // the HUD. Strip all embedded EXIF before encoding so the evidence JPEG and
+  // thumbnail carry no third-party metadata claims.
+  orientedImage.exif = img.ExifData();
+
   // 1.5 Center crop to match selected framing aspect ratio if requested
   if (input.targetAspectRatio != null) {
     orientedImage = _cropToAspectRatio(orientedImage, input.targetAspectRatio!);
@@ -169,6 +178,7 @@ class EvidenceProcessingService {
     bool showAddress = true,
     bool showMapTile = true,
     CameraAspectRatio? targetAspectRatio,
+    bool Function()? isCancelled,
   }) async {
     final originalFileSizeBytes = originalBytes.length;
 
@@ -182,6 +192,18 @@ class EvidenceProcessingService {
     );
 
     try {
+      if (isCancelled?.call() == true) {
+        await _storageService.cleanupPartialArtifacts(snapshot.mediaId);
+        return ProcessedEvidencePayload.failure(
+          mediaId: snapshot.mediaId,
+          originalFilePath: originalFilePath,
+          originalSha256: originalSha256,
+          originalFileSizeBytes: originalFileSizeBytes,
+          metadataSnapshot: snapshot,
+          errorMessage: 'Evidence processing was cancelled',
+        );
+      }
+
       // 3. Determine target image dimensions on UI isolate using lightweight header parser (no full decode)
       final metadata = JpegMetadataExtractor.extract(originalBytes);
       final (targetW, targetH) = metadata.getTargetDimensions(
@@ -210,6 +232,18 @@ class EvidenceProcessingService {
         hudPngBytes = null;
       }
 
+      if (isCancelled?.call() == true) {
+        await _storageService.cleanupPartialArtifacts(snapshot.mediaId);
+        return ProcessedEvidencePayload.failure(
+          mediaId: snapshot.mediaId,
+          originalFilePath: originalFilePath,
+          originalSha256: originalSha256,
+          originalFileSizeBytes: originalFileSizeBytes,
+          metadataSnapshot: snapshot,
+          errorMessage: 'Evidence processing was cancelled',
+        );
+      }
+
       // 5. Offload CPU-heavy bitmap processing & JPEG encoding to background Isolate
       final isolateInput = _IsolateInput(
         originalBytes: originalBytes,
@@ -220,12 +254,36 @@ class EvidenceProcessingService {
       final isolateResult =
           await Isolate.run(() => _processImageWorker(isolateInput));
 
+      if (isCancelled?.call() == true) {
+        await _storageService.cleanupPartialArtifacts(snapshot.mediaId);
+        return ProcessedEvidencePayload.failure(
+          mediaId: snapshot.mediaId,
+          originalFilePath: originalFilePath,
+          originalSha256: originalSha256,
+          originalFileSizeBytes: originalFileSizeBytes,
+          metadataSnapshot: snapshot,
+          errorMessage: 'Evidence processing was cancelled',
+        );
+      }
+
       // 6. Save derived evidence and thumbnail files atomically
       final paths = await _storageService.saveEvidenceAndThumbnail(
         mediaId: snapshot.mediaId,
         evidenceBytes: isolateResult.evidenceBytes,
         thumbnailBytes: isolateResult.thumbnailBytes,
       );
+
+      if (isCancelled?.call() == true) {
+        await _storageService.cleanupPartialArtifacts(snapshot.mediaId);
+        return ProcessedEvidencePayload.failure(
+          mediaId: snapshot.mediaId,
+          originalFilePath: originalFilePath,
+          originalSha256: originalSha256,
+          originalFileSizeBytes: originalFileSizeBytes,
+          metadataSnapshot: snapshot,
+          errorMessage: 'Evidence processing was cancelled',
+        );
+      }
 
       return ProcessedEvidencePayload(
         isSuccess: true,

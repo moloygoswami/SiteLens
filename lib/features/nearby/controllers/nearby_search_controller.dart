@@ -12,22 +12,41 @@ final nearbySearchControllerProvider = StateNotifierProvider.autoDispose
   final defaultRadius = ref.watch(nearbySettingsProvider);
   String? creatorId;
   try {
-    final authUser = ref.watch(authStateProvider).value;
+    final authUser = ref.read(authStateProvider).value;
     creatorId = authUser?.uid ?? sourceMedia?.creatorId;
+    if (creatorId == null) {
+      final authService = ref.read(authServiceProvider);
+      creatorId = authService.currentUser?.uid;
+    }
   } catch (_) {
     creatorId = sourceMedia?.creatorId;
   }
-  return NearbySearchNotifier(
+  final notifier = NearbySearchNotifier(
     mediaRepo,
     sourceMedia: sourceMedia,
     initialRadiusMeters: defaultRadius,
     creatorId: creatorId,
   );
+  ref.listen<AsyncValue<AuthUser?>>(authStateProvider, (prev, next) {
+    final newUid = next.value?.uid;
+    if (newUid != null && newUid.isNotEmpty && newUid != notifier.creatorId) {
+      notifier.updateCreatorId(newUid);
+    }
+  });
+  return notifier;
 });
 
 class NearbySearchNotifier extends StateNotifier<NearbySearchState> {
   final MediaRepository _mediaRepo;
-  final String? _creatorId;
+  String? _creatorId;
+
+  String? get creatorId => _creatorId;
+
+  void updateCreatorId(String uid) {
+    if (_creatorId == uid) return;
+    _creatorId = uid;
+    executeSearch();
+  }
 
   NearbySearchNotifier(
     this._mediaRepo, {
@@ -51,6 +70,23 @@ class NearbySearchNotifier extends StateNotifier<NearbySearchState> {
   void setCenter(double lat, double lon) {
     if (state.centerLat == lat && state.centerLon == lon) return;
     state = state.copyWith(centerLat: lat, centerLon: lon);
+    executeSearch();
+  }
+
+  /// Sets the target site ID and center point in a single search execution.
+  void setTargetLocation({String? siteId, double? lat, double? lon}) {
+    state = state.copyWith(
+      targetSiteId: siteId ?? state.targetSiteId,
+      centerLat: lat ?? state.centerLat,
+      centerLon: lon ?? state.centerLon,
+    );
+    executeSearch();
+  }
+
+  /// Sets the target site ID explicitly (e.g. when launched from review tag picker).
+  void setTargetSiteId(String? siteId) {
+    if (state.targetSiteId == siteId) return;
+    state = state.copyWith(targetSiteId: siteId);
     executeSearch();
   }
 
@@ -144,7 +180,9 @@ class NearbySearchNotifier extends StateNotifier<NearbySearchState> {
     state = state.copyWith(isLoading: true, clearErrorMessage: true);
 
     try {
-      final siteIdFilter = state.filters.sameSiteOnly ? state.sourceMedia?.siteId : null;
+      final siteIdFilter = state.filters.sameSiteOnly
+          ? (state.sourceMedia?.siteId ?? state.targetSiteId)
+          : null;
 
       final rawResults = await _mediaRepo.findNearbyMedia(
         centerLat: state.centerLat,
@@ -156,6 +194,19 @@ class NearbySearchNotifier extends StateNotifier<NearbySearchState> {
         excludeMediaId: state.sourceMedia?.id,
         creatorId: _creatorId,
       );
+
+      if (!mounted) return;
+
+      Set<String> resolvedIds = const {};
+      final lookupSite = state.sourceMedia?.siteId ?? state.targetSiteId;
+      if (lookupSite != null && lookupSite.isNotEmpty) {
+        resolvedIds = await _mediaRepo.getResolvedMediaIds(
+          siteId: lookupSite,
+          creatorId: _creatorId,
+        );
+      }
+
+      if (!mounted) return;
 
       // Apply date range filters if configured with inclusive local boundaries
       List<NearbyMediaResult> filtered = rawResults;
@@ -188,6 +239,7 @@ class NearbySearchNotifier extends StateNotifier<NearbySearchState> {
       state = state.copyWith(
         isLoading: false,
         results: filtered,
+        resolvedMediaIds: resolvedIds,
       );
     } catch (e) {
       if (!mounted) return;

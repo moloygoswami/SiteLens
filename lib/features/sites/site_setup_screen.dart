@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/theme.dart';
 import '../../app/router.dart';
 import '../../core/services/auth_service.dart';
+import '../../core/services/session_service.dart';
 import '../../domain/models/site_model.dart';
 import '../../shared/utils/responsive_layout.dart';
 import '../../shared/widgets/primary_button.dart';
@@ -16,121 +17,374 @@ class SiteSetupScreen extends ConsumerStatefulWidget {
 }
 
 class _SiteSetupScreenState extends ConsumerState<SiteSetupScreen> {
-  void _showAddCustomSiteDialog() {
+  void _showAddCustomSiteDialog(String? currentUserId) {
     final codeCtrl = TextEditingController();
     final nameCtrl = TextEditingController();
     final addressCtrl = TextEditingController();
+    String? codeError;
+    String? nameError;
+    String? createError;
+    bool isSubmitting = false;
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Add Offline Site / Address', style: AppTypography.titleMedium),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: codeCtrl,
-                decoration: const InputDecoration(labelText: 'Site Code / ID (e.g. 5012)'),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(labelText: 'Site / Structure Name'),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: addressCtrl,
-                decoration: const InputDecoration(labelText: 'Street Address / Location Ref'),
-              ),
-            ],
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Add Offline Site / Address', style: AppTypography.titleMedium),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (createError != null) ...[
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: AppColors.statusRed.withAlpha(20),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: AppColors.statusRed, width: 1),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.error_outline_rounded, color: AppColors.statusRed, size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            createError!,
+                            style: const TextStyle(
+                              color: AppColors.statusRed,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                TextField(
+                  controller: codeCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'Site Code / ID (e.g. 5012)',
+                    errorText: codeError,
+                  ),
+                  onChanged: (_) {
+                    if (codeError != null) {
+                      setDialogState(() => codeError = null);
+                    }
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: nameCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'Site / Structure Name',
+                    errorText: nameError,
+                  ),
+                  onChanged: (_) {
+                    if (nameError != null) {
+                      setDialogState(() => nameError = null);
+                    }
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: addressCtrl,
+                  decoration: const InputDecoration(labelText: 'Street Address / Location Ref'),
+                ),
+              ],
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final code = codeCtrl.text.trim();
+                      final name = nameCtrl.text.trim();
+                      final address = addressCtrl.text.trim();
+
+                      String? localCodeError;
+                      String? localNameError;
+
+                      if (code.isEmpty) {
+                        localCodeError = 'Site code is required';
+                      } else {
+                        final existingSites = ref.read(siteControllerProvider).availableSites;
+                        if (existingSites.any((s) => s.siteCode.trim().toLowerCase() == code.toLowerCase())) {
+                          localCodeError = 'Site code "$code" already exists';
+                        }
+                      }
+
+                      if (name.isEmpty) {
+                        localNameError = 'Site name is required';
+                      }
+
+                      if (localCodeError != null || localNameError != null) {
+                        setDialogState(() {
+                          codeError = localCodeError;
+                          nameError = localNameError;
+                        });
+                        return;
+                      }
+
+                      setDialogState(() {
+                        isSubmitting = true;
+                        createError = null;
+                      });
+
+                      try {
+                        await ref.read(siteControllerProvider.notifier).addCustomOfflineSite(
+                              siteCode: code,
+                              name: name,
+                              address: address,
+                              currentUserId: currentUserId,
+                            );
+                        if (ctx.mounted) {
+                          Navigator.of(ctx).pop();
+                        }
+                      } catch (e) {
+                        if (ctx.mounted) {
+                          setDialogState(() {
+                            isSubmitting = false;
+                            createError = e.toString().replaceFirst('Exception: ', '');
+                          });
+                        }
+                      }
+                    },
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
+              child: isSubmitting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Text('Add & Select'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              if (codeCtrl.text.isNotEmpty && nameCtrl.text.isNotEmpty) {
-                ref.read(siteControllerProvider.notifier).addCustomOfflineSite(
-                      siteCode: codeCtrl.text.trim(),
-                      name: nameCtrl.text.trim(),
-                      address: addressCtrl.text.trim(),
-                    );
-                Navigator.of(ctx).pop();
-              }
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
-            child: const Text('Add & Select'),
-          ),
-        ],
       ),
     );
   }
 
-  void _confirmDeleteSite(SiteModel site) {
+  void _confirmDeleteSite(SiteModel site, String? currentUserId) {
+    bool isDeleting = false;
+    String? deleteError;
+
     showDialog(
       context: context,
       barrierColor: const Color.fromRGBO(0, 0, 0, 0.6),
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        backgroundColor: AppColors.surfaceContainerHigh,
-        title: const Text('Delete Site', style: AppTypography.titleMedium),
-        content: Text('Are you sure you want to remove "${site.name}" from local cached sites?'),
-        actionsPadding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-        actions: [
-          Row(
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          backgroundColor: AppColors.surfaceContainerHigh,
+          title: const Text('Delete Site', style: AppTypography.titleMedium),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => Navigator.of(ctx).pop(),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppRadii.sm),
-                    ),
-                    side: const BorderSide(color: AppColors.border, width: 1.0),
+              Text('Are you sure you want to remove "${site.name}" from local cached sites?'),
+              if (deleteError != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppColors.statusRed.withAlpha(20),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppColors.statusRed, width: 1),
                   ),
-                  child: const Text(
-                    'Cancel',
-                    style: TextStyle(
-                      color: AppColors.textSecondary,
-                      fontWeight: FontWeight.w600,
+                  child: Row(
+                    children: [
+                      const Icon(Icons.error_outline_rounded, color: AppColors.statusRed, size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          deleteError!,
+                          style: const TextStyle(
+                            color: AppColors.statusRed,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+          actionsPadding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+          actions: [
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: isDeleting ? null : () => Navigator.of(ctx).pop(),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppRadii.sm),
+                      ),
+                      side: const BorderSide(color: AppColors.border, width: 1.0),
+                    ),
+                    child: const Text(
+                      'Cancel',
+                      style: TextStyle(
+                        color: AppColors.textSecondary,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: isDeleting
+                        ? null
+                        : () async {
+                            setDialogState(() {
+                              isDeleting = true;
+                              deleteError = null;
+                            });
+                            try {
+                              await ref.read(siteControllerProvider.notifier).deleteSite(
+                                    site.id,
+                                    currentUserId: currentUserId,
+                                  );
+                              if (ctx.mounted) {
+                                Navigator.of(ctx).pop();
+                              }
+                            } catch (e) {
+                              if (ctx.mounted) {
+                                setDialogState(() {
+                                  isDeleting = false;
+                                  deleteError = e.toString().replaceFirst('Exception: ', '');
+                                });
+                              }
+                            }
+                          },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.statusRed,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppRadii.sm),
+                      ),
+                    ),
+                    child: isDeleting
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Text(
+                            'Delete',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
+                          ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSitesContent({
+    required BuildContext context,
+    required SiteState siteState,
+    required String? currentUserId,
+  }) {
+    if (siteState.isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (siteState.errorMessage != null && siteState.availableSites.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline_rounded, size: 48, color: AppColors.statusRed),
+              const SizedBox(height: 12),
+              const Text(
+                'Failed to load sites',
+                style: AppTypography.titleMedium,
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: () {
-                    ref.read(siteControllerProvider.notifier).deleteSite(site.id);
-                    Navigator.of(ctx).pop();
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.statusRed,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppRadii.sm),
-                    ),
-                  ),
-                  child: const Text(
-                    'Delete',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w700,
-                      color: Colors.white,
-                    ),
-                  ),
+              const SizedBox(height: 6),
+              Text(
+                siteState.errorMessage!,
+                style: AppTypography.bodyMedium.copyWith(color: AppColors.textSecondary, fontSize: 12),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: () {
+                  ref.read(siteControllerProvider.notifier).loadSitesAndActiveContext(
+                        currentUserId: currentUserId,
+                      );
+                },
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('Retry'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
                 ),
               ),
             ],
           ),
-        ],
-      ),
+        ),
+      );
+    }
+
+    if (siteState.availableSites.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.location_off_rounded, size: 48, color: AppColors.textMuted),
+            const SizedBox(height: 12),
+            const Text('No cached sites found'),
+            const SizedBox(height: 12),
+            ElevatedButton(
+              onPressed: () => _showAddCustomSiteDialog(currentUserId),
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
+              child: const Text('Add Offline Site'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.separated(
+      itemCount: siteState.availableSites.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      itemBuilder: (context, index) {
+        final site = siteState.availableSites[index];
+        final isSelected = siteState.activeSite?.id == site.id;
+
+        return _buildSiteCard(
+          site: site,
+          isSelected: isSelected,
+          onSelect: () {
+            ref.read(siteControllerProvider.notifier).setActiveSite(
+                  site,
+                  currentUserId: currentUserId,
+                );
+          },
+          onDelete: () => _confirmDeleteSite(site, currentUserId),
+        );
+      },
     );
   }
 
@@ -139,6 +393,9 @@ class _SiteSetupScreenState extends ConsumerState<SiteSetupScreen> {
     final siteState = ref.watch(siteControllerProvider);
     final activeSite = siteState.activeSite;
     final availableSites = siteState.availableSites;
+    final session = ref.watch(sessionServiceProvider);
+    final authUser = ref.watch(authServiceProvider).currentUser;
+    final currentUserId = session.user?.uid ?? authUser?.uid;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -149,7 +406,9 @@ class _SiteSetupScreenState extends ConsumerState<SiteSetupScreen> {
             icon: const Icon(Icons.refresh_rounded),
             tooltip: 'Reload Sites',
             onPressed: () {
-              ref.read(siteControllerProvider.notifier).loadSitesAndActiveContext();
+              ref.read(siteControllerProvider.notifier).loadSitesAndActiveContext(
+                    currentUserId: currentUserId,
+                  );
             },
           ),
           IconButton(
@@ -217,9 +476,6 @@ class _SiteSetupScreenState extends ConsumerState<SiteSetupScreen> {
 
               if (confirm == true) {
                 await ref.read(authServiceProvider).signOut();
-                if (context.mounted) {
-                  Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.root, (route) => false);
-                }
               }
             },
           ),
@@ -322,7 +578,7 @@ class _SiteSetupScreenState extends ConsumerState<SiteSetupScreen> {
                               ),
                               const SizedBox(height: 20),
                               OutlinedButton.icon(
-                                onPressed: _showAddCustomSiteDialog,
+                                onPressed: () => _showAddCustomSiteDialog(currentUserId),
                                 icon: const Icon(Icons.add_rounded, size: 18),
                                 label: const Text('Add New Custom Site', style: TextStyle(fontWeight: FontWeight.w700)),
                                 style: OutlinedButton.styleFrom(
@@ -373,41 +629,11 @@ class _SiteSetupScreenState extends ConsumerState<SiteSetupScreen> {
                               ),
                               const SizedBox(height: 12),
                               Expanded(
-                                child: siteState.isLoading
-                                    ? const Center(child: CircularProgressIndicator())
-                                    : availableSites.isEmpty
-                                        ? Center(
-                                            child: Column(
-                                              mainAxisAlignment: MainAxisAlignment.center,
-                                              children: [
-                                                const Icon(Icons.location_off_rounded, size: 48, color: AppColors.textMuted),
-                                                const SizedBox(height: 12),
-                                                const Text('No cached sites found'),
-                                                const SizedBox(height: 12),
-                                                ElevatedButton(
-                                                  onPressed: _showAddCustomSiteDialog,
-                                                  child: const Text('Add Offline Site'),
-                                                ),
-                                              ],
-                                            ),
-                                          )
-                                        : ListView.separated(
-                                            itemCount: availableSites.length,
-                                            separatorBuilder: (_, __) => const SizedBox(height: 10),
-                                            itemBuilder: (context, index) {
-                                              final site = availableSites[index];
-                                              final isSelected = activeSite?.id == site.id;
-
-                                              return _buildSiteCard(
-                                                site: site,
-                                                isSelected: isSelected,
-                                                onSelect: () {
-                                                  ref.read(siteControllerProvider.notifier).setActiveSite(site);
-                                                },
-                                                onDelete: () => _confirmDeleteSite(site),
-                                              );
-                                            },
-                                          ),
+                                child: _buildSitesContent(
+                                  context: context,
+                                  siteState: siteState,
+                                  currentUserId: currentUserId,
+                                ),
                               ),
                             ],
                           ),
@@ -490,7 +716,7 @@ class _SiteSetupScreenState extends ConsumerState<SiteSetupScreen> {
                             ),
                           ),
                           TextButton.icon(
-                            onPressed: _showAddCustomSiteDialog,
+                            onPressed: () => _showAddCustomSiteDialog(currentUserId),
                             icon: const Icon(Icons.add_rounded, size: 18),
                             label: const Text('+ Add Site', style: TextStyle(fontWeight: FontWeight.w700)),
                             style: TextButton.styleFrom(foregroundColor: AppColors.primary),
@@ -501,41 +727,11 @@ class _SiteSetupScreenState extends ConsumerState<SiteSetupScreen> {
 
                       // Sites List
                       Expanded(
-                        child: siteState.isLoading
-                            ? const Center(child: CircularProgressIndicator())
-                            : availableSites.isEmpty
-                                ? Center(
-                                    child: Column(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        const Icon(Icons.location_off_rounded, size: 48, color: AppColors.textMuted),
-                                        const SizedBox(height: 12),
-                                        const Text('No cached sites found'),
-                                        const SizedBox(height: 12),
-                                        ElevatedButton(
-                                          onPressed: _showAddCustomSiteDialog,
-                                          child: const Text('Add Offline Site'),
-                                        ),
-                                      ],
-                                    ),
-                                  )
-                                : ListView.separated(
-                                    itemCount: availableSites.length,
-                                    separatorBuilder: (_, __) => const SizedBox(height: 12),
-                                    itemBuilder: (context, index) {
-                                      final site = availableSites[index];
-                                      final isSelected = activeSite?.id == site.id;
-
-                                      return _buildSiteCard(
-                                        site: site,
-                                        isSelected: isSelected,
-                                        onSelect: () {
-                                          ref.read(siteControllerProvider.notifier).setActiveSite(site);
-                                        },
-                                        onDelete: () => _confirmDeleteSite(site),
-                                      );
-                                    },
-                                  ),
+                        child: _buildSitesContent(
+                          context: context,
+                          siteState: siteState,
+                          currentUserId: currentUserId,
+                        ),
                       ),
 
                       const SizedBox(height: 12),

@@ -268,7 +268,50 @@ class _GalleryFilterModalState extends ConsumerState<GalleryFilterModal> {
             ),
             const SizedBox(height: 16),
 
-            // 4. Low Accuracy Toggle
+            // 4. Sync Status Filter
+            const Text(
+              'SYNC STATUS',
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textSecondary,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceContainer,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<SyncStatusType?>(
+                  value: _selectedSync,
+                  isExpanded: true,
+                  dropdownColor: AppColors.surfaceContainerHigh,
+                  hint: const Text('All Sync States', style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+                  items: [
+                    const DropdownMenuItem<SyncStatusType?>(
+                      value: null,
+                      child: Text('All Sync States', style: TextStyle(fontSize: 13, color: AppColors.textPrimary)),
+                    ),
+                    ...SyncStatusType.values.map((status) => DropdownMenuItem<SyncStatusType?>(
+                          value: status,
+                          child: Text(
+                            status.name[0].toUpperCase() + status.name.substring(1),
+                            style: const TextStyle(fontSize: 13, color: AppColors.textPrimary),
+                          ),
+                        )),
+                  ],
+                  onChanged: (val) => setState(() => _selectedSync = val),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // 5. Low Accuracy Toggle
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text(

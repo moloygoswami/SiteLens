@@ -157,6 +157,18 @@ class MapThumbnailNotifier extends StateNotifier<MapThumbnailState> {
     if (cached == null && _transitionTargetMapType == null) {
       _fetchStaticImageInBackground(newLat, newLon, mapType);
     }
+
+    // Pre-warm authentic live snapshot if map view is ready and no valid snapshot exists for new coordinates
+    if (state.isLiveMapInitialized && _liveSnapshotProvider != null && _transitionTargetMapType == null) {
+      final valid = getValidCachedSnapshotBytes(lat: newLat, lon: newLon, mapType: mapType);
+      if (valid == null) {
+        unawaited(prewarmLiveSnapshot(
+          lat: newLat,
+          lon: newLon,
+          mapType: mapType,
+        ));
+      }
+    }
   }
 
   Future<void> _fetchStaticImageInBackground(
@@ -251,9 +263,74 @@ class MapThumbnailNotifier extends StateNotifier<MapThumbnailState> {
   double? _latestLiveSnapshotLon;
   AppMapType? _latestLiveSnapshotMapType;
 
+  bool _isPrewarming = false;
+
   /// Registers (or clears, with null) the live map snapshot provider.
+  /// When registered and live GPS fix is ready, proactively pre-warms the snapshot.
   void registerLiveSnapshotProvider(Future<Uint8List?> Function()? provider) {
     _liveSnapshotProvider = provider;
+    if (provider != null && state.isLocked && (state.lat != 0.0 || state.lon != 0.0) && _transitionTargetMapType == null) {
+      unawaited(prewarmLiveSnapshot(
+        lat: state.lat,
+        lon: state.lon,
+        mapType: state.mapType,
+      ));
+    }
+  }
+
+  /// Pre-warms and retains the authentic live map snapshot as soon as the live
+  /// GPS fix and map view are ready, persisting it to disk cache and in-memory cache.
+  Future<Uint8List?> prewarmLiveSnapshot({
+    required double lat,
+    required double lon,
+    required AppMapType mapType,
+    bool force = false,
+  }) async {
+    if (lat == 0.0 && lon == 0.0) return null;
+    if (_transitionTargetMapType != null) return null;
+    if (_isPrewarming) return null;
+
+    if (!force) {
+      final existing = getValidCachedSnapshotBytes(
+        lat: lat,
+        lon: lon,
+        mapType: mapType,
+      );
+      if (existing != null) {
+        return existing;
+      }
+    }
+
+    final provider = _liveSnapshotProvider;
+    if (provider == null) return null;
+
+    final captureGeneration = _mapTypeGeneration;
+    _isPrewarming = true;
+    try {
+      final snapshotFuture = Future<Uint8List?>.value(provider());
+      final result = await snapshotFuture.timeout(
+        const Duration(milliseconds: 2200),
+        onTimeout: () => null,
+      );
+
+      if (result != null && result.isNotEmpty && _mapTypeGeneration == captureGeneration) {
+        _cacheLiveSnapshot(result, lat: lat, lon: lon, mapType: mapType);
+        await updateLiveSnapshot(
+          result,
+          lat: lat,
+          lon: lon,
+          mapType: mapType,
+          captureGeneration: captureGeneration,
+        );
+        debugPrint('[MapThumbnailNotifier] Pre-warmed authentic live map snapshot at ($lat, $lon)');
+        return result;
+      }
+    } catch (e) {
+      debugPrint('[MapThumbnailNotifier] Pre-warm live snapshot failed: $e');
+    } finally {
+      _isPrewarming = false;
+    }
+    return null;
   }
 
   /// Returns the latest in-memory live map snapshot if it satisfies the strict
@@ -410,6 +487,31 @@ class MapThumbnailNotifier extends StateNotifier<MapThumbnailState> {
         debugPrint('[MapThumbnailNotifier] Shutter used verified recent authentic map snapshot fallback');
         return validRecentBytes;
       }
+
+      // 4. Disk cache fallback if in-memory was cleared but disk cache has matching authentic file
+      if (state.cachedImage != null &&
+          state.cachedImage!.existsSync() &&
+          state.mapType == expectedMapType &&
+          state.lastUpdate != null) {
+        final age = DateTime.now().difference(state.lastUpdate!);
+        final distance = MapThumbnailService.haversineDistanceMeters(
+          state.lat,
+          state.lon,
+          lat,
+          lon,
+        );
+        if (age <= const Duration(minutes: 5) &&
+            distance <= MapThumbnailPolicy.movementThresholdMeters) {
+          try {
+            final diskBytes = await state.cachedImage!.readAsBytes();
+            if (diskBytes.isNotEmpty) {
+              _cacheLiveSnapshot(diskBytes, lat: state.lat, lon: state.lon, mapType: expectedMapType);
+              debugPrint('[MapThumbnailNotifier] Shutter used verified disk-cached authentic snapshot fallback');
+              return diskBytes;
+            }
+          } catch (_) {}
+        }
+      }
     }
 
     return null;
@@ -491,6 +593,13 @@ class MapThumbnailNotifier extends StateNotifier<MapThumbnailState> {
       isLiveMapInitialized: true,
       failureCount: 0,
     );
+    if (state.isLocked && (state.lat != 0.0 || state.lon != 0.0) && _transitionTargetMapType == null) {
+      unawaited(prewarmLiveSnapshot(
+        lat: state.lat,
+        lon: state.lon,
+        mapType: state.mapType,
+      ));
+    }
   }
 
   void onLiveMapFailed() {

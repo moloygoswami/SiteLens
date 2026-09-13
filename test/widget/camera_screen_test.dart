@@ -7,12 +7,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:camera/camera.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:drift/drift.dart';
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:sqlite3/open.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:sitelens/app/router.dart';
 import 'package:sitelens/core/services/auth_service.dart';
+import 'package:sitelens/core/services/permission_service.dart';
 import 'package:sitelens/data/local/database/app_database.dart';
 import 'package:sitelens/data/local/database/database_provider.dart';
 import 'package:sitelens/data/repositories/media_repository.dart';
@@ -45,6 +47,8 @@ import 'package:sitelens/features/camera/models/processed_evidence_payload.dart'
 import 'package:sitelens/features/camera/models/evidence_metadata_snapshot.dart';
 import 'package:sitelens/features/review/models/pending_capture_payload.dart';
 import 'package:sitelens/features/review/review_tag_screen.dart';
+import 'package:sitelens/core/controllers/watermark_settings_controller.dart';
+import 'package:sitelens/shared/widgets/evidence_metadata_hud_card.dart';
 
 class TestCameraService extends CameraHardwareService {
   @override
@@ -120,6 +124,9 @@ class _CameraTestAuthService implements AuthService {
 
   @override
   Stream<AuthUser?> get authStateChanges => Stream.value(const AuthUser(uid: 'test-user', email: 'test@sitelens.local'));
+
+  @override
+  Future<SessionVerificationResult> verifySession() async => const SessionVerificationResult.valid();
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -219,6 +226,36 @@ class _RecordingRecoveryCameraService extends CameraHardwareService {
   Future<double> getMaxZoomLevel(CameraController controller) async => 5.0;
 }
 
+class MockEmptyCameraService extends CameraHardwareService {
+  @override
+  Future<List<CameraDescription>> getAvailableCameras() async => [];
+}
+
+class _CameraTestPermissionService extends PermissionService {
+  _CameraTestPermissionService() {
+    state = const SiteLensPermissionStatus(
+      camera: PermissionStatus.granted,
+      location: PermissionStatus.granted,
+      photos: PermissionStatus.granted,
+    );
+  }
+
+  @override
+  Future<SiteLensPermissionStatus> checkAllPermissions() async {
+    return state;
+  }
+
+  @override
+  Future<PermissionStatus> checkCameraPermission() async {
+    return state.camera;
+  }
+
+  @override
+  Future<PermissionStatus> requestCameraPermission() async {
+    return state.camera;
+  }
+}
+
 class MockSiteRepository implements SiteRepository {
   final SiteModel site;
   MockSiteRepository(this.site);
@@ -233,7 +270,10 @@ class MockSiteRepository implements SiteRepository {
   Future<void> saveSite(SiteModel site) async {}
 
   @override
-  Future<void> deleteSite(String id) async {}
+  Future<void> deleteSite(String id, {String? creatorId}) async {}
+
+  @override
+  Future<bool> hasMediaForSite(String siteId) async => false;
 
   @override
   Future<void> seedDefaultSitesIfEmpty() async {}
@@ -304,6 +344,7 @@ class _ReentrancyCameraHardwareNotifier extends CameraHardwareNotifier {
   final CameraHardwareService service;
   final Directory tempDir;
   int takePhotoCallCount = 0;
+  bool shouldFail = false;
 
   @override
   Future<void> initialize() async {
@@ -313,6 +354,9 @@ class _ReentrancyCameraHardwareNotifier extends CameraHardwareNotifier {
   @override
   Future<XFile?> takePhoto() async {
     takePhotoCallCount++;
+    if (shouldFail) {
+      throw Exception('Simulated camera hardware fault');
+    }
     state = state.copyWith(status: CameraStatus.capturing);
     try {
       final testImg = img.Image(width: 10, height: 10);
@@ -356,6 +400,7 @@ class _ReentrancyEvidenceProcessingService implements EvidenceProcessingService 
     bool showAddress = true,
     bool showMapTile = true,
     CameraAspectRatio? targetAspectRatio,
+    bool Function()? isCancelled,
   }) async {
     return ProcessedEvidencePayload(
       isSuccess: true,
@@ -387,6 +432,8 @@ Widget createCameraTestWidget({
   final db = AppDatabase(NativeDatabase.memory());
   return ProviderScope(
     overrides: [
+      authServiceProvider.overrideWithValue(_CameraTestAuthService()),
+      permissionServiceProvider.overrideWith((ref) => _CameraTestPermissionService()),
       cameraHardwareServiceProvider.overrideWithValue(TestCameraService()),
       locationHardwareServiceProvider.overrideWithValue(TestLocationService()),
       activeSiteMediaStreamProvider.overrideWith((ref) => Stream.value([])),
@@ -461,6 +508,35 @@ void main() {
       expect(find.byType(CameraSwitcher), findsOneWidget);
     });
 
+    testWidgets('F3: Live minimap disappears when Mini Map Tile is disabled and returns when enabled', (tester) async {
+      SharedPreferences.setMockInitialValues({'setting_watermark_show_map_tile': true});
+
+      await tester.pumpWidget(createCameraTestWidget());
+      await tester.pumpAndSettle();
+
+      // Enabled by default: minimap tile is rendered
+      expect(find.byType(GpsMapThumbnail), findsOneWidget);
+      expect(find.byType(StandaloneMinimapWidget), findsOneWidget);
+
+      // Disable Mini Map Tile setting
+      final element = tester.element(find.byType(CameraScreen));
+      final container = ProviderScope.containerOf(element);
+      await container.read(watermarkSettingsProvider.notifier).setShowMapTile(false);
+      await tester.pumpAndSettle();
+
+      // Disabled: minimap tile must NOT be displayed in live viewfinder
+      expect(find.byType(GpsMapThumbnail), findsNothing);
+      expect(find.byType(StandaloneMinimapWidget), findsNothing);
+
+      // Re-enable Mini Map Tile setting
+      await container.read(watermarkSettingsProvider.notifier).setShowMapTile(true);
+      await tester.pumpAndSettle();
+
+      // Returns when enabled
+      expect(find.byType(GpsMapThumbnail), findsOneWidget);
+      expect(find.byType(StandaloneMinimapWidget), findsOneWidget);
+    });
+
     testWidgets('HUD shows truthful fix-status geofence label: GPS Fixed with a fix (never Active Site)', (tester) async {
       // Valid fix, no site coordinates -> "GPS Fixed" (never "Active Site").
       await tester.pumpWidget(createCameraTestWidget());
@@ -499,6 +575,8 @@ void main() {
 
       await tester.pumpWidget(ProviderScope(
         overrides: [
+          authServiceProvider.overrideWithValue(_CameraTestAuthService()),
+          permissionServiceProvider.overrideWith((ref) => _CameraTestPermissionService()),
           cameraHardwareServiceProvider.overrideWithValue(TestCameraService()),
           locationHardwareServiceProvider.overrideWithValue(searchingLocationService),
         ],
@@ -516,8 +594,8 @@ void main() {
 
       expect(find.textContaining('GPS: Searching'), findsOneWidget);
       // No camera + no GPS: the banner must never claim readiness. It states
-      // that camera access is required; the GPS pill carries the cause.
-      expect(find.textContaining('CAMERA ACCESS REQUIRED'), findsWidgets);
+      // that optical sensor is unavailable; the GPS pill carries the cause.
+      expect(find.textContaining('OPTICAL SENSOR UNAVAILABLE'), findsWidgets);
       expect(find.byIcon(Icons.lock_rounded), findsOneWidget);
     });
 
@@ -544,11 +622,11 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      // No camera in test env: banner correctly reports camera access required
+      // No camera in test env: banner correctly reports optical sensor unavailable
       // rather than claiming readiness. The GPS pill shows the
       // degraded GPS state truthfully.
       expect(find.textContaining('GPS: Poor'), findsOneWidget);
-      expect(find.textContaining('CAMERA ACCESS REQUIRED'), findsWidgets);
+      expect(find.textContaining('OPTICAL SENSOR UNAVAILABLE'), findsWidgets);
       expect(find.byIcon(Icons.lock_rounded), findsOneWidget);
     });
 
@@ -752,21 +830,25 @@ void main() {
 
     testWidgets('Unavailable camera state blocks capture and provides clear guidance', (tester) async {
       // No cameras in the test service -> CameraStatus.unavailable
-      await tester.pumpWidget(createCameraTestWidget());
+      await tester.pumpWidget(createCameraTestWidget(
+        overrides: [
+          cameraHardwareServiceProvider.overrideWithValue(MockEmptyCameraService()),
+        ],
+      ));
       await tester.pumpAndSettle();
 
-      // Viewfinder states camera access is required with retry button
-      expect(find.text('CAMERA ACCESS REQUIRED'), findsWidgets);
+      // Viewfinder states optical sensor is unavailable with retry button
+      expect(find.text('OPTICAL SENSOR UNAVAILABLE'), findsWidgets);
       expect(find.text('RETRY CAMERA'), findsOneWidget);
 
       // Shutter is locked (lock icon), capture is not permitted.
       expect(find.byIcon(Icons.lock_rounded), findsOneWidget);
-      expect(find.text('Camera access required to capture evidence.'), findsOneWidget);
+      expect(find.text('Optical sensor unavailable — evidence capture disabled.'), findsOneWidget);
 
       // Pressing the shutter shows the unmistakable blocker, never a fake capture.
       await tester.tap(find.byType(ShutterButton), warnIfMissed: false);
       await tester.pumpAndSettle();
-      expect(find.textContaining('Camera access is required to capture evidence.'), findsWidgets);
+      expect(find.textContaining('Optical sensor is unavailable on this device.'), findsWidgets);
     });
   });
 
@@ -785,6 +867,8 @@ void main() {
     }) {
       return ProviderScope(
         overrides: [
+          authServiceProvider.overrideWithValue(_CameraTestAuthService()),
+          permissionServiceProvider.overrideWith((ref) => _CameraTestPermissionService()),
           cameraHardwareServiceProvider.overrideWithValue(cameraService),
           locationHardwareServiceProvider.overrideWithValue(TestLocationService()),
           activeSiteMediaStreamProvider.overrideWith((ref) => Stream.value([])),
@@ -972,6 +1056,62 @@ void main() {
       expect(coordinator.keepForLaterCalls, 0);
     });
 
+    testWidgets('C-1: Normal video stop hands off cleanly — no interrupted-recording state remains', (tester) async {
+      final videoFile = (await tester.runAsync(createTempVideoFile))!;
+      final cameraService = _RecordingRecoveryCameraService(videoFile);
+
+      await tester.pumpWidget(buildRecoveryTestWidget(
+        cameraService: cameraService,
+        coordinator: _RecordingRecoveryCoordinator(),
+      ));
+      await tester.pumpAndSettle();
+
+      final element = tester.element(find.byType(CameraScreen));
+      final notifier = ProviderScope.containerOf(element).read(cameraHardwareProvider.notifier);
+
+      // Switch to video capture mode through the mode switcher UI.
+      await tester.tap(find.text('VIDEO'));
+      await tester.pumpAndSettle();
+
+      // Start recording, then stop through the screen's normal handoff path
+      // (shutter tap while recording).
+      await tester.runAsync(() async {
+        final started = await notifier.startVideoRecording();
+        expect(started, isTrue, reason: 'video recording must start');
+      });
+      await tester.pumpAndSettle();
+
+      await tester.runAsync(() async {
+        await tester.tap(find.byType(ShutterButton), warnIfMissed: false);
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      });
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+
+      // The recording reached the review flow.
+      expect(find.byType(ReviewTagScreen), findsOneWidget);
+
+      // C-1: the handoff cleared the in-flight reference and the
+      // interrupted-recording flag.
+      expect(notifier.inFlightVideoFile, null);
+      expect(notifier.state.hasInterruptedRecording, isFalse);
+
+      // The C-1 regression: a later pause/resume cycle must not raise a false
+      // interrupted-recording recovery for the already-handed-off recording.
+      await tester.runAsync(() async {
+        await notifier.pauseCamera();
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await notifier.resumeCamera();
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(notifier.state.hasInterruptedRecording, isFalse);
+      expect(find.text('Recording interrupted'), findsNothing);
+    });
+
     testWidgets('Viewfinder toggles Outdoor High-Contrast mode when button tapped', (tester) async {
       await tester.pumpWidget(createCameraTestWidget());
       await tester.pumpAndSettle();
@@ -1012,9 +1152,9 @@ void main() {
     });
   });
 
-  group('F3 Shutter Button State Machine Re-Entrancy Hazard Confirmation', () {
+  group('F3 Shutter Button State Machine Re-Entrancy Hazard Remediation', () {
     testWidgets(
-        'Confirms F3: Rapid shutter re-activation during in-flight post-hardware processing triggers overlapping capture and duplicate review navigation',
+        'Verifies F3 remediation: Rapid shutter re-activation during in-flight post-hardware processing is safely ignored and produces exactly one review navigation',
         (tester) async {
       final tempDir = Directory.systemTemp.createTempSync('sitelens_f3_reentrancy_');
       addTearDown(() {
@@ -1074,22 +1214,22 @@ void main() {
       final shutterButtonBeforeSecondTap = tester.widget<ShutterButton>(find.byType(ShutterButton));
       expect(
         shutterButtonBeforeSecondTap.isLocked,
-        isFalse,
-        reason: 'Criterion 2: Shutter button is prematurely unlocked in UI because takePhoto finally block reset status to ready',
+        isTrue,
+        reason: 'Criterion 2: Shutter button is locked in UI via screen-level _isExecutingCapture lock during capture transaction',
       );
 
       // 3. Second shutter activation occurs during that in-flight interval
-      await tester.tap(find.byType(ShutterButton));
+      await tester.tap(find.byType(ShutterButton), warnIfMissed: false);
       await tester.pump();
 
-      // 4. Overlapping capture is actually observed
+      // 4. Overlapping capture is blocked
       expect(
         cameraNotifier.takePhotoCallCount,
-        2,
-        reason: 'Criterion 4: Overlapping capture observed — second shutter actuation entered takePhoto() concurrently while first was still in flight',
+        1,
+        reason: 'Criterion 4: Overlapping capture prevented — second shutter actuation was safely dropped by mutex',
       );
 
-      // 5. Release post-hardware processing and verify navigation behavior is consistent with stated F3 hypothesis
+      // 5. Release post-hardware processing and verify exactly one review route is pushed
       gateCompleter.complete(Uint8List.fromList([1, 2, 3, 4]));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
@@ -1097,10 +1237,537 @@ void main() {
 
       expect(
         navObserver.pushedRouteCount,
-        2,
-        reason: 'Criterion 5: Navigation behavior is consistent with F3 hypothesis — uncoordinated concurrent captures pushed duplicate review routes',
+        1,
+        reason: 'Criterion 5: Exactly one review route was pushed without duplicate transitions',
       );
       expect(find.byType(ReviewTagScreen), findsOneWidget);
     });
+
+    testWidgets('Verifies shutter capture lock releases cleanly after capture failure', (tester) async {
+      final tempDir = Directory.systemTemp.createTempSync('sitelens_f3_error_');
+      addTearDown(() {
+        if (tempDir.existsSync()) {
+          tempDir.deleteSync(recursive: true);
+        }
+      });
+
+      final cameraNotifier = _ReentrancyCameraHardwareNotifier(TestCameraService(), tempDir);
+      final navObserver = _ReentrancyNavigatorObserver();
+
+      await tester.pumpWidget(createCameraTestWidget(
+        overrides: [
+          cameraHardwareProvider.overrideWith((ref) => cameraNotifier),
+          evidenceStorageServiceProvider.overrideWithValue(_ReentrancyEvidenceStorageService()),
+          evidenceProcessingServiceProvider.overrideWithValue(_ReentrancyEvidenceProcessingService()),
+          authServiceProvider.overrideWithValue(_CameraTestAuthService()),
+        ],
+        navigatorObservers: [navObserver],
+      ));
+      await tester.pumpAndSettle();
+
+      // Ensure shutter ready initially
+      expect(tester.widget<ShutterButton>(find.byType(ShutterButton)).isLocked, isFalse);
+
+      // Force failure on hardware capture
+      cameraNotifier.shouldFail = true;
+      await tester.tap(find.byType(ShutterButton));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pumpAndSettle();
+
+      // Error was handled, no route pushed, and snackbar shown
+      expect(navObserver.pushedRouteCount, 0);
+      expect(find.textContaining('Simulated camera hardware fault'), findsOneWidget);
+
+      // Lock is released and shutter is ready again
+      expect(tester.widget<ShutterButton>(find.byType(ShutterButton)).isLocked, isFalse);
+
+      // Register live snapshot provider so second capture succeeds cleanly
+      final element = tester.element(find.byType(CameraScreen));
+      final container = ProviderScope.containerOf(element);
+      container.read(mapThumbnailControllerProvider.notifier).registerLiveSnapshotProvider(
+        () async => Uint8List.fromList([1, 2, 3, 4]),
+      );
+
+      // Dismiss the error snackbar so it does not obscure shutter hit test
+      ScaffoldMessenger.of(element).clearSnackBars();
+      await tester.pumpAndSettle();
+
+      // Retry capture with failure cleared
+      cameraNotifier.shouldFail = false;
+      await tester.tap(find.byType(ShutterButton));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pumpAndSettle();
+
+      // Exactly one route pushed on retry
+      expect(navObserver.pushedRouteCount, 1);
+      expect(find.byType(ReviewTagScreen), findsOneWidget);
+    });
   });
+
+  group('A2 CameraX Route Coverage Lifecycle', () {
+    testWidgets(
+        'CameraX is released while CameraScreen is covered and reacquired when visible',
+        (tester) async {
+      final service = _RouteLifecycleCameraService();
+      await tester.pumpWidget(createCameraTestWidget(
+        navigatorObservers: [appRouteObserver],
+        overrides: [
+          cameraHardwareServiceProvider.overrideWithValue(service),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(CameraScreen)),
+      );
+
+      // Visible -> active, exactly one camera resource.
+      expect(container.read(cameraHardwareProvider).status, CameraStatus.ready);
+      expect(service.initializeControllerCalls, 1);
+      expect(service.liveControllers, 1);
+
+      // Covered by a page route (gallery / video evidence / fullscreen).
+      await _pushCoveringPage(tester);
+      expect(
+        container.read(cameraHardwareProvider).status,
+        CameraStatus.unavailable,
+      );
+      expect(service.liveControllers, 0);
+
+      // Visible again -> safely reactivated.
+      await _popCoveringPage(tester);
+      expect(container.read(cameraHardwareProvider).status, CameraStatus.ready);
+      expect(service.liveControllers, 1);
+      expect(service.initializeControllerCalls, 2);
+    });
+
+    testWidgets(
+        'repeated cover/reveal cycles never duplicate initialization nor leak',
+        (tester) async {
+      final service = _RouteLifecycleCameraService();
+      await tester.pumpWidget(createCameraTestWidget(
+        navigatorObservers: [appRouteObserver],
+        overrides: [
+          cameraHardwareServiceProvider.overrideWithValue(service),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(CameraScreen)),
+      );
+      expect(service.initializeControllerCalls, 1);
+      expect(service.liveControllers, 1);
+
+      for (var cycle = 0; cycle < 3; cycle++) {
+        await _pushCoveringPage(tester, label: 'COVER $cycle');
+        expect(service.liveControllers, 0,
+            reason: 'covered: CameraX must be released');
+        expect(container.read(cameraHardwareProvider).status,
+            CameraStatus.unavailable);
+
+        await _popCoveringPage(tester);
+        expect(service.liveControllers, 1,
+            reason: 'visible: exactly one camera resource');
+        expect(container.read(cameraHardwareProvider).status,
+            CameraStatus.ready);
+        expect(service.initializeControllerCalls, cycle + 2);
+      }
+
+      // No leaked controllers: everything created is either live or disposed.
+      expect(
+        service.disposeControllerCalls,
+        service.createControllerCalls - service.liveControllers,
+      );
+    });
+
+    testWidgets(
+        'CameraX stays inactive while any page route covers it (nested routes)',
+        (tester) async {
+      final service = _RouteLifecycleCameraService();
+      await tester.pumpWidget(createCameraTestWidget(
+        navigatorObservers: [appRouteObserver],
+        overrides: [
+          cameraHardwareServiceProvider.overrideWithValue(service),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(CameraScreen)),
+      );
+
+      await _pushCoveringPage(tester, label: 'A');
+      expect(container.read(cameraHardwareProvider).status,
+          CameraStatus.unavailable);
+      final initsAfterFirstCover = service.initializeControllerCalls;
+
+      // A second covering route must not resume the camera underneath.
+      await _pushCoveringPage(tester, label: 'B');
+      expect(container.read(cameraHardwareProvider).status,
+          CameraStatus.unavailable);
+      expect(service.initializeControllerCalls, initsAfterFirstCover);
+
+      // Popping B leaves A covering -> still inactive.
+      await _popCoveringPage(tester);
+      expect(container.read(cameraHardwareProvider).status,
+          CameraStatus.unavailable);
+      expect(service.initializeControllerCalls, initsAfterFirstCover);
+
+      // Popping A reveals the camera -> reactivated exactly once.
+      await _popCoveringPage(tester);
+      expect(container.read(cameraHardwareProvider).status, CameraStatus.ready);
+      expect(service.initializeControllerCalls, initsAfterFirstCover + 1);
+    });
+
+    testWidgets(
+        'background/foreground while covered does not reactivate CameraX',
+        (tester) async {
+      final service = _RouteLifecycleCameraService();
+      await tester.pumpWidget(createCameraTestWidget(
+        navigatorObservers: [appRouteObserver],
+        overrides: [
+          cameraHardwareServiceProvider.overrideWithValue(service),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(CameraScreen)),
+      );
+
+      await _pushCoveringPage(tester);
+      final initsUnderCover = service.initializeControllerCalls;
+      expect(container.read(cameraHardwareProvider).status,
+          CameraStatus.unavailable);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pumpAndSettle();
+      expect(container.read(cameraHardwareProvider).status,
+          CameraStatus.unavailable);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+
+      // Still covered: resumed lifecycle must NOT reinitialize CameraX.
+      expect(container.read(cameraHardwareProvider).status,
+          CameraStatus.unavailable);
+      expect(service.initializeControllerCalls, initsUnderCover);
+      expect(service.liveControllers, 0);
+
+      // Revealing the screen reactivates exactly once.
+      await _popCoveringPage(tester);
+      expect(container.read(cameraHardwareProvider).status, CameraStatus.ready);
+      expect(service.initializeControllerCalls, initsUnderCover + 1);
+      expect(service.liveControllers, 1);
+    });
+
+    testWidgets(
+        'redundant pause/resume requests never leak nor duplicate a camera resource',
+        (tester) async {
+      final service = _RouteLifecycleCameraService();
+      await tester.pumpWidget(createCameraTestWidget(
+        overrides: [
+          cameraHardwareServiceProvider.overrideWithValue(service),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(CameraScreen)),
+      );
+      final notifier = container.read(cameraHardwareProvider.notifier);
+
+      await notifier.pauseCamera();
+      final disposesAfterFirstPause = service.disposeControllerCalls;
+      expect(service.liveControllers, 0);
+
+      await notifier.pauseCamera();
+      await notifier.pauseCamera();
+      expect(service.disposeControllerCalls, disposesAfterFirstPause,
+          reason: 'redundant pauses must not touch the controller again');
+      expect(service.liveControllers, 0);
+
+      // Repeated resumes converge on exactly one live camera resource and
+      // never leak a controller.
+      await notifier.resumeCamera();
+      await notifier.resumeCamera();
+      await notifier.resumeCamera();
+      expect(service.liveControllers, 1,
+          reason: 'exactly one camera resource owner after repeated resumes');
+      expect(service.createControllerCalls, service.initializeControllerCalls);
+      expect(service.disposeControllerCalls,
+          service.createControllerCalls - service.liveControllers);
+    });
+
+    testWidgets(
+        'disposing CameraScreen while active releases CameraX and late callbacks are harmless',
+        (tester) async {
+      final service = _RouteLifecycleCameraService();
+      await tester.pumpWidget(createCameraTestWidget(
+        navigatorObservers: [appRouteObserver],
+        overrides: [
+          cameraHardwareServiceProvider.overrideWithValue(service),
+        ],
+      ));
+      await tester.pumpAndSettle();
+      expect(service.liveControllers, 1);
+
+      // Dispose the screen while the camera is active.
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+
+      expect(service.liveControllers, 0,
+          reason: 'disposal must release the camera resource');
+
+      // Late lifecycle events after disposal must be harmless.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pumpAndSettle();
+
+      expect(service.liveControllers, 0);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets(
+        'failed CameraX resume exposes a truthful error state without leaking',
+        (tester) async {
+      final service = _RouteLifecycleCameraService();
+      await tester.pumpWidget(createCameraTestWidget(
+        navigatorObservers: [appRouteObserver],
+        overrides: [
+          cameraHardwareServiceProvider.overrideWithValue(service),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(CameraScreen)),
+      );
+      expect(container.read(cameraHardwareProvider).status, CameraStatus.ready);
+
+      await _pushCoveringPage(tester);
+      expect(container.read(cameraHardwareProvider).status,
+          CameraStatus.unavailable);
+
+      // CameraX cannot be reacquired on reveal.
+      service.failInitialization = true;
+      await _popCoveringPage(tester);
+
+      final state = container.read(cameraHardwareProvider);
+      expect(state.status, CameraStatus.error,
+          reason: 'a failed resume must surface a truthful error state');
+      expect(state.errorMessage, isNotNull);
+      expect(state.isReady, isFalse);
+      expect(service.liveControllers, 0,
+          reason: 'failed initialization candidates must be disposed');
+    });
+  });
+
+  group('B1 GPS State Semantics & Capture Gate', () {
+    testWidgets(
+        'capture readiness uses live-fix provenance: last-known locks, live fix unlocks',
+        (tester) async {
+      // 1. Cached/last-known seed only — no live stream emission.
+      await tester.pumpWidget(createCameraTestWidget(
+        overrides: [
+          cameraHardwareServiceProvider
+              .overrideWithValue(_RouteLifecycleCameraService()),
+          locationHardwareServiceProvider
+              .overrideWithValue(_LastKnownOnlyLocationService()),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<ShutterButton>(find.byType(ShutterButton)).isLocked,
+        isTrue,
+        reason:
+            'cached/last-known coordinates must never unlock evidence capture',
+      );
+      expect(find.textContaining('GPS: Last known'), findsOneWidget);
+      expect(find.textContaining('GPS Fixed'), findsNothing);
+      expect(
+        find.textContaining('Shutter locked — GPS required for evidence'),
+        findsOneWidget,
+      );
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+
+      // 2. A live fix (default live stream) unlocks the shutter.
+      await tester.pumpWidget(createCameraTestWidget(
+        overrides: [
+          cameraHardwareServiceProvider
+              .overrideWithValue(_RouteLifecycleCameraService()),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      expect(
+        tester.widget<ShutterButton>(find.byType(ShutterButton)).isLocked,
+        isFalse,
+      );
+      expect(find.textContaining('GPS Fixed'), findsOneWidget);
+      expect(find.textContaining('GPS: Last known'), findsNothing);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets(
+        'GPS state stays truthful across a covered route round-trip',
+        (tester) async {
+      await tester.pumpWidget(createCameraTestWidget(
+        navigatorObservers: [appRouteObserver],
+        overrides: [
+          cameraHardwareServiceProvider
+              .overrideWithValue(_RouteLifecycleCameraService()),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(CameraScreen)),
+      );
+      expect(container.read(gpsHardwareProvider).hasLiveFix, isTrue);
+
+      await _pushCoveringPage(tester);
+      await _popCoveringPage(tester);
+
+      // Returning from a covered route neither fabricates nor drops provenance.
+      expect(container.read(gpsHardwareProvider).hasLiveFix, isTrue);
+      expect(
+        tester.widget<ShutterButton>(find.byType(ShutterButton)).isLocked,
+        isFalse,
+      );
+
+      // If the live fix is lost while covered, the revealed screen stays locked.
+      await _pushCoveringPage(tester);
+      container.read(gpsHardwareProvider.notifier).setStaleOrSearching();
+      await tester.pumpAndSettle();
+      await _popCoveringPage(tester);
+
+      expect(container.read(gpsHardwareProvider).hasLiveFix, isFalse);
+      expect(
+        tester.widget<ShutterButton>(find.byType(ShutterButton)).isLocked,
+        isTrue,
+      );
+      expect(find.textContaining('GPS: Searching'), findsOneWidget);
+    });
+  });
+}
+
+/// Camera service that reports a real (test) camera and counts controller
+/// creation / initialization / disposal so tests can prove there is exactly
+/// one camera resource owner and no leak.
+class _RouteLifecycleCameraService extends CameraHardwareService {
+  int createControllerCalls = 0;
+  int initializeControllerCalls = 0;
+  int disposeControllerCalls = 0;
+  int liveControllers = 0;
+  bool failInitialization = false;
+
+  static const CameraDescription _backCamera = CameraDescription(
+    name: '0',
+    lensDirection: CameraLensDirection.back,
+    sensorOrientation: 90,
+  );
+
+  @override
+  Future<List<CameraDescription>> getAvailableCameras() async => [_backCamera];
+
+  @override
+  CameraController createController({
+    required CameraDescription cameraDescription,
+    ResolutionPreset resolutionPreset = ResolutionPreset.max,
+    bool enableAudio = true,
+  }) {
+    createControllerCalls++;
+    liveControllers++;
+    return super.createController(
+      cameraDescription: cameraDescription,
+      resolutionPreset: resolutionPreset,
+      enableAudio: enableAudio,
+    );
+  }
+
+  @override
+  Future<void> initializeController(CameraController controller) async {
+    initializeControllerCalls++;
+    if (failInitialization) {
+      // Fails every resolution-preset attempt, so reacquisition cannot recover.
+      throw CameraException('CameraUnavailable', 'Simulated camera fault');
+    }
+  }
+
+  @override
+  Future<void> disposeController(CameraController? controller) async {
+    if (controller == null) return;
+    disposeControllerCalls++;
+    liveControllers--;
+  }
+
+  @override
+  Future<double> getMinZoomLevel(CameraController controller) async => 1.0;
+
+  @override
+  Future<double> getMaxZoomLevel(CameraController controller) async => 5.0;
+
+  @override
+  Future<void> setZoomLevel(CameraController controller, double zoom) async {}
+}
+
+/// Pushes a full-page route above CameraScreen; page routes are exactly what
+/// [appRouteObserver] reports as coverage (dialogs/bottom sheets are not).
+Future<void> _pushCoveringPage(WidgetTester tester, {String label = 'COVER'}) async {
+  tester.state<NavigatorState>(find.byType(Navigator).first).push(
+        MaterialPageRoute<void>(
+          builder: (_) => Scaffold(
+            appBar: AppBar(title: Text(label)),
+            body: Center(child: Text(label)),
+          ),
+        ),
+      );
+  await tester.pumpAndSettle();
+}
+
+Future<void> _popCoveringPage(WidgetTester tester) async {
+  tester.state<NavigatorState>(find.byType(Navigator).first).pop();
+  await tester.pumpAndSettle();
+}
+
+/// Location service that supplies a fresh, accurate last-known position but
+/// never emits a live position stream — i.e. "last-known only".
+class _LastKnownOnlyLocationService extends LocationHardwareService {
+  @override
+  Future<bool> isLocationServiceEnabled() async => true;
+
+  @override
+  Future<LocationPermission> checkPermission() async =>
+      LocationPermission.whileInUse;
+
+  @override
+  Future<Position?> getLastKnownPosition() async => Position(
+        latitude: 22.562856,
+        longitude: 88.300731,
+        timestamp: DateTime.now().toUtc().subtract(const Duration(seconds: 5)),
+        accuracy: 4.6,
+        altitude: 2.7,
+        altitudeAccuracy: 1.0,
+        heading: 0.0,
+        headingAccuracy: 1.0,
+        speed: 0.0,
+        speedAccuracy: 1.0,
+      );
+
+  @override
+  Future<AltitudeTelemetry> getAltitudeTelemetry() async =>
+      const AltitudeTelemetry(hasMslAltitude: true, mslAltitudeMeters: 2.7);
+
+  @override
+  Stream<Position> getPositionStream({LocationSettings? locationSettings}) =>
+      const Stream<Position>.empty();
 }

@@ -21,6 +21,9 @@ class CameraViewfinder extends StatefulWidget {
   final VoidCallback onCycleTimer;
   final VoidCallback? onToggleHighContrast;
   final VoidCallback? onRetryCamera;
+  final VoidCallback? onRequestPermission;
+  final VoidCallback? onOpenRecovery;
+  final bool showMinimap;
 
   const CameraViewfinder({
     super.key,
@@ -29,6 +32,7 @@ class CameraViewfinder extends StatefulWidget {
     this.cameraStatus = CameraStatus.ready,
     this.currentZoomLevel = 1.0,
     this.zoomDisplayLabel = '1x',
+    this.showMinimap = true,
     required this.onTapFocus,
     required this.onPinchZoom,
     required this.onToggleFlash,
@@ -38,6 +42,8 @@ class CameraViewfinder extends StatefulWidget {
     required this.onCycleTimer,
     this.onToggleHighContrast,
     this.onRetryCamera,
+    this.onRequestPermission,
+    this.onOpenRecovery,
   });
 
   @override
@@ -187,6 +193,8 @@ class _CameraViewfinderState extends State<CameraViewfinder> {
                   CameraStatusViewport(
                     status: widget.cameraStatus,
                     onRetryCamera: widget.onRetryCamera,
+                    onRequestPermission: widget.onRequestPermission,
+                    onOpenRecovery: widget.onOpenRecovery,
                   ),
 
                 // 1.5 Aspect Ratio Framing Mask
@@ -253,6 +261,7 @@ class _CameraViewfinderState extends State<CameraViewfinder> {
                     gps: widget.state.gps,
                     isHighContrast: widget.state.isHighContrastMode,
                     availableWidth: effectiveHudWidth,
+                    showMinimap: widget.showMinimap,
                   ),
                 ),
 
@@ -300,19 +309,26 @@ class _CameraViewfinderState extends State<CameraViewfinder> {
 class CameraStatusViewport extends StatelessWidget {
   final CameraStatus status;
   final VoidCallback? onRetryCamera;
+  final VoidCallback? onRequestPermission;
+  final VoidCallback? onOpenRecovery;
 
   const CameraStatusViewport({
     super.key,
     this.status = CameraStatus.ready,
     this.onRetryCamera,
+    this.onRequestPermission,
+    this.onOpenRecovery,
   });
 
   @override
   Widget build(BuildContext context) {
     String titleText;
     String subtitleText;
-    final isAlert =
-        status == CameraStatus.unavailable || status == CameraStatus.error;
+    final isAlert = status == CameraStatus.unavailable ||
+        status == CameraStatus.error ||
+        status == CameraStatus.permissionDenied ||
+        status == CameraStatus.permissionPermanentlyDenied ||
+        status == CameraStatus.permissionRestricted;
     final isInitializing = status == CameraStatus.initializing;
 
     switch (status) {
@@ -320,9 +336,23 @@ class CameraStatusViewport extends StatelessWidget {
         titleText = 'INITIALIZING CAMERA FEED...';
         subtitleText = 'Acquiring optical hardware stream';
         break;
-      case CameraStatus.unavailable:
+      case CameraStatus.permissionDenied:
         titleText = 'CAMERA ACCESS REQUIRED';
         subtitleText = 'Camera access is required to capture evidence.';
+        break;
+      case CameraStatus.permissionPermanentlyDenied:
+        titleText = 'CAMERA ACCESS BLOCKED';
+        subtitleText =
+            'Camera permission is blocked in system settings. Open settings to restore access.';
+        break;
+      case CameraStatus.permissionRestricted:
+        titleText = 'CAMERA ACCESS RESTRICTED';
+        subtitleText =
+            'Camera access is restricted by device policy (MDM or parental controls).';
+        break;
+      case CameraStatus.unavailable:
+        titleText = 'OPTICAL SENSOR UNAVAILABLE';
+        subtitleText = 'No physical camera detected on this device.';
         break;
       case CameraStatus.error:
         titleText = 'CAMERA HARDWARE UNAVAILABLE';
@@ -382,9 +412,15 @@ class CameraStatusViewport extends StatelessWidget {
                         ),
                       )
                     : Icon(
-                        isAlert
-                            ? Icons.videocam_off_rounded
-                            : Icons.camera_enhance_rounded,
+                        status == CameraStatus.permissionRestricted
+                            ? Icons.lock_outline_rounded
+                            : (status == CameraStatus.permissionPermanentlyDenied
+                                ? Icons.no_photography_rounded
+                                : (status == CameraStatus.permissionDenied
+                                    ? Icons.no_photography_outlined
+                                    : (isAlert
+                                        ? Icons.videocam_off_rounded
+                                        : Icons.camera_enhance_rounded))),
                         size: 26,
                         color: isAlert
                             ? AppColors.statusRed
@@ -416,7 +452,59 @@ class CameraStatusViewport extends StatelessWidget {
                       : Colors.white.withAlpha(140),
                 ),
               ),
-              if (isAlert && onRetryCamera != null) ...[
+              if (status == CameraStatus.permissionDenied &&
+                  (onRequestPermission != null || onRetryCamera != null)) ...[
+                const SizedBox(height: 10),
+                ElevatedButton.icon(
+                  onPressed: onRequestPermission ?? onRetryCamera,
+                  icon: const Icon(Icons.check_circle_outline_rounded, size: 16),
+                  label: const Text(
+                    'GRANT ACCESS',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.8,
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.black,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    minimumSize: const Size(140, 36),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                  ),
+                ),
+              ] else if (status == CameraStatus.permissionPermanentlyDenied &&
+                  (onOpenRecovery != null || onRetryCamera != null)) ...[
+                const SizedBox(height: 10),
+                ElevatedButton.icon(
+                  onPressed: onOpenRecovery ?? onRetryCamera,
+                  icon: const Icon(Icons.settings_outlined, size: 16),
+                  label: const Text(
+                    'OPEN SETTINGS',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.8,
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.black,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    minimumSize: const Size(140, 36),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                  ),
+                ),
+              ] else if (status == CameraStatus.permissionRestricted) ...[
+                // Restricted: no action button per constraint 1 (policy restriction cannot be bypassed by user)
+              ] else if (isAlert && onRetryCamera != null) ...[
                 const SizedBox(height: 10),
                 ElevatedButton.icon(
                   onPressed: onRetryCamera,
@@ -800,6 +888,7 @@ class WatermarkPreview extends StatelessWidget {
   final GpsUiFixture gps;
   final bool isHighContrast;
   final double? availableWidth;
+  final bool showMinimap;
 
   const WatermarkPreview({
     super.key,
@@ -808,6 +897,7 @@ class WatermarkPreview extends StatelessWidget {
     required this.gps,
     this.isHighContrast = false,
     this.availableWidth,
+    this.showMinimap = true,
   });
 
   @override
@@ -818,6 +908,7 @@ class WatermarkPreview extends StatelessWidget {
       gps: gps,
       isHighContrast: isHighContrast,
       availableWidth: availableWidth,
+      showMinimap: showMinimap,
     );
   }
 }

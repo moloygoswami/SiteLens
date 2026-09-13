@@ -27,6 +27,13 @@ class GpsHardwareState {
   final GnssSnapshot? gnssSnapshot;
   final bool isAltitudeMsl;
 
+  /// True when the current fix was seeded from the OS last-known location
+  /// instead of a live position-stream emission. A cached seed is
+  /// display-only: its coordinates may belong to a different place or time
+  /// than the physical capture instant and must never be burned into
+  /// evidence (D-SPAT-001).
+  final bool isLastKnownSeed;
+
   const GpsHardwareState({
     this.fixStatus = GPSFixStatus.searching,
     this.hasValidFix = false,
@@ -45,7 +52,13 @@ class GpsHardwareState {
     this.resolvedLocationLat,
     this.resolvedLocationLon,
     this.gnssSnapshot,
+    this.isLastKnownSeed = false,
   });
+
+  /// Capture eligibility requires a fix of live provenance. A last-known
+  /// cached seed may power the map pin and HUD, but the shutter must treat it
+  /// exactly like a missing fix (D-SPAT-001).
+  bool get hasLiveFix => hasValidFix && !isLastKnownSeed;
 
   bool get isSearching => fixStatus == GPSFixStatus.searching || !hasValidFix;
   bool get isDegraded => hasValidFix && fixStatus == GPSFixStatus.poor;
@@ -55,13 +68,23 @@ class GpsHardwareState {
       permissionStatus == LocationPermission.whileInUse ||
       permissionStatus == LocationPermission.always;
 
-  /// Why the GPS cannot provide a valid fix right now. Used to surface
-  /// cause-specific guidance ("Enable Location", "Open Settings") instead of a
-  /// generic "Waiting for GPS lock".
+  /// True when the OS could not determine the location permission state.
+  /// Unknown is never collapsed into denied.
+  bool get isPermissionUnknown =>
+      permissionStatus == LocationPermission.unableToDetermine;
+
+  /// Why evidence capture is blocked right now. Used to surface cause-specific
+  /// guidance ("Enable Location", "Open Settings") instead of a generic
+  /// "Waiting for GPS lock".
+  ///
+  /// Capture readiness is live-fix provenance, not the mere presence of a
+  /// latched fix: a cached/last-known seed blocks capture ([lastKnownOnly]).
   GpsBlockReason? get blockReason {
-    if (hasValidFix) return null;
+    if (hasLiveFix) return null;
     if (!isLocationServiceEnabled) return GpsBlockReason.serviceDisabled;
+    if (isPermissionUnknown) return GpsBlockReason.permissionUnknown;
     if (!isPermissionGranted) return GpsBlockReason.permissionDenied;
+    if (isLastKnownSeed) return GpsBlockReason.lastKnownOnly;
     return GpsBlockReason.searching;
   }
 
@@ -98,8 +121,14 @@ class GpsHardwareState {
     if (!isLocationServiceEnabled) {
       return 'GPS: Disabled';
     }
+    if (isPermissionUnknown) {
+      return 'GPS: Unknown';
+    }
     if (!isPermissionGranted) {
       return 'GPS: Denied';
+    }
+    if (isLastKnownSeed) {
+      return 'GPS: Last known';
     }
     return GPSUtils.formatStatusLabel(fixStatus, hasValidFix ? accuracyMeters : null);
   }
@@ -128,6 +157,7 @@ class GpsHardwareState {
     bool clearGnss = false,
     bool clearFix = false,
     bool clearError = false,
+    bool? isLastKnownSeed,
   }) {
     return GpsHardwareState(
       fixStatus: fixStatus ?? this.fixStatus,
@@ -149,6 +179,7 @@ class GpsHardwareState {
       resolvedLocationLon: clearFix ? null : (resolvedLocationLon ?? this.resolvedLocationLon),
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
       gnssSnapshot: clearFix || clearGnss ? null : (gnssSnapshot ?? this.gnssSnapshot),
+      isLastKnownSeed: clearFix ? false : (isLastKnownSeed ?? this.isLastKnownSeed),
     );
   }
 }

@@ -94,6 +94,7 @@ design-reference-*.png
 .design_review/
 .impeccable/
 .claude/
+CLAUDE.md
 .opencode/
 devtools_options.yaml
 graphify-out/

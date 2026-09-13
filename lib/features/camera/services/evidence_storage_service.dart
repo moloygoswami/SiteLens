@@ -43,7 +43,25 @@ class EvidenceStorageService {
     return '${base.path}/$sanitized';
   }
 
-  /// Saves raw original camera bytes untouched with OS-level flush.
+  /// Atomically writes bytes to [targetFile] by first writing to a temporary file in the same directory,
+  /// flushing to OS storage, and renaming the temporary file to [targetFile.path].
+  /// If an error occurs, the temporary file is deleted before rethrowing.
+  Future<void> _atomicWriteFile(File targetFile, Uint8List bytes) async {
+    final tempFile = File('${targetFile.path}.tmp_${DateTime.now().microsecondsSinceEpoch}');
+    try {
+      await tempFile.writeAsBytes(bytes, flush: true);
+      await tempFile.rename(targetFile.path);
+    } catch (e) {
+      try {
+        if (await tempFile.exists()) {
+          await tempFile.delete();
+        }
+      } catch (_) {}
+      rethrow;
+    }
+  }
+
+  /// Saves raw original camera bytes untouched with OS-level flush and atomic publication.
   /// Returns the relative path contract (e.g. "media/orig_xxx.jpg").
   Future<String> saveOriginalBytes(Uint8List originalBytes, String mediaId) async {
     await getMediaDirectory();
@@ -51,11 +69,11 @@ class EvidenceStorageService {
     final absPath = await resolveAbsolutePath(relPath);
 
     final file = File(absPath);
-    await file.writeAsBytes(originalBytes, flush: true);
+    await _atomicWriteFile(file, originalBytes);
     return relPath;
   }
 
-  /// Saves derived evidence JPEG and thumbnail JPEG with OS-level flush.
+  /// Saves derived evidence JPEG and thumbnail JPEG atomically with OS-level flush.
   /// Returns the relative path contracts.
   Future<Map<String, String>> saveEvidenceAndThumbnail({
     required String mediaId,
@@ -72,13 +90,35 @@ class EvidenceStorageService {
     final evidenceFile = File(evidAbsPath);
     final thumbFile = File(thumbAbsPath);
 
-    await evidenceFile.writeAsBytes(evidenceBytes, flush: true);
-    await thumbFile.writeAsBytes(thumbnailBytes, flush: true);
+    final evidTemp = File('$evidAbsPath.tmp_${DateTime.now().microsecondsSinceEpoch}');
+    final thumbTemp = File('$thumbAbsPath.tmp_${DateTime.now().microsecondsSinceEpoch}');
 
-    return {
-      'evidencePath': evidRelPath,
-      'thumbnailPath': thumbRelPath,
-    };
+    try {
+      await evidTemp.writeAsBytes(evidenceBytes, flush: true);
+      await thumbTemp.writeAsBytes(thumbnailBytes, flush: true);
+
+      await evidTemp.rename(evidAbsPath);
+      await thumbTemp.rename(thumbAbsPath);
+
+      return {
+        'evidencePath': evidRelPath,
+        'thumbnailPath': thumbRelPath,
+      };
+    } catch (e) {
+      try {
+        if (await evidTemp.exists()) await evidTemp.delete();
+      } catch (_) {}
+      try {
+        if (await thumbTemp.exists()) await thumbTemp.delete();
+      } catch (_) {}
+      try {
+        if (await evidenceFile.exists()) await evidenceFile.delete();
+      } catch (_) {}
+      try {
+        if (await thumbFile.exists()) await thumbFile.delete();
+      } catch (_) {}
+      rethrow;
+    }
   }
 
   /// Verifies that original and evidence (and optional thumbnail) artifacts physically exist and have non-zero size.
@@ -119,6 +159,19 @@ class EvidenceStorageService {
       if (await thumbFile.exists()) {
         await thumbFile.delete();
       }
+
+      // Also clean up any lingering temporary files from interrupted writes
+      final dir = await getMediaDirectory();
+      if (await dir.exists()) {
+        final entities = await dir.list().toList();
+        for (final entity in entities) {
+          if (entity is File && entity.path.contains(mediaId) && entity.path.contains('.tmp_')) {
+            try {
+              await entity.delete();
+            } catch (_) {}
+          }
+        }
+      }
     } catch (_) {}
   }
 
@@ -126,6 +179,17 @@ class EvidenceStorageService {
   Future<void> deleteTempCameraFile(String tempPath) async {
     try {
       final file = File(tempPath);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (_) {}
+  }
+
+  /// Deletes the original captured media file at the given relative path.
+  Future<void> deleteOriginalMedia(String relativePath) async {
+    try {
+      final absPath = await resolveAbsolutePath(relativePath);
+      final file = File(absPath);
       if (await file.exists()) {
         await file.delete();
       }

@@ -1,5 +1,6 @@
 import 'package:camera/camera.dart';
 import 'camera_ui_state.dart';
+import 'gps_hardware_state.dart';
 
 enum CameraStatus {
   initializing,
@@ -8,6 +9,9 @@ enum CameraStatus {
   error,
   capturing,
   recordingVideo,
+  permissionDenied,
+  permissionPermanentlyDenied,
+  permissionRestricted,
 }
 
 class CameraHardwareState {
@@ -25,6 +29,7 @@ class CameraHardwareState {
   final DateTime? recordingStartedAtUtc;
   final DateTime? recordingStoppedAtUtc;
   final bool hasInterruptedRecording;
+  final GpsHardwareState? recordingGpsState;
 
   const CameraHardwareState({
     this.status = CameraStatus.initializing,
@@ -41,6 +46,7 @@ class CameraHardwareState {
     this.recordingStartedAtUtc,
     this.recordingStoppedAtUtc,
     this.hasInterruptedRecording = false,
+    this.recordingGpsState,
   });
 
   bool get isReady =>
@@ -51,6 +57,14 @@ class CameraHardwareState {
   bool get isRecordingVideo => status == CameraStatus.recordingVideo;
   bool get isUnavailable => status == CameraStatus.unavailable;
   bool get hasError => status == CameraStatus.error;
+  bool get isPermissionDenied =>
+      status == CameraStatus.permissionDenied ||
+      status == CameraStatus.permissionPermanentlyDenied ||
+      status == CameraStatus.permissionRestricted;
+  bool get isPermissionPermanentlyDenied =>
+      status == CameraStatus.permissionPermanentlyDenied;
+  bool get isPermissionRestricted =>
+      status == CameraStatus.permissionRestricted;
 
   CameraDescription? get currentCameraDescription {
     if (availableCameras.isEmpty || selectedCameraIndex >= availableCameras.length) {
@@ -109,6 +123,8 @@ class CameraHardwareState {
     DateTime? recordingStartedAtUtc,
     DateTime? recordingStoppedAtUtc,
     bool? hasInterruptedRecording,
+    GpsHardwareState? recordingGpsState,
+    bool clearRecordingGpsState = false,
   }) {
     return CameraHardwareState(
       status: status ?? this.status,
@@ -125,6 +141,7 @@ class CameraHardwareState {
       recordingStartedAtUtc: recordingStartedAtUtc ?? this.recordingStartedAtUtc,
       recordingStoppedAtUtc: recordingStoppedAtUtc ?? this.recordingStoppedAtUtc,
       hasInterruptedRecording: hasInterruptedRecording ?? this.hasInterruptedRecording,
+      recordingGpsState: clearRecordingGpsState ? null : (recordingGpsState ?? this.recordingGpsState),
     );
   }
 }

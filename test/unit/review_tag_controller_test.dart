@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ffi';
 import 'package:drift/drift.dart' as drift;
 import 'package:drift/native.dart';
@@ -6,6 +7,7 @@ import 'package:sqlite3/open.dart';
 import 'package:sitelens/data/local/database/app_database.dart';
 import 'package:sitelens/data/repositories/media_repository.dart';
 import 'package:sitelens/domain/models/enums.dart';
+import 'package:sitelens/domain/models/media_item.dart';
 import 'package:sitelens/features/camera/models/evidence_metadata_snapshot.dart';
 import 'package:sitelens/features/camera/models/processed_evidence_payload.dart';
 import 'package:sitelens/features/camera/services/evidence_storage_service.dart';
@@ -14,6 +16,7 @@ import 'package:sitelens/features/review/models/pending_capture_payload.dart';
 
 class MockReviewStorageService extends EvidenceStorageService {
   final List<String> cleanedUpIds = [];
+  final List<String> deletedOriginals = [];
 
   @override
   Future<bool> verifyArtifactsExist({
@@ -27,6 +30,11 @@ class MockReviewStorageService extends EvidenceStorageService {
   @override
   Future<void> cleanupPartialArtifacts(String mediaId) async {
     cleanedUpIds.add(mediaId);
+  }
+
+  @override
+  Future<void> deleteOriginalMedia(String relativePath) async {
+    deletedOriginals.add(relativePath);
   }
 
   @override
@@ -126,6 +134,7 @@ void main() {
               activityTag: const drift.Value('Rebar Inspection'),
               observationType: const drift.Value('nonConformity'),
               capturedAt: '2026-08-14T04:00:00Z',
+              creatorId: const drift.Value('user-field-inspector-123'),
             ),
           );
 
@@ -265,6 +274,7 @@ void main() {
               activityTag: const drift.Value('Rebar'),
               observationType: const drift.Value('nonConformity'),
               capturedAt: '2026-08-14T04:00:00Z',
+              creatorId: const drift.Value('user-field-inspector-123'),
             ),
           );
 
@@ -304,6 +314,66 @@ void main() {
       expect(rows.isEmpty, isTrue);
     });
 
+    test('Retake cancels in-flight processing future, awaits completion, and cleans up all artifacts without DB row', () async {
+      bool cancelCallbackFired = false;
+      final completer = Completer<ProcessedEvidencePayload>();
+
+      final inFlightSnapshot = EvidenceMetadataSnapshot(
+        mediaId: 'in-flight-media-456',
+        siteId: 'SITE_001',
+        siteCode: 'HOME',
+        siteName: 'Sonar Kella Apartment',
+        latitude: 22.56298,
+        longitude: 88.30085,
+        lowAccuracy: false,
+        capturedAtUtc: DateTime.utc(2026, 8, 15, 4, 0, 0),
+        canonicalTimestampUtc: '2026-08-15 04:00:00 UTC',
+        resolvedAddress: 'Sonar Kella Apartment, Kolkata',
+      );
+
+      final inFlightPayload = PendingCapturePayload(
+        mediaId: 'in-flight-media-456',
+        mediaType: MediaItemType.photo,
+        originalFilePath: 'media/orig_in_flight.jpg',
+        evidenceFilePath: null,
+        thumbnailFilePath: null,
+        sha256Hash: 'dummy_hash_value',
+        fileSizeBytes: 1024,
+        metadataSnapshot: inFlightSnapshot,
+        processingFuture: completer.future,
+        onCancel: () {
+          cancelCallbackFired = true;
+        },
+      );
+
+      // Trigger retake while processing is still in flight
+      final retakeFuture = notifier.retake(inFlightPayload);
+
+      expect(inFlightPayload.isCancelled, isTrue);
+      expect(cancelCallbackFired, isTrue);
+
+      // Background processing completes (e.g. returns failure because isCancelled was set)
+      completer.complete(
+        ProcessedEvidencePayload.failure(
+          mediaId: 'in-flight-media-456',
+          originalFilePath: 'media/orig_in_flight.jpg',
+          originalSha256: 'dummy_hash_value',
+          originalFileSizeBytes: 1024,
+          metadataSnapshot: inFlightSnapshot,
+          errorMessage: 'Cancelled by retake',
+        ),
+      );
+
+      await retakeFuture;
+
+      expect(mockStorage.cleanedUpIds, contains('in-flight-media-456'));
+      expect(mockStorage.deletedOriginals, contains('media/orig_in_flight.jpg'));
+
+      // Confirm no database row exists
+      final rows = await (db.select(db.media)..where((tbl) => tbl.id.equals('in-flight-media-456'))).get();
+      expect(rows.isEmpty, isTrue);
+    });
+
     test('clearErrorMessage properly clears error on copyWith and when switching observation types', () async {
       notifier.state = notifier.state.copyWith(errorMessage: 'Initial error');
       expect(notifier.state.errorMessage, 'Initial error');
@@ -320,6 +390,42 @@ void main() {
       notifier.state = notifier.state.copyWith(errorMessage: 'Another error');
       await notifier.setObservationType(ObservationType.material, pendingPayload);
       expect(notifier.state.errorMessage, isNull);
+    });
+
+    test('Calling linkBeforeItem while searchSmartLink is in flight invalidates late result and preserves manual selection', () async {
+      // 1. Initiate searchSmartLink (which will resolve to null since no items match in DB)
+      final searchFuture = notifier.searchSmartLink(pendingPayload);
+
+      // 2. While searchSmartLink is in flight, user manually links a candidate
+      final manualCandidate = MediaItem(
+        id: 'manual-selected-nc-999',
+        siteId: 'SITE_001',
+        originalUri: 'media/orig_manual.jpg',
+        uri: 'media/evid_manual.jpg',
+        type: MediaItemType.photo,
+        lat: 22.56298,
+        lon: 88.30085,
+        activityTag: 'Excavation',
+        observationType: ObservationType.nonConformity,
+        capturedAt: DateTime.utc(2026, 8, 14, 10, 0, 0),
+      );
+      notifier.linkBeforeItem(manualCandidate);
+
+      // Verify intermediate state reflects the manual selection immediately
+      expect(notifier.state.linkedMediaId, 'manual-selected-nc-999');
+      expect(notifier.state.linkedCandidate, manualCandidate);
+      expect(notifier.state.isLinked, isTrue);
+      expect(notifier.state.note, contains('Evid_ID: manual-selected-nc-999'));
+
+      // 3. Await the late completion of searchSmartLink
+      await searchFuture;
+
+      // 4. Verify that late searchSmartLink did NOT clear or overwrite manual selection
+      expect(notifier.state.linkedMediaId, 'manual-selected-nc-999');
+      expect(notifier.state.linkedCandidate, manualCandidate);
+      expect(notifier.state.isLinked, isTrue);
+      expect(notifier.state.note, contains('Evid_ID: manual-selected-nc-999'));
+      expect(notifier.state.isSearchingSmartLink, isFalse);
     });
   });
 }

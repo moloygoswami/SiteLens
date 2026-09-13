@@ -8,6 +8,7 @@
 library;
 
 import '../../../core/utils/gps_utils.dart';
+import '../../../domain/models/media_item.dart';
 import '../models/evidence_metadata_snapshot.dart';
 import 'hud_data.dart';
 
@@ -29,10 +30,7 @@ class HudFormatter {
     );
     final flagSuffix = GPSUtils.countryFlagForAddress(snapshot.resolvedAddress);
 
-    final isVerified = isGpsLocked && !snapshot.lowAccuracy && originalSha256.isNotEmpty;
-    final status = isVerified
-        ? HudStatus.verified
-        : (snapshot.lowAccuracy ? HudStatus.degraded : HudStatus.pending);
+    final status = isGpsLocked ? snapshot.verificationStatus : HudStatus.pending;
 
     final (utcText, localText, tzText) = formatTimestamps(snapshot.capturedAtUtc);
     final (latStr, lonStr, altSuffix) = formatCoordinates(
@@ -68,6 +66,84 @@ class HudFormatter {
     );
   }
 
+  /// Resolves the canonical user-facing site identifier from a persisted site
+  /// code: uppercased, with the established neutral "SITE" fallback when the
+  /// code is missing, blank, or the "UNASSIGNED" sentinel. The internal
+  /// Firestore-style site document id is never used as an identifier.
+  static String resolveSiteIdentifier(String? siteCode) {
+    final code = siteCode?.trim() ?? '';
+    if (code.isEmpty || code.toUpperCase() == 'UNASSIGNED') {
+      return 'SITE';
+    }
+    return code.toUpperCase();
+  }
+
+  /// Adapts a persisted [MediaItem] into canonical [HudData] for runtime
+  /// evidence viewing (the shared Photo/Video fullscreen metadata card).
+  ///
+  /// Uses ONLY capture-time persisted fields — no metadata is re-evaluated or
+  /// synthesized here. Unavailable values (heading, accuracy, satellites, hash)
+  /// stay unknown; the headline prefers the persisted site context and falls
+  /// back to the captured address, and the status falls back exactly like the
+  /// existing detail-screen telemetry row.
+  static HudData fromMediaItem(
+    MediaItem item, {
+    String? siteCode,
+    String? siteName,
+  }) {
+    final headline = GPSUtils.formatInspectionHeadline(
+      siteName: siteName,
+      siteCode: siteCode,
+      resolvedAddress: item.capturedAddress,
+    );
+    final flagSuffix = GPSUtils.countryFlagForAddress(item.capturedAddress ?? '');
+
+    final hasValidCoordinates = !(item.lat == 0.0 && item.lon == 0.0);
+    final status = item.verificationStatus ??
+        (item.lowAccuracy ? HudStatus.degraded : HudStatus.verified);
+
+    final (utcText, localText, tzText) = formatTimestamps(item.capturedAt);
+    final (latStr, lonStr, altSuffix) = formatCoordinates(
+      item.lat,
+      item.lon,
+      item.altitude,
+      isMsl: item.isAltitudeMsl ?? true,
+    );
+
+    final rawAddress = (item.capturedAddress ?? '').trim();
+
+    final accuracyText = item.accuracyM != null
+        ? '±${item.accuracyM!.toStringAsFixed(1)}m'
+        : null;
+    final satellitesText = item.gnssSatelliteCount != null
+        ? 'SATS: ${item.gnssSatellitesUsedInFix ?? item.gnssSatelliteCount}/${item.gnssSatelliteCount}'
+        : null;
+
+    return HudData(
+      headlineText: headline,
+      countryFlagSuffix: flagSuffix,
+      status: status,
+      addressText: rawAddress,
+      isAddressResolving: false,
+      utcTimestampText: utcText,
+      localTimestampText: localText,
+      timeZoneText: tzText,
+      latitudeText: latStr,
+      longitudeText: lonStr,
+      altitudeSuffix: altSuffix,
+      siteCodeText: resolveSiteIdentifier(siteCode),
+      displaySha256: formatSha(item.sha256Hash),
+      accuracyText: accuracyText,
+      satellitesText: satellitesText,
+      isGpsLocked: hasValidCoordinates,
+      latitude: item.lat,
+      longitude: item.lon,
+      isHighContrast: false,
+      showMinimap: true,
+      showAddress: true,
+    );
+  }
+
   /// Adapts live camera viewfinder telemetry into canonical [HudData].
   static HudData fromLive({
     required String siteCode,
@@ -79,12 +155,13 @@ class HudFormatter {
     bool isAltitudeMsl = true,
     double? accuracyMeters,
     required bool isGpsLocked,
-    required bool isDegraded,
+    bool isDegraded = false,
     DateTime? captureTime,
     double? headingDegrees,
     bool isHighContrast = false,
     bool showAddress = true,
     bool showMinimap = true,
+    double lowAccuracyThresholdMeters = 20.0,
   }) {
     final headline = GPSUtils.formatInspectionHeadline(
       siteName: siteName,
@@ -93,10 +170,13 @@ class HudFormatter {
     );
     final flagSuffix = GPSUtils.countryFlagForAddress(resolvedAddress ?? '');
 
-    final isVerified = isGpsLocked && !isDegraded;
-    final status = isVerified
-        ? HudStatus.verified
-        : (isDegraded ? HudStatus.degraded : HudStatus.pending);
+    final status = EvidenceMetadataSnapshot.evaluateVerificationStatus(
+      hasValidFix: isGpsLocked,
+      latitude: latitude,
+      longitude: longitude,
+      accuracyMeters: accuracyMeters,
+      lowAccuracyThresholdMeters: lowAccuracyThresholdMeters,
+    );
 
     final effectiveTime = captureTime ?? DateTime.now();
     final (utcText, localText, tzText) = formatTimestamps(effectiveTime);

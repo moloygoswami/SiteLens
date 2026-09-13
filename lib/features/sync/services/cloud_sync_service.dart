@@ -104,7 +104,7 @@ class CloudSyncService {
       }
     }
 
-    try {
+    await _runMappedSyncOperation(() async {
       // 1.5. Ensure Cloud Site is provisioned in Firestore with creator admin membership
       await _ensureSiteProvisioned(item.siteId, currentUserId);
 
@@ -119,11 +119,19 @@ class CloudSyncService {
       if (thumbFile != null && localThumbSha != null) {
         await _ensureThumbnailUploaded(item, thumbFile, localThumbSha);
       }
+    });
+  }
+
+  /// Runs [action] mapping low-level Firebase/network failures onto the sync
+  /// exception taxonomy shared by every synchronization entry point.
+  Future<void> _runMappedSyncOperation(Future<void> Function() action) async {
+    try {
+      await action();
     } on IntegrityConflictException {
       rethrow;
     } on FirebaseException catch (e) {
-      if (e.code == 'permission-denied') {
-        throw PermanentSyncException('Permission denied: User does not have active membership in site ${item.siteId}.');
+      if (e.code == 'permission-denied' || e.code == 'unauthenticated') {
+        rethrow;
       } else if (e.code == 'quota-exceeded') {
         throw PermanentSyncException('Storage quota exceeded.');
       } else {
@@ -135,6 +143,48 @@ class CloudSyncService {
       if (e is PermanentSyncException || e is RetryableSyncException) rethrow;
       throw RetryableSyncException('Unexpected sync error: $e');
     }
+  }
+
+  /// Propagates a locally soft-deleted evidence item to its existing Firestore
+  /// evidence document (Cross-Cutting Audit B, B-1).
+  ///
+  /// The cloud tombstone is a ledger state only: the write-once Storage
+  /// artifacts (original and thumbnail) are never read, modified, or deleted
+  /// here, and no artifact-sync status is recorded. When no cloud document
+  /// exists the item was never published, so there is no cloud deletion ledger
+  /// entry to reconcile and the call is a no-op — the local removal is already
+  /// authoritative and nothing may claim a cloud deletion that never happened.
+  Future<void> syncTombstone({
+    required MediaItem item,
+    required String currentUserId,
+  }) async {
+    // 0. Creator Authorization Guard (same policy as syncMediaItem)
+    if (item.creatorId != null && item.creatorId != currentUserId) {
+      throw PermanentSyncException(
+        'Creator mismatch: Item was captured by ${item.creatorId}, active session is $currentUserId.',
+      );
+    }
+
+    await _runMappedSyncOperation(() async {
+      final docRef = _firestore
+          .collection('sites')
+          .doc(item.siteId)
+          .collection('media')
+          .doc(item.id);
+
+      final snapshot = await docRef.get();
+      if (!snapshot.exists) {
+        // Never published to the cloud: no deletion ledger entry exists to
+        // reconcile, and the security rules forbid creating a document with
+        // is_deleted == true. Nothing to claim, nothing to write.
+        return;
+      }
+
+      // Reuses the canonical reconciliation path: immutable forensic fields
+      // are conflict-checked (never overwritten) and the mutable is_deleted
+      // diff — plus any legitimate mutable diffs — is written in one update.
+      await _ensureFirestoreDocSynced(item, currentUserId);
+    });
   }
 
   /// Ensures that the parent site document and creator administrator membership exist in Firestore.
@@ -191,8 +241,8 @@ class CloudSyncService {
     try {
       await batch.commit();
     } on FirebaseException catch (e) {
-      if (e.code == 'permission-denied') {
-        throw PermanentSyncException('Failed to provision site $siteId: Permission denied by security rules (${e.message}).');
+      if (e.code == 'permission-denied' || e.code == 'unauthenticated') {
+        rethrow;
       }
       rethrow;
     }
@@ -306,6 +356,12 @@ class CloudSyncService {
         'lon': item.lon,
         'accuracy_m': item.accuracyM,
         'low_accuracy': item.lowAccuracy,
+        'altitude': item.altitude,
+        'is_altitude_msl': item.isAltitudeMsl,
+        'verification_status': item.verificationStatus?.name,
+        'gnss_satellite_count': item.gnssSatelliteCount,
+        'gnss_satellites_used_in_fix': item.gnssSatellitesUsedInFix,
+        'gnss_fix_timestamp': item.gnssFixTimestampUtc?.toUtc().toIso8601String(),
         'activity_tag': item.activityTag,
         'observation_type': item.observationType.name,
         'linked_media_id': item.linkedMediaId,
@@ -371,6 +427,49 @@ class CloudSyncService {
       if (cloudAccuracy != null && cloudAccuracy != item.accuracyM) {
         throw IntegrityConflictException(
           'Firestore evidence document accuracy_m ($cloudAccuracy) conflicts with local (${item.accuracyM}).',
+        );
+      }
+
+      final cloudAltitude = (data['altitude'] as num?)?.toDouble();
+      if (cloudAltitude != null && cloudAltitude != item.altitude) {
+        throw IntegrityConflictException(
+          'Firestore evidence document altitude ($cloudAltitude) conflicts with local (${item.altitude}).',
+        );
+      }
+
+      final cloudIsMsl = data['is_altitude_msl'] as bool?;
+      if (cloudIsMsl != null && cloudIsMsl != item.isAltitudeMsl) {
+        throw IntegrityConflictException(
+          'Firestore evidence document is_altitude_msl ($cloudIsMsl) conflicts with local (${item.isAltitudeMsl}).',
+        );
+      }
+
+      final cloudVerification = data['verification_status'] as String?;
+      if (cloudVerification != null && cloudVerification != item.verificationStatus?.name) {
+        throw IntegrityConflictException(
+          'Firestore evidence document verification_status ($cloudVerification) conflicts with local (${item.verificationStatus?.name}).',
+        );
+      }
+
+      final cloudSatCount = (data['gnss_satellite_count'] as num?)?.toInt();
+      if (cloudSatCount != null && cloudSatCount != item.gnssSatelliteCount) {
+        throw IntegrityConflictException(
+          'Firestore evidence document gnss_satellite_count ($cloudSatCount) conflicts with local (${item.gnssSatelliteCount}).',
+        );
+      }
+
+      final cloudSatUsed = (data['gnss_satellites_used_in_fix'] as num?)?.toInt();
+      if (cloudSatUsed != null && cloudSatUsed != item.gnssSatellitesUsedInFix) {
+        throw IntegrityConflictException(
+          'Firestore evidence document gnss_satellites_used_in_fix ($cloudSatUsed) conflicts with local (${item.gnssSatellitesUsedInFix}).',
+        );
+      }
+
+      final cloudFixTs = data['gnss_fix_timestamp'] as String?;
+      final expectedFixTs = item.gnssFixTimestampUtc?.toUtc().toIso8601String();
+      if (cloudFixTs != null && cloudFixTs != expectedFixTs) {
+        throw IntegrityConflictException(
+          'Firestore evidence document gnss_fix_timestamp ($cloudFixTs) conflicts with local ($expectedFixTs).',
         );
       }
 

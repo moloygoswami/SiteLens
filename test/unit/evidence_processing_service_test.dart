@@ -260,5 +260,61 @@ void main() {
       final decodedThumb = img.decodeImage(savedThumb)!;
       expect(decodedThumb.height, greaterThan(decodedThumb.width));
     });
+
+    test(
+        'F-A1: Derived evidence and thumbnail strip original camera EXIF while the original keeps it',
+        () async {
+      // Build an original JPEG carrying unverified device EXIF (identity +
+      // device-clock claims) and an orientation tag that must be baked into
+      // the pixels before the metadata is stripped.
+      final exifImg = img.Image(width: 400, height: 300);
+      img.fill(exifImg, color: img.ColorRgb8(120, 150, 180));
+      exifImg.exif.imageIfd['Make'] = 'Pixel';
+      exifImg.exif.imageIfd['Model'] = 'Pixel 9';
+      exifImg.exif.imageIfd['Software'] = 'StockCamera 1.0';
+      exifImg.exif.imageIfd['DateTime'] = '2026:01:01 10:00:00';
+      exifImg.exif.imageIfd.orientation = 6;
+      final exifBytes = Uint8List.fromList(img.encodeJpg(exifImg));
+
+      // Control: the encoder really embeds EXIF (keeps this test non-vacuous)
+      final control = img.decodeImage(exifBytes)!;
+      expect(control.exif.imageIfd.hasMake, isTrue);
+      expect(control.exif.imageIfd.hasModel, isTrue);
+
+      final result = await processingService.processCapture(
+        originalBytes: exifBytes,
+        snapshot: sampleSnapshot,
+      );
+      expect(result.isSuccess, isTrue);
+
+      // Original artifact is preserved untouched with its device EXIF
+      final savedOriginal = mockStorage
+          .savedFiles['/mock/media/orig_${sampleSnapshot.mediaId}.jpg']!;
+      final decodedOriginal = img.decodeImage(savedOriginal)!;
+      expect(decodedOriginal.exif.imageIfd.hasMake, isTrue);
+      expect(decodedOriginal.exif.imageIfd.hasModel, isTrue);
+
+      // Derived evidence JPEG carries no third-party metadata claims;
+      // orientation was baked into the pixels (400x300 orientation-6 -> 300x400)
+      final savedEvidence = mockStorage
+          .savedFiles['/mock/media/evid_${sampleSnapshot.mediaId}.jpg']!;
+      final decodedEvidence = img.decodeImage(savedEvidence)!;
+      expect(decodedEvidence.exif.imageIfd.hasMake, isFalse);
+      expect(decodedEvidence.exif.imageIfd.hasModel, isFalse);
+      expect(decodedEvidence.exif.imageIfd.hasSoftware, isFalse);
+      expect(decodedEvidence.exif.imageIfd.hasOrientation, isFalse);
+      expect(decodedEvidence.exif.imageIfd.containsKey(0x0132), isFalse);
+      expect(decodedEvidence.width, 300);
+      expect(decodedEvidence.height, 400);
+
+      // Thumbnail is derived from the same stripped canvas
+      final savedThumb = mockStorage
+          .savedFiles['/mock/media/thumb_${sampleSnapshot.mediaId}.jpg']!;
+      final decodedThumb = img.decodeImage(savedThumb)!;
+      expect(decodedThumb.exif.imageIfd.hasMake, isFalse);
+      expect(decodedThumb.exif.imageIfd.hasModel, isFalse);
+      expect(decodedThumb.width, 150);
+      expect(decodedThumb.height, 200);
+    });
   });
 }

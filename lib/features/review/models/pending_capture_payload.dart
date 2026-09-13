@@ -1,4 +1,4 @@
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import '../../../domain/models/enums.dart';
 import '../../camera/models/evidence_metadata_snapshot.dart';
 import '../../camera/models/processed_evidence_payload.dart';
@@ -16,6 +16,7 @@ class PendingCapturePayload {
   final ProcessedEvidencePayload? photoPayload;
   final Uint8List? previewBytes;
   final Future<ProcessedEvidencePayload>? processingFuture;
+  final VoidCallback? onCancel;
   bool isCancelled;
 
   PendingCapturePayload({
@@ -31,6 +32,7 @@ class PendingCapturePayload {
     this.photoPayload,
     this.previewBytes,
     this.processingFuture,
+    this.onCancel,
     this.isCancelled = false,
   });
 
@@ -39,6 +41,7 @@ class PendingCapturePayload {
 
   void cancelProcessing() {
     isCancelled = true;
+    onCancel?.call();
   }
 
   String get formattedFileSize {
@@ -62,6 +65,7 @@ class PendingCapturePayload {
     ProcessedEvidencePayload? photoPayload,
     Uint8List? previewBytes,
     Future<ProcessedEvidencePayload>? processingFuture,
+    VoidCallback? onCancel,
     bool? isCancelled,
   }) {
     return PendingCapturePayload(
@@ -77,6 +81,7 @@ class PendingCapturePayload {
       photoPayload: photoPayload ?? this.photoPayload,
       previewBytes: previewBytes ?? this.previewBytes,
       processingFuture: processingFuture ?? this.processingFuture,
+      onCancel: onCancel ?? this.onCancel,
       isCancelled: isCancelled ?? this.isCancelled,
     );
   }

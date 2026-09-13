@@ -48,7 +48,9 @@ void main() {
   });
 
   setUp(() {
-    SharedPreferences.setMockInitialValues({'sitelens_active_site_id': 'site-alpha'});
+    SharedPreferences.setMockInitialValues({
+      'sitelens_active_site_id_test-inspector-uid-12345678': 'site-alpha',
+    });
   });
 
   Widget createWidgetUnderTest({FakeSyncCoordinator? customCoordinator}) {
@@ -65,7 +67,10 @@ void main() {
         authServiceProvider.overrideWithValue(MockAuthService()),
         siteRepositoryProvider.overrideWithValue(MockSiteRepository(testSite)),
         siteControllerProvider.overrideWith(
-          (ref) => SiteController(MockSiteRepository(testSite)),
+          (ref) => SiteController(
+            MockSiteRepository(testSite),
+            initialUserId: 'test-inspector-uid-12345678',
+          ),
         ),
         syncCoordinatorProvider.overrideWith(
           (ref) => coordinator,
@@ -258,7 +263,10 @@ class MockSiteRepository implements SiteRepository {
   Future<void> saveSite(SiteModel site) async {}
 
   @override
-  Future<void> deleteSite(String id) async {}
+  Future<void> deleteSite(String id, {String? creatorId}) async {}
+
+  @override
+  Future<bool> hasMediaForSite(String siteId) async => false;
 
   @override
   Future<void> seedDefaultSitesIfEmpty() async {}
@@ -295,6 +303,9 @@ class MockAuthService implements AuthService {
 
   @override
   Future<void> sendPasswordResetEmail(String email) async {}
+
+  @override
+  Future<SessionVerificationResult> verifySession() async => const SessionVerificationResult.valid();
 
   @override
   Future<void> signOut() async {}

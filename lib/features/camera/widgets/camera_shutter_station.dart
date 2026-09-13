@@ -9,6 +9,7 @@ class CameraShutterStation extends StatelessWidget {
   final bool isCapturePermitted;
   final bool isRecordingVideo;
   final String recordingDurationFormatted;
+  final bool isExecutingCapture;
   final VoidCallback onShutterPressed;
   final VoidCallback onGalleryPressed;
   final ValueChanged<CameraCaptureMode> onModeChanged;
@@ -21,6 +22,7 @@ class CameraShutterStation extends StatelessWidget {
     this.isCapturePermitted = true,
     this.isRecordingVideo = false,
     this.recordingDurationFormatted = '00:00',
+    this.isExecutingCapture = false,
     required this.onShutterPressed,
     required this.onGalleryPressed,
     required this.onModeChanged,
@@ -32,7 +34,12 @@ class CameraShutterStation extends StatelessWidget {
     final isShutterDisabled = (!isCapturePermitted && !isRecordingVideo) ||
         cameraStatus == CameraStatus.unavailable ||
         cameraStatus == CameraStatus.capturing ||
-        cameraStatus == CameraStatus.initializing;
+        cameraStatus == CameraStatus.initializing ||
+        cameraStatus == CameraStatus.error ||
+        cameraStatus == CameraStatus.permissionDenied ||
+        cameraStatus == CameraStatus.permissionPermanentlyDenied ||
+        cameraStatus == CameraStatus.permissionRestricted ||
+        isExecutingCapture;
 
     return Container(
       color: AppColors.surface,
@@ -118,7 +125,7 @@ class CameraShutterStation extends StatelessWidget {
                         isDegraded: state.gps.isDegraded,
                         isRecording: isRecordingVideo,
                         captureMode: state.captureMode,
-                        onPressed: isShutterDisabled ? null : onShutterPressed,
+                        onPressed: isExecutingCapture ? null : onShutterPressed,
                       ),
                     ],
                   ),
@@ -166,8 +173,20 @@ class ReadinessBanner extends StatelessWidget {
       text = 'Initializing camera…';
       dotColor = AppColors.statusAmber;
       bgColor = AppColors.surfaceContainerHigh;
+    } else if (cameraStatus == CameraStatus.permissionDenied) {
+      text = 'Camera permission required — grant access to capture evidence.';
+      dotColor = AppColors.statusAmber;
+      bgColor = AppColors.surfaceContainerHigh;
+    } else if (cameraStatus == CameraStatus.permissionPermanentlyDenied) {
+      text = 'Camera permission blocked — enable in settings to capture evidence.';
+      dotColor = AppColors.statusRed;
+      bgColor = AppColors.statusRedLight;
+    } else if (cameraStatus == CameraStatus.permissionRestricted) {
+      text = 'Camera access restricted by device policy.';
+      dotColor = AppColors.statusRed;
+      bgColor = AppColors.surfaceContainerHigh;
     } else if (cameraStatus == CameraStatus.unavailable) {
-      text = 'Camera access required to capture evidence.';
+      text = 'Optical sensor unavailable — evidence capture disabled.';
       dotColor = AppColors.statusRed;
       bgColor = AppColors.statusRedLight;
     } else if (cameraStatus == CameraStatus.error) {

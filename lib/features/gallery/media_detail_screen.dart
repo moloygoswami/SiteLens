@@ -1,18 +1,25 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../app/theme.dart';
+import '../../core/utils/gps_utils.dart';
 import '../../core/utils/haversine.dart';
 import '../../data/repositories/media_repository.dart';
+import '../../data/repositories/site_repository.dart';
 import '../../domain/models/enums.dart';
 import '../../domain/models/media_item.dart';
 import '../../shared/utils/responsive_layout.dart';
 import '../../shared/widgets/confirmation_dialog.dart';
+import '../../shared/widgets/evidence_metadata_hud_card.dart';
+import '../camera/hud/hud_data.dart';
+import '../camera/hud/hud_formatter.dart';
 import '../camera/services/evidence_storage_service.dart';
 import '../nearby/nearby_search_screen.dart';
 import '../sync/services/cloud_media_recovery_service.dart';
+import 'controllers/evidence_video_playback.dart';
 import 'widgets/local_video_player_widget.dart';
 import 'widgets/media_tag_edit_modal.dart';
 import 'widgets/single_item_share_sheet.dart';
@@ -37,6 +44,22 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   bool _isShaExpanded = false;
   bool _isRecovering = false;
 
+  /// Canonical persisted site code for [_item]'s site, resolved from the site
+  /// repository by [MediaItem.siteId]. Used only for the user-facing metadata
+  /// card; the internal Firestore-style site document id is never presented.
+  String? _siteCode;
+
+  /// Persisted site name for [_item]'s site, resolved alongside [_siteCode].
+  String? _siteName;
+
+  /// Single owner of the video player for this evidence item. Shared by the
+  /// inline surface and the fullscreen surface so exactly one ExoPlayer exists.
+  EvidenceVideoPlayback? _videoPlayback;
+
+  /// True while the fullscreen route is on top; the inline video surface is
+  /// parked so only one video surface renders for the shared player.
+  bool _isFullscreenOpen = false;
+
   @override
   void initState() {
     super.initState();
@@ -46,28 +69,61 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
 
   @override
   void dispose() {
+    // The single owned player dies with this screen.
+    _videoPlayback?.dispose();
+    _videoPlayback = null;
     super.dispose();
   }
 
   Future<void> _loadContextualData() async {
     final storage = ref.read(evidenceStorageServiceProvider);
     final mediaRepo = ref.read(mediaRepositoryProvider);
+    final siteRepo = ref.read(siteRepositoryProvider);
 
     final evidAbs = await storage.resolveAbsolutePath(_item.uri);
     final origAbs = await storage.resolveAbsolutePath(_item.originalUri);
 
+    final site = _item.siteId.isEmpty
+        ? null
+        : await siteRepo.getSiteById(_item.siteId);
+
     MediaItem? linked;
-    if (_item.linkedMediaId != null) {
+    if (_item.observationType == ObservationType.closed && _item.linkedMediaId != null) {
       linked = await mediaRepo.getMediaById(_item.linkedMediaId!);
     }
 
     if (mounted) {
+      _syncVideoPlayback(_item.type == MediaItemType.video ? origAbs : null);
       setState(() {
         _resolvedEvidencePath = evidAbs;
         _resolvedOriginalPath = origAbs;
         _linkedItem = linked;
+        _siteCode = site?.siteCode;
+        _siteName = site?.name;
       });
     }
+  }
+
+  /// Establishes the single video playback owner for [displayPath].
+  ///
+  /// Reuses the existing owner when the resolved path is unchanged so reloading
+  /// contextual data (tag edits, cloud recovery) never creates a second player
+  /// for the same video.
+  void _syncVideoPlayback(String? displayPath) {
+    if (displayPath == null) return;
+
+    final existing = _videoPlayback;
+    if (existing != null &&
+        !existing.isDisposed &&
+        existing.videoFile.path == displayPath) {
+      return;
+    }
+
+    existing?.dispose();
+    final playback =
+        ref.read(evidenceVideoPlaybackFactoryProvider)(File(displayPath));
+    _videoPlayback = playback;
+    unawaited(playback.initialize());
   }
 
   /// [FROZEN CONTRACT - DO NOT ALTER HEIGHT OR LAYOUT]
@@ -75,16 +131,24 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   /// evidence inspection without black letterboxing or unwanted blank gaps.
   /// 1. Top: Floating translucent header bar (`SafeArea` top-aligned).
   /// 2. Body: Photo occupies full expanded height from the header bottom edge
-  ///    directly down to the screen bottom (`BoxFit.fill` with `InteractiveViewer`).
+  ///    directly down to the screen bottom (`BoxFit.contain` with `InteractiveViewer`).
   void _openFullScreenViewer() {
-    // The watermark is burned directly into the evidence file (evid_), so the
-    // Immersive viewer renders that same burned image. The overlay is always
-    // present; tapping only toggles the floating chrome header.
-    final displayPath = _resolvedEvidencePath ?? _resolvedOriginalPath;
+    final isVideo = _item.type == MediaItemType.video;
+    final videoPlayback = _videoPlayback;
+    final displayPath = isVideo
+        ? videoPlayback?.videoFile.path
+        : (_resolvedEvidencePath ?? _resolvedOriginalPath);
 
     if (displayPath == null) {
       return;
     }
+    if (isVideo && (videoPlayback == null || videoPlayback.isDisposed)) {
+      return;
+    }
+
+    // Park the inline video surface while the fullscreen surface is on top so
+    // exactly one video surface renders for the single shared player.
+    setState(() => _isFullscreenOpen = true);
 
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -96,21 +160,34 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
               body: SafeArea(
                 child: Stack(
                   children: [
-                    // 1. Photo viewport with interactive zoom & tap toggle
+                    // 1. Media viewport
                     Positioned.fill(
-                      child: GestureDetector(
-                        onTap: () => setViewerState(() => showHud = !showHud),
-                        child: InteractiveViewer(
-                          minScale: 0.8,
-                          maxScale: 6.0,
-                          child: Center(
-                            child: Image.file(
-                              File(displayPath),
-                              fit: BoxFit.contain,
+                      child: isVideo
+                          ? Center(
+                              child: videoPlayback == null
+                                  ? _buildMediaFallback(true)
+                                  : LocalVideoPlayerWidget(
+                                      playback: videoPlayback,
+                                    ),
+                            )
+                          : GestureDetector(
+                              onTap: () =>
+                                  setViewerState(() => showHud = !showHud),
+                              child: InteractiveViewer(
+                                minScale: 0.8,
+                                maxScale: 6.0,
+                                child: Center(
+                                  child: (!File(displayPath).existsSync())
+                                      ? _buildMediaFallback(false)
+                                      : Image.file(
+                                          File(displayPath),
+                                          fit: BoxFit.contain,
+                                          errorBuilder: (ctx, err, stack) =>
+                                              _buildMediaFallback(false),
+                                        ),
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                      ),
                     ),
 
                     // 2. Floating Translucent Header Bar
@@ -147,8 +224,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                       color: Colors.white24, width: 0.8),
                                 ),
                                 child: Text(
-                                  _item.type == MediaItemType.video
-                                      ? 'FULLSCREEN VIDEO'
+                                  isVideo
+                                      ? 'FULLSCREEN VIDEO EVIDENCE'
                                       : 'IMMERSIVE EVIDENCE VIEWER',
                                   style: const TextStyle(
                                     fontFamily: 'monospace',
@@ -159,7 +236,48 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                   ),
                                 ),
                               ),
+                              if (isVideo) ...[
+                                const Spacer(),
+                                IconButton(
+                                  icon: Container(
+                                    padding: const EdgeInsets.all(6),
+                                    decoration: const BoxDecoration(
+                                      color: Color(0x99000000),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: Icon(
+                                      showHud
+                                          ? Icons.layers_outlined
+                                          : Icons.layers_clear_outlined,
+                                      color: Colors.white,
+                                      size: 20,
+                                    ),
+                                  ),
+                                  tooltip: 'Toggle Metadata Overlay',
+                                  onPressed: () => setViewerState(
+                                      () => showHud = !showHud),
+                                ),
+                              ],
                             ],
+                          ),
+                        ),
+                      ),
+
+                    // 3. Bottom canonical metadata card, shared by Photo and Video
+                    //    (does not intercept touches). Rendered at runtime from
+                    //    persisted capture-time metadata via HudFormatter.fromMediaItem.
+                    if (showHud)
+                      Positioned(
+                        bottom: 24,
+                        left: 12,
+                        right: 12,
+                        child: IgnorePointer(
+                          child: StandaloneMetadataWidget(
+                            hudData: HudFormatter.fromMediaItem(
+                              _item,
+                              siteCode: _siteCode,
+                              siteName: _siteName,
+                            ),
                           ),
                         ),
                       ),
@@ -170,7 +288,11 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
           );
         },
       ),
-    );
+    ).whenComplete(() {
+      if (mounted) {
+        setState(() => _isFullscreenOpen = false);
+      }
+    });
   }
 
   Future<void> _handleEditTags() async {
@@ -356,8 +478,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final isVideo = _item.type == MediaItemType.video;
-    final isLowGps = _item.lowAccuracy ||
-        (_item.accuracyM != null && _item.accuracyM! > 20.0);
+    final videoPlayback = _videoPlayback;
+    final isDegradedStatus = _item.verificationStatus == HudStatus.degraded;
+    final isVerifiedStatus = _item.verificationStatus == HudStatus.verified;
+    final isPendingStatus = _item.verificationStatus == HudStatus.pending;
     final fullSha = _item.sha256Hash ?? 'UNKNOWN';
     final hashPrefix = fullSha.length > 16 ? fullSha.substring(0, 16) : fullSha;
     final screenHeight = MediaQuery.of(context).size.height;
@@ -427,9 +551,50 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
               height: photoViewportHeight,
               color: Colors.black,
               child: isVideo
-                  ? (_resolvedOriginalPath != null
-                      ? LocalVideoPlayerWidget(
-                          videoFile: File(_resolvedOriginalPath!))
+                  ? (videoPlayback != null
+                      ? Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            LocalVideoPlayerWidget(
+                              playback: videoPlayback,
+                              isActive: !_isFullscreenOpen,
+                            ),
+                            Positioned(
+                              top: 12,
+                              right: 12,
+                              child: Material(
+                                color: Colors.black.withAlpha(180),
+                                borderRadius: BorderRadius.circular(20),
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(20),
+                                  onTap: _openFullScreenViewer,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 10, vertical: 6),
+                                    child: const Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(Icons.fullscreen_rounded,
+                                            color: Colors.white, size: 16),
+                                        SizedBox(width: 4),
+                                        Text(
+                                          'Fullscreen Zoom',
+                                          style: TextStyle(
+                                            fontFamily: 'monospace',
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w700,
+                                            color: Colors.white,
+                                            letterSpacing: 0.5,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        )
                       : const Center(
                           child: CircularProgressIndicator(
                               strokeWidth: 2, color: AppColors.primary)))
@@ -476,6 +641,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                                             fontSize: 10,
                                             fontWeight: FontWeight.w700,
                                             color: Colors.white,
+                                            letterSpacing: 0.5,
                                           ),
                                         ),
                                       ],
@@ -500,6 +666,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                       _resolvedOriginalPath != null &&
                       !File(_resolvedOriginalPath!).existsSync())
                     _buildCloudRecoveryBanner(),
+
 
                   // GROUP 1: OBSERVATION & TAGS (Consolidated, non-duplicative)
                   _buildSectionHeader('OBSERVATION & TAGS'),
@@ -610,38 +777,50 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 8, vertical: 5),
                           decoration: BoxDecoration(
-                            color: isLowGps
+                            color: isDegradedStatus
                                 ? AppColors.statusAmber.withAlpha(25)
-                                : AppColors.statusGreen.withAlpha(25),
+                                : (isVerifiedStatus
+                                    ? AppColors.statusGreen.withAlpha(25)
+                                    : AppColors.statusRed.withAlpha(25)),
                             borderRadius: BorderRadius.circular(6),
                             border: Border.all(
-                              color: isLowGps
+                              color: isDegradedStatus
                                   ? AppColors.statusAmber.withAlpha(100)
-                                  : AppColors.statusGreen.withAlpha(100),
+                                  : (isVerifiedStatus
+                                      ? AppColors.statusGreen.withAlpha(100)
+                                      : AppColors.statusRed.withAlpha(100)),
                             ),
                           ),
                           child: Row(
                             children: [
                               Icon(
-                                isLowGps
+                                isDegradedStatus
                                     ? Icons.warning_amber_rounded
-                                    : Icons.verified_rounded,
+                                    : (isVerifiedStatus
+                                        ? Icons.verified_rounded
+                                        : Icons.location_off_rounded),
                                 size: 14,
-                                color: isLowGps
+                                color: isDegradedStatus
                                     ? AppColors.statusAmber
-                                    : AppColors.statusGreen,
+                                    : (isVerifiedStatus
+                                        ? AppColors.statusGreen
+                                        : AppColors.statusRed),
                               ),
                               const SizedBox(width: 6),
                               Expanded(
                                 child: Text(
-                                  'GPS PRECISION: ±${_item.accuracyM?.toStringAsFixed(1) ?? 'N/A'}m ${isLowGps ? '(DEGRADED FIX >20m)' : '(HIGH INTEGRITY FIX)'}',
+                                  isPendingStatus
+                                      ? 'GPS STATUS: PENDING / NO FIX'
+                                      : 'GPS STATUS: ${_item.verificationStatus?.name.toUpperCase() ?? (_item.lowAccuracy ? "DEGRADED" : "VERIFIED")} (±${_item.accuracyM?.toStringAsFixed(1) ?? 'N/A'}m)',
                                   style: TextStyle(
                                     fontFamily: 'monospace',
                                     fontSize: 10,
                                     fontWeight: FontWeight.w700,
-                                    color: isLowGps
+                                    color: isDegradedStatus
                                         ? AppColors.statusAmber
-                                        : AppColors.statusGreen,
+                                        : (isVerifiedStatus
+                                            ? AppColors.statusGreen
+                                            : AppColors.statusRed),
                                   ),
                                   overflow: TextOverflow.ellipsis,
                                 ),
@@ -649,6 +828,63 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                             ],
                           ),
                         ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  // GROUP: CAPTURE & GEOSPATIAL TELEMETRY
+                  _buildSectionHeader('CAPTURE & GEOSPATIAL TELEMETRY'),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceContainer,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: AppColors.border),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _buildTelemetryRow(
+                          'TIMESTAMP',
+                          GPSUtils.formatInspectionTimestamp(_item.capturedAt),
+                        ),
+                        const SizedBox(height: 6),
+                        _buildTelemetryRow(
+                          'COORDINATES',
+                          GPSUtils.formatLabeledCoordinates(_item.lat, _item.lon),
+                        ),
+                        const SizedBox(height: 6),
+                        _buildTelemetryRow(
+                          'ALTITUDE',
+                          GPSUtils.formatAltitude(_item.altitude, isMsl: _item.isAltitudeMsl),
+                        ),
+                        if (_item.capturedAddress != null &&
+                            _item.capturedAddress!.isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          _buildTelemetryRow('LOCATION', _item.capturedAddress!),
+                        ],
+                        const SizedBox(height: 6),
+                        _buildTelemetryRow(
+                          'VERIFICATION',
+                          '${_item.verificationStatus?.name.toUpperCase() ?? (_item.lowAccuracy ? "DEGRADED" : "VERIFIED")} (±${_item.accuracyM?.toStringAsFixed(1) ?? "N/A"}m)',
+                        ),
+                        if (_item.gnssSatelliteCount != null) ...[
+                          const SizedBox(height: 6),
+                          _buildTelemetryRow(
+                            'SATELLITES',
+                            '${_item.gnssSatellitesUsedInFix ?? _item.gnssSatelliteCount} used / ${_item.gnssSatelliteCount} visible',
+                          ),
+                        ],
+                        if (_item.gnssFixTimestampUtc != null) ...[
+                          const SizedBox(height: 6),
+                          _buildTelemetryRow(
+                            'GNSS FIX TIME',
+                            '${_item.gnssFixTimestampUtc!.toUtc().toIso8601String()} (UTC)',
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -741,7 +977,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                   const SizedBox(height: 14),
 
                   // SECTION 5: SMART-LINK BEFORE / AFTER EVIDENCE LINKAGE
-                  if (_linkedItem != null) ...[
+                  if (_item.observationType == ObservationType.closed && _linkedItem != null) ...[
                     _buildLinkedEvidenceCard(_linkedItem!),
                     const SizedBox(height: 16),
                   ],
@@ -818,6 +1054,38 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
           letterSpacing: 0.5,
         ),
       ),
+    );
+  }
+
+
+  Widget _buildTelemetryRow(String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 95,
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              color: AppColors.textMuted,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
+            ),
+          ),
+        ),
+      ],
     );
   }
 

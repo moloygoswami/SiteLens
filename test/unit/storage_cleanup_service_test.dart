@@ -60,10 +60,13 @@ class FakeMediaRepository implements MediaRepository {
   Future<void> deletePermanently(String mediaId) async {}
 
   @override
+  Future<Set<String>> getResolvedMediaIds({required String siteId, String? creatorId}) async => const {};
+
+  @override
   Future<void> updateSyncStatus(String mediaId, SyncStatusType status) async {}
 
   @override
-  Future<void> updateTags({required String mediaId, required String activityTag, required ObservationType observationType, String? note}) async {}
+  Future<void> updateTags({required String mediaId, required String activityTag, required ObservationType observationType, String? note, String? linkedMediaId}) async {}
 
   @override
   Stream<List<MediaItem>> watchAllMedia({String? siteId, String? activity, ObservationType? observationType, bool? lowAccuracyOnly, String? creatorId}) =>
@@ -73,7 +76,13 @@ class FakeMediaRepository implements MediaRepository {
   Stream<int> watchUnsyncedCount({String? creatorId}) => Stream.value(0);
 
   @override
-  Future<MediaItem?> findSuggestedBeforeMatch({required double centerLat, required double centerLon, required String siteId, required String activityTag, double radiusMeters = 10.0, String? currentMediaId, String? creatorId}) async => null;
+  Future<List<MediaItem>> getTombstoneSyncCandidates({String? creatorId}) async => const [];
+
+  @override
+  Stream<int> watchTombstoneCandidateCount() => const Stream<int>.empty();
+
+  @override
+  Future<MediaItem?> findSuggestedBeforeMatch({required double centerLat, required double centerLon, required String siteId, required String activityTag, double radiusMeters = 10.0, String? currentMediaId, String? creatorId, bool requireCreator = false}) async => null;
 
   @override
   Future<List<NearbyMediaResult>> findNearbyMedia({required double centerLat, required double centerLon, required double radiusMeters, String? siteId, String? activity, ObservationType? observationType, String? excludeMediaId, String? creatorId}) async => [];

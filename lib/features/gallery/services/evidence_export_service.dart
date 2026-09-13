@@ -422,7 +422,7 @@ class EvidenceExportService {
         '${DateFormat("yyyy-MM-dd HH:mm:ss").format(DateTime.now().toUtc())} UTC';
 
     final coordFormatted = GPSUtils.formatCoordinates(item.lat, item.lon);
-    final actualAlt = GPSUtils.formatAltitude(item.altitude);
+    final actualAlt = GPSUtils.formatAltitude(item.altitude, isMsl: item.isAltitudeMsl);
     final precisionFormatted = item.accuracyM != null
         ? '±${item.accuracyM!.toStringAsFixed(1)}m (${item.lowAccuracy ? "Degraded" : "High Precision"})'
         : 'Unknown Fix';

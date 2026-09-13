@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../../app/theme.dart';
 import '../../app/router.dart';
+import '../../core/services/auth_service.dart';
 import '../../core/services/permission_service.dart';
+import '../../core/services/session_service.dart';
 import '../../shared/utils/responsive_layout.dart';
 import '../../shared/widgets/primary_button.dart';
 import '../../shared/widgets/secondary_button.dart';
@@ -41,13 +43,28 @@ class _PermissionRecoveryScreenState
   }
 
   Future<void> _checkAndResume() async {
+    if (_isChecking) return;
     setState(() => _isChecking = true);
-    final status =
-        await ref.read(permissionServiceProvider.notifier).checkAllPermissions();
-    if (mounted) {
-      setState(() => _isChecking = false);
-      if (status.areCorePermissionsGranted) {
-        Navigator.of(context).pushReplacementNamed(AppRoutes.siteSetup);
+    try {
+      final status =
+          await ref.read(permissionServiceProvider.notifier).checkAllPermissions();
+      if (mounted && status.areCorePermissionsGranted) {
+        final sessionUser = ref.read(sessionServiceProvider).user ??
+            ref.read(authServiceProvider).currentUser;
+        if (sessionUser != null) {
+          await ref.read(sessionServiceProvider.notifier).completeOnboarding(sessionUser.uid);
+        }
+        if (mounted) {
+          if (Navigator.of(context).canPop()) {
+            Navigator.of(context).pop();
+          } else {
+            Navigator.of(context).pushReplacementNamed(AppRoutes.siteSetup);
+          }
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isChecking = false);
       }
     }
   }

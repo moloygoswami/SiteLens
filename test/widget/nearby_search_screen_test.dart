@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite3/open.dart';
 import 'package:sitelens/core/controllers/nearby_settings_controller.dart';
+import 'package:sitelens/core/services/auth_service.dart';
 import 'package:sitelens/data/local/database/app_database.dart';
 import 'package:sitelens/data/local/database/database_provider.dart';
 import 'package:sitelens/data/repositories/media_repository.dart';
@@ -162,16 +163,31 @@ void main() {
     await db.close();
   });
 
-  Widget createWidgetUnderTest(MediaItem? source) {
+  Widget createWidgetUnderTest(
+    MediaItem? source, {
+    bool isPicker = false,
+    String? initialSiteId,
+    double? initialLat,
+    double? initialLon,
+    void Function(MediaItem)? onSelectCandidate,
+  }) {
     return ProviderScope(
       overrides: [
         appDatabaseProvider.overrideWithValue(db),
         mediaRepositoryProvider.overrideWithValue(mediaRepo),
         evidenceStorageServiceProvider.overrideWithValue(mockStorage),
         nearbySettingsProvider.overrideWith((ref) => FakeNearbySettingsNotifier(25.0)),
+        authStateProvider.overrideWith((ref) => Stream.value(const AuthUser(uid: 'user-test'))),
       ],
       child: MaterialApp(
-        home: NearbySearchScreen(sourceMedia: source),
+        home: NearbySearchScreen(
+          sourceMedia: source,
+          isPicker: isPicker,
+          initialSiteId: initialSiteId,
+          initialLat: initialLat,
+          initialLon: initialLon,
+          onSelectCandidate: onSelectCandidate,
+        ),
       ),
     );
   }
@@ -287,6 +303,109 @@ void main() {
       // Filters should clear and all 3 items reappear
       expect(find.text('3 ITEMS'), findsOneWidget);
       expect(find.text('Clear All'), findsNothing);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('Picker mode renders banner and displays Select button for eligible open Non-Conformity', (tester) async {
+      MediaItem? selectedItem;
+
+      await tester.pumpWidget(createWidgetUnderTest(
+        null,
+        isPicker: true,
+        initialSiteId: testSiteId,
+        initialLat: centerLat,
+        initialLon: centerLon,
+        onSelectCandidate: (item) => selectedItem = item,
+      ));
+      await tester.pumpAndSettle();
+
+      // Verify picker banner
+      expect(find.text('PICKER MODE: Select an open Non-Conformity as BEFORE reference'), findsOneWidget);
+
+      // Eligible candidates (source-1 and candidate-before-4m) should show 'Select' button
+      expect(find.text('Select'), findsNWidgets(2));
+
+      // Ineligible items (Closed or Progress) should show INELIGIBLE badge
+      expect(find.text('INELIGIBLE'), findsWidgets);
+
+      // Tap 'Select' on the eligible candidate
+      await tester.tap(find.text('Select').first);
+      await tester.pumpAndSettle();
+
+      expect(selectedItem, isNotNull);
+      expect(selectedItem!.observationType, ObservationType.nonConformity);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('Picker mode correctly marks a previously resolved Non-Conformity as RESOLVED and prevents selection', (tester) async {
+      // Seed closed evidence that resolves candidate-before-4m and source-1
+      await mediaRepo.insertMedia(MediaItem(
+        id: 'closed-resolver-1',
+        siteId: testSiteId,
+        originalUri: 'media/orig_res1.jpg',
+        uri: 'media/evid_res1.jpg',
+        thumbUri: 'media/thumb_res1.jpg',
+        type: MediaItemType.photo,
+        lat: centerLat + (1.0 / 111320.0),
+        lon: centerLon,
+        accuracyM: 2.0,
+        lowAccuracy: false,
+        activityTag: 'Excavation',
+        observationType: ObservationType.closed,
+        linkedMediaId: 'candidate-before-4m',
+        note: 'Resolved',
+        capturedAt: DateTime.utc(2026, 8, 15, 15, 0, 0),
+        creatorId: 'user-test',
+        sha256Hash: 'hash-res1',
+        evidenceSha256Hash: 'evid-hash-res1',
+        capturedAddress: 'Shibpur, Howrah',
+        syncStatus: SyncStatusType.pending,
+        isDeleted: false,
+      ));
+      await mediaRepo.insertMedia(MediaItem(
+        id: 'closed-resolver-source',
+        siteId: testSiteId,
+        originalUri: 'media/orig_res2.jpg',
+        uri: 'media/evid_res2.jpg',
+        thumbUri: 'media/thumb_res2.jpg',
+        type: MediaItemType.photo,
+        lat: centerLat,
+        lon: centerLon,
+        accuracyM: 2.0,
+        lowAccuracy: false,
+        activityTag: 'Excavation',
+        observationType: ObservationType.closed,
+        linkedMediaId: 'source-1',
+        note: 'Source resolved',
+        capturedAt: DateTime.utc(2026, 8, 15, 16, 0, 0),
+        creatorId: 'user-test',
+        sha256Hash: 'hash-res2',
+        evidenceSha256Hash: 'evid-hash-res2',
+        capturedAddress: 'Shibpur, Howrah',
+        syncStatus: SyncStatusType.pending,
+        isDeleted: false,
+      ));
+
+      MediaItem? selectedItem;
+
+      await tester.pumpWidget(createWidgetUnderTest(
+        null,
+        isPicker: true,
+        initialSiteId: testSiteId,
+        initialLat: centerLat,
+        initialLon: centerLon,
+        onSelectCandidate: (item) => selectedItem = item,
+      ));
+      await tester.pumpAndSettle();
+
+      // candidate-before-4m and source-1 are now resolved, so neither shows 'Select'
+      expect(find.text('Select'), findsNothing);
+      expect(find.text('RESOLVED'), findsWidgets);
+      expect(selectedItem, isNull);
 
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();

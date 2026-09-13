@@ -1,6 +1,7 @@
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import '../../../core/utils/gps_utils.dart';
+import '../hud/hud_data.dart';
 import 'gnss_snapshot.dart';
 import 'gps_hardware_state.dart';
 
@@ -25,6 +26,9 @@ class EvidenceMetadataSnapshot {
   final String resolvedAddress;
   final String? creatorId;
 
+  /// Whether the metadata snapshot contains a verified, valid GPS fix.
+  final bool hasValidFix;
+
   /// GNSS satellite telemetry captured at shutter time.
   final int? gnssSatelliteCount;
   final int? gnssSatellitesUsedInFix;
@@ -34,6 +38,15 @@ class EvidenceMetadataSnapshot {
   /// Timestamp when the GNSS satellite fix was computed by the receiver.
   /// Preserved as GNSS telemetry metadata; strictly decoupled from physical capture instant.
   final DateTime? gnssFixTimestampUtc;
+
+  /// Canonical evidence verification status established at capture time.
+  final HudStatus? _verificationStatus;
+
+  HudStatus get verificationStatus =>
+      _verificationStatus ??
+      (lowAccuracy
+          ? HudStatus.degraded
+          : (hasValidCoordinates ? HudStatus.verified : HudStatus.pending));
 
   const EvidenceMetadataSnapshot({
     required this.mediaId,
@@ -51,12 +64,38 @@ class EvidenceMetadataSnapshot {
     required this.canonicalTimestampUtc,
     required this.resolvedAddress,
     this.creatorId,
+    this.hasValidFix = true,
     this.gnssSatelliteCount,
     this.gnssSatellitesUsedInFix,
     this.gnssConstellations,
     this.gnssSnapshot,
     this.gnssFixTimestampUtc,
-  });
+    HudStatus? verificationStatus,
+  }) : _verificationStatus = verificationStatus;
+
+  /// Evaluates the canonical verification status according to accuracy threshold and fix validity.
+  static HudStatus evaluateVerificationStatus({
+    required bool hasValidFix,
+    required double? latitude,
+    required double? longitude,
+    required double? accuracyMeters,
+    double lowAccuracyThresholdMeters = 20.0,
+  }) {
+    final hasCoordinates = hasValidFix &&
+        latitude != null &&
+        longitude != null &&
+        !(latitude == 0.0 && longitude == 0.0);
+
+    if (!hasCoordinates) {
+      return HudStatus.pending;
+    }
+
+    if (accuracyMeters == null || accuracyMeters > lowAccuracyThresholdMeters) {
+      return HudStatus.degraded;
+    }
+
+    return HudStatus.verified;
+  }
 
   /// Factory constructor capturing a synchronous, immutable snapshot from live GPS
   /// and active site state at the exact moment of shutter press.
@@ -80,7 +119,14 @@ class EvidenceMetadataSnapshot {
 
     final threshold = lowAccuracyThresholdMeters ?? 20.0;
     final accuracy = gpsState.accuracyMeters;
-    final isLowAcc = !gpsState.hasValidFix || (accuracy != null && accuracy > threshold);
+    final status = evaluateVerificationStatus(
+      hasValidFix: gpsState.hasValidFix,
+      latitude: gpsState.latitude,
+      longitude: gpsState.longitude,
+      accuracyMeters: accuracy,
+      lowAccuracyThresholdMeters: threshold,
+    );
+    final isLowAcc = status == HudStatus.degraded;
 
     final gnss = customGnssSnapshot ?? gpsState.gnssSnapshot;
     final gnssAvailable = gnss?.isAvailable == true;
@@ -100,6 +146,11 @@ class EvidenceMetadataSnapshot {
       address = '${siteCode.toUpperCase()} VICINITY';
     }
 
+    final hasValidGps = gpsState.hasValidFix &&
+        gpsState.latitude != null &&
+        gpsState.longitude != null &&
+        !(gpsState.latitude == 0.0 && gpsState.longitude == 0.0);
+
     return EvidenceMetadataSnapshot(
       mediaId: mediaId,
       siteId: siteId,
@@ -116,16 +167,22 @@ class EvidenceMetadataSnapshot {
       canonicalTimestampUtc: canonicalFormatted,
       resolvedAddress: address,
       creatorId: creatorId,
+      hasValidFix: hasValidGps,
       gnssSatelliteCount: gnssAvailable ? gnss?.satelliteCount : null,
       gnssSatellitesUsedInFix: gnssAvailable ? gnss?.satellitesUsedInFix : null,
       gnssConstellations: gnssAvailable ? gnss?.constellations : null,
       gnssSnapshot: gnss,
       gnssFixTimestampUtc: gpsState.timestampUtc,
+      verificationStatus: status,
     );
   }
 
-  String get coordinatesDisplay =>
-      GPSUtils.formatCoordinates(latitude, longitude);
+  bool get hasValidCoordinates =>
+      hasValidFix && !(latitude == 0.0 && longitude == 0.0);
+
+  String get coordinatesDisplay => hasValidCoordinates
+      ? GPSUtils.formatCoordinates(latitude, longitude)
+      : 'Lat — , Long —';
 
   String get altitudeDisplay => GPSUtils.formatAltitude(altitudeMeters, isMsl: isAltitudeMsl);
 

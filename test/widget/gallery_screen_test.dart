@@ -543,7 +543,10 @@ class MockSiteRepository implements SiteRepository {
   Future<void> saveSite(SiteModel site) async {}
 
   @override
-  Future<void> deleteSite(String id) async {}
+  Future<void> deleteSite(String id, {String? creatorId}) async {}
+
+  @override
+  Future<bool> hasMediaForSite(String siteId) async => false;
 
   @override
   Future<void> seedDefaultSitesIfEmpty() async {}

@@ -82,9 +82,9 @@ class FakeMapThumbnailService extends MapThumbnailService {
   Future<void> invalidateCachedImage({
     required double lat,
     required double lon,
-    int zoom = 16,
+    int zoom = MapThumbnailPolicy.canonicalZoom,
     required String mapType,
-    String styleVersion = 'v1',
+    String styleVersion = MapThumbnailPolicy.canonicalStyleVersion,
   }) async {
     invalidatedKeys.add(MapThumbnailService.computeCacheKey(
       lat: lat,
@@ -906,6 +906,212 @@ void main() {
           mapType: AppMapType.satellite,
         );
         expect(cached, isNull);
+      });
+    });
+
+    group('F3: Reliable Pre-Warmed Map Snapshot & Evidence Composition Tests', () {
+      test('1. A verified pre-warmed map snapshot is used for evidence composition when live snapshot is unavailable at shutter time', () async {
+        final fakeService = FakeMapThumbnailService();
+        final notifier = MapThumbnailNotifier(fakeService);
+
+        // Map view and GPS fix ready: pre-warm snapshot
+        notifier.registerLiveSnapshotProvider(() async => sampleMapTilePngBytes);
+        final prewarmed = await notifier.prewarmLiveSnapshot(
+          lat: 22.56298,
+          lon: 88.30085,
+          mapType: AppMapType.satellite,
+        );
+        expect(prewarmed, isNotNull);
+        expect(prewarmed, equals(sampleMapTilePngBytes));
+
+        // Shutter time: live snapshot fails (e.g. Camera2 contention)
+        notifier.registerLiveSnapshotProvider(() async {
+          throw Exception('Camera2 hardware contention during shutter actuation');
+        });
+
+        // Evidence transaction requests snapshot for the capture location (~2m away)
+        final shutterSnapshot = await notifier.takeLiveSnapshotForEvidence(
+          lat: 22.56300,
+          lon: 88.30085,
+          mapType: AppMapType.satellite,
+        );
+
+        expect(shutterSnapshot, isNotNull);
+        expect(shutterSnapshot, equals(sampleMapTilePngBytes), reason: 'Must use verified pre-warmed snapshot');
+
+        // Process capture into evidence artifact
+        final result = await processingService.processCapture(
+          originalBytes: sampleJpegBytes,
+          snapshot: sampleSnapshot,
+          mapTileBytes: shutterSnapshot,
+          isGpsLocked: true,
+          showAddress: true,
+          showMapTile: true,
+        );
+
+        expect(result.isSuccess, isTrue);
+        final savedEvidBytes = mockStorage.savedFiles['/mock/media/evid_${sampleSnapshot.mediaId}.jpg'];
+        expect(savedEvidBytes, isNotNull);
+
+        // Verify that pre-warmed map tile pixels were composited into the bottom-left watermark
+        final decodedEvid = img.decodeJpg(savedEvidBytes!);
+        expect(decodedEvid, isNotNull);
+        bool foundMapTilePixel = false;
+        for (int y = (decodedEvid!.height * 0.7).toInt(); y < decodedEvid.height; y++) {
+          for (int x = 0; x < (decodedEvid.width * 0.45).toInt(); x++) {
+            final p = decodedEvid.getPixel(x, y);
+            if (p.b > 150 && p.r < 80) {
+              foundMapTilePixel = true;
+              break;
+            }
+          }
+          if (foundMapTilePixel) break;
+        }
+        expect(foundMapTilePixel, isTrue, reason: 'Pre-warmed minimap snapshot must be burned into Evidence JPEG');
+      });
+
+      test('2. Pre-warmed cache rejects wrong-location (>20m), stale (>5m), or layer-mismatched coordinates', () async {
+        final fakeService = FakeMapThumbnailService();
+        final notifier = MapThumbnailNotifier(fakeService);
+
+        notifier.registerLiveSnapshotProvider(() async => sampleMapTilePngBytes);
+        await notifier.prewarmLiveSnapshot(
+          lat: 22.56298,
+          lon: 88.30085,
+          mapType: AppMapType.satellite,
+        );
+
+        // Provider now fails at shutter time
+        notifier.registerLiveSnapshotProvider(() async => null);
+
+        // Case A: Wrong-location capture (> 20m away: ~55m north)
+        final wrongLocation = await notifier.takeLiveSnapshotForEvidence(
+          lat: 22.56348,
+          lon: 88.30085,
+          mapType: AppMapType.satellite,
+        );
+        expect(wrongLocation, isNull, reason: 'Must reject pre-warmed snapshot beyond 20m movement threshold');
+
+        // Case B: Layer mismatch (selected Normal Roadmap, pre-warmed was Satellite)
+        final wrongLayer = await notifier.takeLiveSnapshotForEvidence(
+          lat: 22.56298,
+          lon: 88.30085,
+          mapType: AppMapType.normal,
+        );
+        expect(wrongLayer, isNull, reason: 'Must reject pre-warmed snapshot of different mapType');
+
+        // Case C: Transition actively settling blocks pre-warming and fallback
+        notifier.invalidateCachesOnMapTypeChange(AppMapType.normal, lat: 22.56298, lon: 88.30085);
+        final duringTransition = await notifier.prewarmLiveSnapshot(
+          lat: 22.56298,
+          lon: 88.30085,
+          mapType: AppMapType.normal,
+        );
+        expect(duringTransition, isNull, reason: 'Must block pre-warming during active layer transition');
+      });
+
+      test('3. Null map imagery never becomes falsely associated with valid capture coordinates', () async {
+        // When live snapshot, pre-warm, and disk cache are all unavailable:
+        final fakeService = FakeMapThumbnailService();
+        final notifier = MapThumbnailNotifier(fakeService);
+
+        notifier.registerLiveSnapshotProvider(() async => null);
+
+        final resultBytes = await notifier.takeLiveSnapshotForEvidence(
+          lat: 22.56298,
+          lon: 88.30085,
+          mapType: AppMapType.satellite,
+        );
+        expect(resultBytes, isNull);
+
+        // Evidence composition with null map imagery
+        final result = await processingService.processCapture(
+          originalBytes: sampleJpegBytes,
+          snapshot: sampleSnapshot,
+          mapTileBytes: null,
+          isGpsLocked: true,
+          showAddress: true,
+          showMapTile: true,
+        );
+        expect(result.isSuccess, isTrue);
+
+        // Authoritative GPS coordinates must remain exact and untampered
+        expect(sampleSnapshot.latitude, equals(22.56298));
+        expect(sampleSnapshot.longitude, equals(88.30085));
+        expect(sampleSnapshot.accuracyMeters, equals(4.5));
+        expect(sampleSnapshot.canonicalTimestampUtc, equals('2026-09-04 12:00:00 UTC'));
+
+        // Evidence JPEG is persisted truthfully with fallback background (no fabricated tiles)
+        final savedEvidBytes = mockStorage.savedFiles['/mock/media/evid_${sampleSnapshot.mediaId}.jpg'];
+        expect(savedEvidBytes, isNotNull);
+      });
+
+      test('4. Disk-cached authentic snapshot is used as reliable fallback when in-memory cache is missing', () async {
+        final tempDir = Directory.systemTemp.createTempSync('sitelens_disk_tile_');
+        try {
+          final tileFile = File('${tempDir.path}/test_disk_tile.png');
+          await tileFile.writeAsBytes(sampleMapTilePngBytes, flush: true);
+
+          final fakeService = FakeMapThumbnailService();
+          final notifier = MapThumbnailNotifier(fakeService);
+
+          // Set disk cache file in state without in-memory live bytes
+          notifier.state = notifier.state.copyWith(
+            cachedImage: tileFile,
+            lastUpdate: DateTime.now(),
+            mapType: AppMapType.satellite,
+            lat: 22.56298,
+            lon: 88.30085,
+          );
+
+          // Live provider unavailable
+          notifier.registerLiveSnapshotProvider(() async => null);
+
+          final recoveredBytes = await notifier.takeLiveSnapshotForEvidence(
+            lat: 22.56300, // ~2.2m away
+            lon: 88.30085,
+            mapType: AppMapType.satellite,
+          );
+
+          expect(recoveredBytes, isNotNull);
+          expect(recoveredBytes, equals(sampleMapTilePngBytes), reason: 'Must recover from valid authentic disk cache file');
+        } finally {
+          tempDir.deleteSync(recursive: true);
+        }
+      });
+
+      test('5. Live snapshot provider success at shutter time takes precedence and updates in-memory cache', () async {
+        final fakeService = FakeMapThumbnailService();
+        final notifier = MapThumbnailNotifier(fakeService);
+
+        final oldPrewarmedBytes = Uint8List.fromList([1, 1, 1]);
+        final freshShutterBytes = Uint8List.fromList([2, 2, 2]);
+
+        notifier.registerLiveSnapshotProvider(() async => oldPrewarmedBytes);
+        await notifier.prewarmLiveSnapshot(
+          lat: 22.56298,
+          lon: 88.30085,
+          mapType: AppMapType.satellite,
+        );
+
+        // Provider returns new fresh frame at shutter time
+        notifier.registerLiveSnapshotProvider(() async => freshShutterBytes);
+
+        final result = await notifier.takeLiveSnapshotForEvidence(
+          lat: 22.56298,
+          lon: 88.30085,
+          mapType: AppMapType.satellite,
+        );
+
+        expect(result, equals(freshShutterBytes), reason: 'Fresh live provider snapshot must take precedence');
+        expect(
+          notifier.getValidCachedSnapshotBytes(
+            lat: 22.56298,
+            lon: 88.30085,
+            mapType: AppMapType.satellite,
+          ),
+          equals(freshShutterBytes),
+        );
       });
     });
   });

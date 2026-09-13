@@ -234,11 +234,24 @@ class GpsStatusPill extends StatelessWidget {
       fg = AppColors.statusRed;
       borderCol = AppColors.statusRed.withAlpha(80);
       semanticLabel = 'GPS location permission denied. Evidence capture locked.';
+    } else if (gps.blockReason == GpsBlockReason.permissionUnknown) {
+      // Unknown is not a denial: amber, and say so truthfully.
+      bg = AppColors.statusAmberLight;
+      fg = AppColors.statusAmber;
+      borderCol = AppColors.statusAmber.withAlpha(80);
+      semanticLabel =
+          'GPS location permission could not be determined. Evidence capture locked.';
     } else if (gps.blockReason == GpsBlockReason.serviceDisabled) {
       bg = AppColors.statusRedLight;
       fg = AppColors.statusRed;
       borderCol = AppColors.statusRed.withAlpha(80);
       semanticLabel = 'GPS location service disabled. Evidence capture locked.';
+    } else if (gps.blockReason == GpsBlockReason.lastKnownOnly) {
+      bg = AppColors.statusAmberLight;
+      fg = AppColors.statusAmber;
+      borderCol = AppColors.statusAmber.withAlpha(80);
+      semanticLabel =
+          'GPS has only a last-known location. Waiting for a live fix. Evidence capture locked.';
     } else if (gps.isSearching) {
       bg = AppColors.statusAmberLight;
       fg = AppColors.statusAmber;

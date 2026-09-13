@@ -245,6 +245,80 @@ void main() {
       final rawMedia = await (db.select(db.media)..where((t) => t.id.equals('m1'))).getSingle();
       expect(rawMedia.isDeleted, equals(1));
     });
+
+    test('Deterministic History ordering: identical capturedAt values are ordered by id, newest-first preserved', () async {
+      // Insert in scrambled order with identical captured_at timestamps
+      await db.into(db.media).insert(
+            MediaCompanion.insert(
+              id: 'tie-c',
+              siteId: const drift.Value('site-alpha'),
+              type: const drift.Value('photo'),
+              uri: 'media/evid_tie_c.jpg',
+              originalUri: const drift.Value('media/orig_tie_c.jpg'),
+              thumbUri: const drift.Value('media/thumb_tie_c.jpg'),
+              capturedAt: '2026-08-15T10:00:00.000Z',
+              lat: 22.56298,
+              lon: 88.30085,
+            ),
+          );
+      await db.into(db.media).insert(
+            MediaCompanion.insert(
+              id: 'tie-a',
+              siteId: const drift.Value('site-alpha'),
+              type: const drift.Value('photo'),
+              uri: 'media/evid_tie_a.jpg',
+              originalUri: const drift.Value('media/orig_tie_a.jpg'),
+              thumbUri: const drift.Value('media/thumb_tie_a.jpg'),
+              capturedAt: '2026-08-15T10:00:00.000Z',
+              lat: 22.56298,
+              lon: 88.30085,
+            ),
+          );
+      await db.into(db.media).insert(
+            MediaCompanion.insert(
+              id: 'tie-b',
+              siteId: const drift.Value('site-alpha'),
+              type: const drift.Value('photo'),
+              uri: 'media/evid_tie_b.jpg',
+              originalUri: const drift.Value('media/orig_tie_b.jpg'),
+              thumbUri: const drift.Value('media/thumb_tie_b.jpg'),
+              capturedAt: '2026-08-15T10:00:00.000Z',
+              lat: 22.56298,
+              lon: 88.30085,
+            ),
+          );
+      // A newer capture must remain first (newest-first History semantics)
+      await db.into(db.media).insert(
+            MediaCompanion.insert(
+              id: 'tie-newer',
+              siteId: const drift.Value('site-alpha'),
+              type: const drift.Value('photo'),
+              uri: 'media/evid_tie_newer.jpg',
+              originalUri: const drift.Value('media/orig_tie_newer.jpg'),
+              thumbUri: const drift.Value('media/thumb_tie_newer.jpg'),
+              capturedAt: '2026-08-15T11:00:00.000Z',
+              lat: 22.56298,
+              lon: 88.30085,
+            ),
+          );
+
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      var items = await container.read(filteredGalleryMediaProvider.future);
+      expect(
+        items.map((i) => i.id).toList(),
+        equals(['tie-newer', 'tie-a', 'tie-b', 'tie-c']),
+      );
+
+      // Trigger another stream emission (unrelated update) and verify the order is
+      // unchanged across reloads/emissions
+      await mediaRepo.updateSyncStatus('tie-b', SyncStatusType.synced);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      items = await container.read(filteredGalleryMediaProvider.future);
+      expect(
+        items.map((i) => i.id).toList(),
+        equals(['tie-newer', 'tie-a', 'tie-b', 'tie-c']),
+      );
+    });
   });
 }
 
@@ -262,7 +336,10 @@ class MockSiteRepository implements SiteRepository {
   Future<void> saveSite(SiteModel site) async {}
 
   @override
-  Future<void> deleteSite(String id) async {}
+  Future<void> deleteSite(String id, {String? creatorId}) async {}
+
+  @override
+  Future<bool> hasMediaForSite(String siteId) async => false;
 
   @override
   Future<void> seedDefaultSitesIfEmpty() async {}

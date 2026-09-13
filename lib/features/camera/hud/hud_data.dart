@@ -3,8 +3,10 @@
 /// STRICT ARCHITECTURAL INVARIANTS:
 /// 1. PURE DART ONLY: Zero imports from `package:flutter/...` and zero imports from `dart:ui`.
 /// 2. ISOLATE TRANSFERABLE: All fields are primitive Dart types or pure enums.
-/// 3. UPSTREAM ONLY: Used strictly in camera viewfinder and evidence processing.
-///    Never persisted to Drift/SQLite or exposed to downstream review/gallery/detail/export.
+/// 3. UPSTREAM ONLY: Used strictly in camera viewfinder, evidence processing,
+///    and the canonical minimap/metadata display of the evidence detail and
+///    review surfaces (rendered from persisted capture metadata only).
+///    Never persisted to Drift/SQLite.
 library;
 
 /// Verification status badge for the Evidence HUD.
@@ -66,6 +68,13 @@ class HudData {
   /// Compact or full SHA-256 hash string. Null if hash is pending save.
   final String? displaySha256;
 
+  // --- Optional Telemetry Tail (accuracy & GNSS satellite count) ---
+  /// Pre-formatted positional accuracy (e.g. "±4.0m"). Null when unavailable.
+  final String? accuracyText;
+
+  /// Pre-formatted GNSS satellite usage (e.g. "SATS: 10/15"). Null when unavailable.
+  final String? satellitesText;
+
   // --- Minimap & Telemetry State ---
   /// Whether GNSS has an active, valid positional fix.
   final bool isGpsLocked;
@@ -102,6 +111,8 @@ class HudData {
     this.altitudeSuffix,
     required this.siteCodeText,
     this.displaySha256,
+    this.accuracyText,
+    this.satellitesText,
     required this.isGpsLocked,
     required this.latitude,
     required this.longitude,

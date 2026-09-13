@@ -4,7 +4,9 @@ import '../local/database/app_database.dart';
 import '../local/database/database_provider.dart';
 import '../../domain/models/media_item.dart';
 import '../../domain/models/enums.dart';
+import '../../core/utils/closed_evidence_integrity.dart';
 import '../../core/utils/haversine.dart';
+import '../../features/camera/hud/hud_data.dart';
 import '../../features/camera/services/evidence_storage_service.dart';
 
 class MediaConflictException implements Exception {
@@ -13,6 +15,14 @@ class MediaConflictException implements Exception {
 
   @override
   String toString() => 'MediaConflictException: $message';
+}
+
+class MediaPersistenceException implements Exception {
+  final String message;
+  MediaPersistenceException(this.message);
+
+  @override
+  String toString() => 'MediaPersistenceException: $message';
 }
 
 abstract class MediaRepository {
@@ -39,9 +49,17 @@ abstract class MediaRepository {
     double radiusMeters = 10.0,
     String? currentMediaId,
     String? creatorId,
+    bool requireCreator = false,
   });
   Future<void> linkMedia({required String mediaId, required String linkedMediaId});
-  Future<void> updateTags({required String mediaId, required String activityTag, required ObservationType observationType, String? note});
+  Future<Set<String>> getResolvedMediaIds({required String siteId, String? creatorId});
+  Future<void> updateTags({
+    required String mediaId,
+    required String activityTag,
+    required ObservationType observationType,
+    String? note,
+    String? linkedMediaId,
+  });
   Future<void> softDeleteMedia(String mediaId);
   Stream<int> watchUnsyncedCount({String? creatorId});
   Future<List<MediaItem>> getUnsyncedMedia({String? creatorId});
@@ -49,6 +67,17 @@ abstract class MediaRepository {
   Future<List<MediaItem>> getSyncedPhotos({String? creatorId});
   Future<void> updateSyncStatus(String mediaId, SyncStatusType status);
   Future<void> resetStuckSyncingMedia();
+
+  /// Returns soft-deleted rows whose cloud deletion ledger may still be
+  /// pending (Cross-Cutting Audit B, B-1). A tombstone candidate is any
+  /// deleted row that is not currently mid-sync; the tombstone itself is a
+  /// Firestore ledger state only and never deletes Storage artifacts.
+  Future<List<MediaItem>> getTombstoneSyncCandidates({String? creatorId});
+
+  /// Counts [getTombstoneSyncCandidates] rows so the sync coordinator can
+  /// edge-trigger a cycle when a previously-synced item is soft-deleted.
+  Stream<int> watchTombstoneCandidateCount();
+
   Future<void> removeFromGallery(String mediaId);
   Future<void> deletePermanently(String mediaId);
 }
@@ -86,6 +115,35 @@ class LocalMediaRepository implements MediaRepository {
       throw MediaConflictException('Media with ID ${item.id} already exists in local database.');
     }
 
+    final validated = ClosedEvidenceIntegrity.enforceIntegrity(
+      observationType: item.observationType,
+      linkedMediaId: item.linkedMediaId,
+      note: item.note,
+    );
+
+    // Validate creator and site isolation if linkedMediaId is present
+    if (validated.linkedMediaId != null) {
+      final linkedEntry = await (_db.select(_db.media)
+            ..where((tbl) => tbl.id.equals(validated.linkedMediaId!))
+            ..where((tbl) => tbl.isDeleted.equals(0)))
+          .getSingleOrNull();
+      if (linkedEntry != null) {
+        if (item.creatorId != null &&
+            linkedEntry.creatorId != null &&
+            item.creatorId!.isNotEmpty &&
+            linkedEntry.creatorId!.isNotEmpty &&
+            item.creatorId != linkedEntry.creatorId) {
+          throw MediaPersistenceException('Creator isolation violation: Cannot link media belonging to different creator');
+        }
+        if (linkedEntry.siteId != null &&
+            linkedEntry.siteId!.isNotEmpty &&
+            item.siteId.isNotEmpty &&
+            linkedEntry.siteId != item.siteId) {
+          throw MediaPersistenceException('Site isolation violation: Cannot link media belonging to different site');
+        }
+      }
+    }
+
     await _db.into(_db.media).insert(
           MediaCompanion.insert(
             id: item.id,
@@ -99,10 +157,15 @@ class LocalMediaRepository implements MediaRepository {
             accuracyM: drift.Value(item.accuracyM),
             lowAccuracy: drift.Value(item.lowAccuracy ? 1 : 0),
             altitudeM: drift.Value(item.altitude),                    // audit: real capture elevation ASL (vuln-0002)
+            verificationStatus: drift.Value(item.verificationStatus?.name),
+            isAltitudeMsl: drift.Value(item.isAltitudeMsl == null ? null : (item.isAltitudeMsl! ? 1 : 0)),
+            gnssSatelliteCount: drift.Value(item.gnssSatelliteCount),
+            gnssSatellitesUsedInFix: drift.Value(item.gnssSatellitesUsedInFix),
+            gnssFixTimestamp: drift.Value(item.gnssFixTimestampUtc?.toIso8601String()),
             activityTag: drift.Value(item.activityTag),
             observationType: drift.Value(item.observationType.name),
-            linkedMediaId: drift.Value(item.linkedMediaId),
-            note: drift.Value(item.note),
+            linkedMediaId: drift.Value(validated.linkedMediaId),
+            note: drift.Value(validated.note),
             capturedAt: item.capturedAt.toUtc().toIso8601String(),
             sha256Hash: drift.Value(item.sha256Hash),
             evidenceSha256Hash: drift.Value(item.evidenceSha256Hash), // audit: SHA-256 of watermarked evidence file
@@ -137,7 +200,12 @@ class LocalMediaRepository implements MediaRepository {
   Stream<List<MediaItem>> watchAllMedia({String? siteId, String? activity, ObservationType? observationType, bool? lowAccuracyOnly, String? creatorId}) {
     final query = _db.select(_db.media)
       ..where((tbl) => tbl.isDeleted.equals(0))
-      ..orderBy([(tbl) => drift.OrderingTerm.desc(tbl.capturedAt)]);
+      // Newest-first History semantics with a deterministic tiebreaker so records
+      // sharing an identical captured_at always appear in a stable order.
+      ..orderBy([
+        (tbl) => drift.OrderingTerm.desc(tbl.capturedAt),
+        (tbl) => drift.OrderingTerm.asc(tbl.id),
+      ]);
 
     if (siteId != null && siteId.isNotEmpty) {
       query.where((tbl) => tbl.siteId.equals(siteId));
@@ -212,7 +280,11 @@ class LocalMediaRepository implements MediaRepository {
       );
 
     if (creatorId != null && creatorId.isNotEmpty) {
-      query.where((tbl) => tbl.creatorId.equals(creatorId));
+      // Ownership parity with the sync/ownership queries: legacy rows stamped
+      // before creator attribution existed carry NULL and must remain visible
+      // to their site's spatial searches (LAT-001), while rows of a different
+      // creator stay excluded (multi-user isolation).
+      query.where((tbl) => tbl.creatorId.equals(creatorId) | tbl.creatorId.isNull());
     }
     if (siteId != null && siteId.isNotEmpty) {
       query.where((tbl) => tbl.siteId.equals(siteId));
@@ -284,25 +356,10 @@ class LocalMediaRepository implements MediaRepository {
     double radiusMeters = 10.0,
     String? currentMediaId,
     String? creatorId,
+    bool requireCreator = false,
   }) async {
     // 1. Fetch all already-resolved linked_media_ids on this site (Closed observations that are not deleted)
-    final resolvedQuery = _db.selectOnly(_db.media)
-      ..addColumns([_db.media.linkedMediaId])
-      ..where(_db.media.siteId.equals(siteId) &
-          _db.media.observationType.equals(ObservationType.closed.name) &
-          _db.media.linkedMediaId.isNotNull() &
-          _db.media.isDeleted.equals(0));
-
-    if (creatorId != null && creatorId.isNotEmpty) {
-      resolvedQuery.where(_db.media.creatorId.equals(creatorId));
-    }
-
-    final resolvedRows = await resolvedQuery.get();
-
-    final resolvedIds = resolvedRows
-        .map((r) => r.read(_db.media.linkedMediaId))
-        .whereType<String>()
-        .toSet();
+    final resolvedIds = await getResolvedMediaIds(siteId: siteId, creatorId: creatorId);
 
     final cleanActivity = activityTag.trim();
     if (cleanActivity.isNotEmpty) {
@@ -315,7 +372,7 @@ class LocalMediaRepository implements MediaRepository {
         observationType: ObservationType.nonConformity,
         excludeMediaId: currentMediaId,
         creatorId: creatorId,
-        requireCreator: false,
+        requireCreator: requireCreator,
       );
 
       for (final match in exactActivityMatches) {
@@ -335,7 +392,7 @@ class LocalMediaRepository implements MediaRepository {
       observationType: ObservationType.nonConformity,
       excludeMediaId: currentMediaId,
       creatorId: creatorId,
-      requireCreator: false,
+      requireCreator: requireCreator,
     );
 
     for (final match in fallbackMatches) {
@@ -349,18 +406,114 @@ class LocalMediaRepository implements MediaRepository {
 
   @override
   Future<void> linkMedia({required String mediaId, required String linkedMediaId}) async {
+    final entry = await (_db.select(_db.media)..where((tbl) => tbl.id.equals(mediaId))).getSingleOrNull();
+    if (entry != null && entry.observationType != ObservationType.closed.name) {
+      // Prohibit linking for non-Closed observation
+      return;
+    }
+
+    final linkedEntry = await (_db.select(_db.media)
+          ..where((tbl) => tbl.id.equals(linkedMediaId))
+          ..where((tbl) => tbl.isDeleted.equals(0)))
+        .getSingleOrNull();
+    if (linkedEntry == null) {
+      throw MediaPersistenceException('Linked BEFORE media "$linkedMediaId" does not exist or has been deleted.');
+    }
+
+    if (entry != null) {
+      if (entry.creatorId != null &&
+          linkedEntry.creatorId != null &&
+          entry.creatorId!.isNotEmpty &&
+          linkedEntry.creatorId!.isNotEmpty &&
+          entry.creatorId != linkedEntry.creatorId) {
+        throw MediaPersistenceException('Creator isolation violation: Cannot link media belonging to different creator');
+      }
+      if (entry.siteId != null &&
+          linkedEntry.siteId != null &&
+          entry.siteId!.isNotEmpty &&
+          linkedEntry.siteId!.isNotEmpty &&
+          entry.siteId != linkedEntry.siteId) {
+        throw MediaPersistenceException('Site isolation violation: Cannot link media belonging to different site');
+      }
+    }
+
     await (_db.update(_db.media)..where((tbl) => tbl.id.equals(mediaId))).write(
-      MediaCompanion(linkedMediaId: drift.Value(linkedMediaId)),
+      MediaCompanion(
+        linkedMediaId: drift.Value(linkedMediaId),
+        synced: const drift.Value(0),
+      ),
     );
   }
 
   @override
-  Future<void> updateTags({required String mediaId, required String activityTag, required ObservationType observationType, String? note}) async {
+  Future<Set<String>> getResolvedMediaIds({required String siteId, String? creatorId}) async {
+    final resolvedQuery = _db.selectOnly(_db.media)
+      ..addColumns([_db.media.linkedMediaId])
+      ..where(_db.media.siteId.equals(siteId) &
+          _db.media.observationType.equals(ObservationType.closed.name) &
+          _db.media.linkedMediaId.isNotNull() &
+          _db.media.isDeleted.equals(0));
+
+    if (creatorId != null && creatorId.isNotEmpty) {
+      resolvedQuery.where(_db.media.creatorId.equals(creatorId));
+    }
+
+    final resolvedRows = await resolvedQuery.get();
+
+    return resolvedRows
+        .map((r) => r.read(_db.media.linkedMediaId))
+        .whereType<String>()
+        .toSet();
+  }
+
+  @override
+  Future<void> updateTags({
+    required String mediaId,
+    required String activityTag,
+    required ObservationType observationType,
+    String? note,
+    String? linkedMediaId,
+  }) async {
+    final existing = await getMediaById(mediaId);
+    final rawLinkedId = linkedMediaId ??
+        (observationType == ObservationType.closed ? existing?.linkedMediaId : null);
+
+    final validated = ClosedEvidenceIntegrity.enforceIntegrity(
+      observationType: observationType,
+      linkedMediaId: rawLinkedId,
+      note: note,
+    );
+
+    if (validated.linkedMediaId != null) {
+      final linkedEntry = await (_db.select(_db.media)
+            ..where((tbl) => tbl.id.equals(validated.linkedMediaId!))
+            ..where((tbl) => tbl.isDeleted.equals(0)))
+          .getSingleOrNull();
+      if (linkedEntry == null) {
+        throw MediaPersistenceException('Linked BEFORE media "${validated.linkedMediaId}" does not exist or has been deleted.');
+      }
+      if (existing?.creatorId != null &&
+          linkedEntry.creatorId != null &&
+          existing!.creatorId!.isNotEmpty &&
+          linkedEntry.creatorId!.isNotEmpty &&
+          existing.creatorId != linkedEntry.creatorId) {
+        throw MediaPersistenceException('Creator isolation violation: Cannot link media belonging to different creator');
+      }
+      if (existing?.siteId != null &&
+          linkedEntry.siteId != null &&
+          existing!.siteId.isNotEmpty &&
+          linkedEntry.siteId!.isNotEmpty &&
+          existing.siteId != linkedEntry.siteId) {
+        throw MediaPersistenceException('Site isolation violation: Cannot link media belonging to different site');
+      }
+    }
+
     await (_db.update(_db.media)..where((tbl) => tbl.id.equals(mediaId))).write(
       MediaCompanion(
         activityTag: drift.Value(activityTag),
         observationType: drift.Value(observationType.name),
-        note: drift.Value(note),
+        linkedMediaId: drift.Value(validated.linkedMediaId),
+        note: drift.Value(validated.note),
         synced: const drift.Value(0), // Mark unsynced for update synchronization
       ),
     );
@@ -443,6 +596,31 @@ class LocalMediaRepository implements MediaRepository {
   }
 
   @override
+  Future<List<MediaItem>> getTombstoneSyncCandidates({String? creatorId}) async {
+    final query = _db.select(_db.media)
+      ..where((tbl) =>
+          tbl.isDeleted.equals(1) &
+          tbl.synced.equals(SyncStatusType.syncing.toInt()).not());
+
+    if (creatorId != null && creatorId.isNotEmpty) {
+      query.where((tbl) => tbl.creatorId.equals(creatorId) | tbl.creatorId.isNull());
+    }
+
+    final entries = await query.get();
+    return entries.map(_entryToModel).toList();
+  }
+
+  @override
+  Stream<int> watchTombstoneCandidateCount() {
+    final query = _db.selectOnly(_db.media)
+      ..addColumns([_db.media.id.count()])
+      ..where(_db.media.isDeleted.equals(1) &
+          _db.media.synced.equals(SyncStatusType.syncing.toInt()).not());
+
+    return query.map((row) => row.read(_db.media.id.count()) ?? 0).watchSingle();
+  }
+
+  @override
   Future<void> removeFromGallery(String mediaId) async {
     final entry = await (_db.select(_db.media)..where((tbl) => tbl.id.equals(mediaId))).getSingleOrNull();
     if (entry != null) {
@@ -471,10 +649,24 @@ class LocalMediaRepository implements MediaRepository {
         type: item.type.name,
       );
     }
-    await (_db.delete(_db.media)..where((tbl) => tbl.id.equals(mediaId))).go();
+    // C-2: the row becomes a hidden tombstone instead of being physically
+    // destroyed. A physically deleted row could never propagate its cloud
+    // tombstone, so an already-published Firestore ledger would stay live
+    // (is_deleted = false) forever after the local record was destroyed. As a
+    // tombstone candidate the row rides the existing B-1 synchronization —
+    // retry/backoff/session-safe and idempotent, and a verified no-op for
+    // items that were never published. Storage artifacts are untouched by
+    // that propagation; physical row removal remains an account-deletion
+    // concern (AppDatabase.clearAllUserData).
+    await softDeleteMedia(mediaId);
   }
 
   MediaItem _entryToModel(MediaEntry e) {
+    final isMsl = e.isAltitudeMsl != null ? e.isAltitudeMsl == 1 : null;
+    final fixTimestamp = e.gnssFixTimestamp != null
+        ? DateTime.tryParse(e.gnssFixTimestamp!)?.toUtc()
+        : null;
+
     return MediaItem(
       id: e.id,
       siteId: e.siteId ?? '',
@@ -487,6 +679,11 @@ class LocalMediaRepository implements MediaRepository {
       accuracyM: e.accuracyM,
       lowAccuracy: e.lowAccuracy == 1,
       altitude: e.altitudeM,                    // audit: real capture elevation ASL (vuln-0002)
+      isAltitudeMsl: isMsl,
+      verificationStatus: _resolveVerificationStatus(e),
+      gnssSatelliteCount: e.gnssSatelliteCount,
+      gnssSatellitesUsedInFix: e.gnssSatellitesUsedInFix,
+      gnssFixTimestampUtc: fixTimestamp,
       activityTag: e.activityTag,
       observationType: ObservationType.fromString(e.observationType),
       linkedMediaId: e.linkedMediaId,
@@ -499,6 +696,31 @@ class LocalMediaRepository implements MediaRepository {
       syncStatus: SyncStatusType.fromInt(e.synced),
       isDeleted: e.isDeleted == 1,
     );
+  }
+
+  static HudStatus _resolveVerificationStatus(MediaEntry e) {
+    if (e.verificationStatus != null && e.verificationStatus!.isNotEmpty) {
+      return HudStatus.values.firstWhere(
+        (s) => s.name.toUpperCase() == e.verificationStatus!.toUpperCase(),
+        orElse: () => HudStatus.pending,
+      );
+    }
+    // Legacy record fallback (pre-v8): Preserve the weakest defensible semantic.
+    // Never imply a stronger verification state than established.
+    final hasCoordinates = !(e.lat == 0.0 && e.lon == 0.0);
+    if (!hasCoordinates) {
+      return HudStatus.pending;
+    }
+    if (e.lowAccuracy == 1) {
+      return HudStatus.degraded;
+    }
+    if (e.accuracyM == null) {
+      return HudStatus.pending;
+    }
+    if (e.accuracyM! > 20.0) {
+      return HudStatus.degraded;
+    }
+    return HudStatus.verified;
   }
 }
 

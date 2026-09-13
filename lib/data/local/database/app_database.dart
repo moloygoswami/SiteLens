@@ -42,6 +42,11 @@ class Media extends Table {
   TextColumn get evidenceSha256Hash => text().nullable().named('evidence_sha256_hash')(); // SHA-256 of evid_<id> (watermarked evidence) — Added in v3
   TextColumn get capturedAddress => text().nullable().named('captured_address')(); // Reverse-geocoded physical address at capture time — Added in v4
   TextColumn get creatorId => text().nullable().named('creator_id')(); // Creator user ID — Added in v5
+  TextColumn get verificationStatus => text().nullable().named('verification_status')(); // Added in v8
+  IntColumn get isAltitudeMsl => integer().nullable().named('is_altitude_msl')(); // Added in v8 (1=MSL, 0=WGS84, null=unknown)
+  IntColumn get gnssSatelliteCount => integer().nullable().named('gnss_satellite_count')(); // Added in v8
+  IntColumn get gnssSatellitesUsedInFix => integer().nullable().named('gnss_satellites_used_in_fix')(); // Added in v8
+  TextColumn get gnssFixTimestamp => text().nullable().named('gnss_fix_timestamp')(); // Added in v8
   IntColumn get synced => integer().withDefault(const Constant(0))();
   IntColumn get isDeleted => integer().withDefault(const Constant(0)).named('is_deleted')(); // soft delete
 
@@ -83,7 +88,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? e]) : super(e ?? _openConnection());
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -122,6 +127,14 @@ class AppDatabase extends _$AppDatabase {
         // v7: persist real capture elevation and site creator UID (remediates vuln-0002 & vuln-0003)
         await m.addColumn(media, media.altitudeM);
         await m.addColumn(sites, sites.creatorId);
+      }
+      if (from < 8) {
+        // v8: canonical verification status, altitude datum, and GNSS satellite telemetry
+        await m.addColumn(media, media.verificationStatus);
+        await m.addColumn(media, media.isAltitudeMsl);
+        await m.addColumn(media, media.gnssSatelliteCount);
+        await m.addColumn(media, media.gnssSatellitesUsedInFix);
+        await m.addColumn(media, media.gnssFixTimestamp);
       }
     },
   );

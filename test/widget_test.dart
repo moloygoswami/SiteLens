@@ -39,6 +39,9 @@ class SmokeTestMockAuthService implements AuthService {
   Future<void> sendPasswordResetEmail(String email) async {}
 
   @override
+  Future<SessionVerificationResult> verifySession() async => const SessionVerificationResult.valid();
+
+  @override
   Future<void> signOut() async {}
 }
 

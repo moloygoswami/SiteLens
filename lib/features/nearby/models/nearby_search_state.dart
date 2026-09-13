@@ -79,6 +79,7 @@ class NearbySearchFilters {
 @immutable
 class NearbySearchState {
   final MediaItem? sourceMedia;
+  final String? targetSiteId;
   final double centerLat;
   final double centerLon;
   final double radiusMeters;
@@ -87,9 +88,11 @@ class NearbySearchState {
   final bool isLoading;
   final String? errorMessage;
   final List<NearbyMediaResult> results;
+  final Set<String> resolvedMediaIds;
 
   const NearbySearchState({
     this.sourceMedia,
+    this.targetSiteId,
     required this.centerLat,
     required this.centerLon,
     this.radiusMeters = 25.0,
@@ -98,7 +101,17 @@ class NearbySearchState {
     this.isLoading = false,
     this.errorMessage,
     this.results = const [],
+    this.resolvedMediaIds = const {},
   });
+
+  bool isEligibleCandidate(MediaItem item) {
+    if (item.isDeleted) return false;
+    if (item.observationType != ObservationType.nonConformity) return false;
+    final effectiveSiteId = targetSiteId ?? sourceMedia?.siteId;
+    if (effectiveSiteId != null && item.siteId != effectiveSiteId) return false;
+    if (resolvedMediaIds.contains(item.id)) return false;
+    return true;
+  }
 
   // Grouped accessors per PRD Section 11.3
   List<NearbyMediaResult> get beforeResults => results
@@ -132,6 +145,7 @@ class NearbySearchState {
 
   NearbySearchState copyWith({
     MediaItem? sourceMedia,
+    String? targetSiteId,
     double? centerLat,
     double? centerLon,
     double? radiusMeters,
@@ -140,10 +154,12 @@ class NearbySearchState {
     bool? isLoading,
     String? errorMessage,
     List<NearbyMediaResult>? results,
+    Set<String>? resolvedMediaIds,
     bool clearErrorMessage = false,
   }) {
     return NearbySearchState(
       sourceMedia: sourceMedia ?? this.sourceMedia,
+      targetSiteId: targetSiteId ?? this.targetSiteId,
       centerLat: centerLat ?? this.centerLat,
       centerLon: centerLon ?? this.centerLon,
       radiusMeters: radiusMeters ?? this.radiusMeters,
@@ -152,6 +168,7 @@ class NearbySearchState {
       isLoading: isLoading ?? this.isLoading,
       errorMessage: clearErrorMessage ? null : (errorMessage ?? this.errorMessage),
       results: results ?? this.results,
+      resolvedMediaIds: resolvedMediaIds ?? this.resolvedMediaIds,
     );
   }
 }

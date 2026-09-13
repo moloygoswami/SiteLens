@@ -440,6 +440,36 @@ class $MediaTable extends Media with TableInfo<$MediaTable, MediaEntry> {
   late final GeneratedColumn<String> creatorId = GeneratedColumn<String>(
       'creator_id', aliasedName, true,
       type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _verificationStatusMeta =
+      const VerificationMeta('verificationStatus');
+  @override
+  late final GeneratedColumn<String> verificationStatus =
+      GeneratedColumn<String>('verification_status', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _isAltitudeMslMeta =
+      const VerificationMeta('isAltitudeMsl');
+  @override
+  late final GeneratedColumn<int> isAltitudeMsl = GeneratedColumn<int>(
+      'is_altitude_msl', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  static const VerificationMeta _gnssSatelliteCountMeta =
+      const VerificationMeta('gnssSatelliteCount');
+  @override
+  late final GeneratedColumn<int> gnssSatelliteCount = GeneratedColumn<int>(
+      'gnss_satellite_count', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  static const VerificationMeta _gnssSatellitesUsedInFixMeta =
+      const VerificationMeta('gnssSatellitesUsedInFix');
+  @override
+  late final GeneratedColumn<int> gnssSatellitesUsedInFix =
+      GeneratedColumn<int>('gnss_satellites_used_in_fix', aliasedName, true,
+          type: DriftSqlType.int, requiredDuringInsert: false);
+  static const VerificationMeta _gnssFixTimestampMeta =
+      const VerificationMeta('gnssFixTimestamp');
+  @override
+  late final GeneratedColumn<String> gnssFixTimestamp = GeneratedColumn<String>(
+      'gnss_fix_timestamp', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
   static const VerificationMeta _syncedMeta = const VerificationMeta('synced');
   @override
   late final GeneratedColumn<int> synced = GeneratedColumn<int>(
@@ -477,6 +507,11 @@ class $MediaTable extends Media with TableInfo<$MediaTable, MediaEntry> {
         evidenceSha256Hash,
         capturedAddress,
         creatorId,
+        verificationStatus,
+        isAltitudeMsl,
+        gnssSatelliteCount,
+        gnssSatellitesUsedInFix,
+        gnssFixTimestamp,
         synced,
         isDeleted
       ];
@@ -597,6 +632,37 @@ class $MediaTable extends Media with TableInfo<$MediaTable, MediaEntry> {
       context.handle(_creatorIdMeta,
           creatorId.isAcceptableOrUnknown(data['creator_id']!, _creatorIdMeta));
     }
+    if (data.containsKey('verification_status')) {
+      context.handle(
+          _verificationStatusMeta,
+          verificationStatus.isAcceptableOrUnknown(
+              data['verification_status']!, _verificationStatusMeta));
+    }
+    if (data.containsKey('is_altitude_msl')) {
+      context.handle(
+          _isAltitudeMslMeta,
+          isAltitudeMsl.isAcceptableOrUnknown(
+              data['is_altitude_msl']!, _isAltitudeMslMeta));
+    }
+    if (data.containsKey('gnss_satellite_count')) {
+      context.handle(
+          _gnssSatelliteCountMeta,
+          gnssSatelliteCount.isAcceptableOrUnknown(
+              data['gnss_satellite_count']!, _gnssSatelliteCountMeta));
+    }
+    if (data.containsKey('gnss_satellites_used_in_fix')) {
+      context.handle(
+          _gnssSatellitesUsedInFixMeta,
+          gnssSatellitesUsedInFix.isAcceptableOrUnknown(
+              data['gnss_satellites_used_in_fix']!,
+              _gnssSatellitesUsedInFixMeta));
+    }
+    if (data.containsKey('gnss_fix_timestamp')) {
+      context.handle(
+          _gnssFixTimestampMeta,
+          gnssFixTimestamp.isAcceptableOrUnknown(
+              data['gnss_fix_timestamp']!, _gnssFixTimestampMeta));
+    }
     if (data.containsKey('synced')) {
       context.handle(_syncedMeta,
           synced.isAcceptableOrUnknown(data['synced']!, _syncedMeta));
@@ -654,6 +720,17 @@ class $MediaTable extends Media with TableInfo<$MediaTable, MediaEntry> {
           DriftSqlType.string, data['${effectivePrefix}captured_address']),
       creatorId: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}creator_id']),
+      verificationStatus: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}verification_status']),
+      isAltitudeMsl: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}is_altitude_msl']),
+      gnssSatelliteCount: attachedDatabase.typeMapping.read(
+          DriftSqlType.int, data['${effectivePrefix}gnss_satellite_count']),
+      gnssSatellitesUsedInFix: attachedDatabase.typeMapping.read(
+          DriftSqlType.int,
+          data['${effectivePrefix}gnss_satellites_used_in_fix']),
+      gnssFixTimestamp: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}gnss_fix_timestamp']),
       synced: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}synced'])!,
       isDeleted: attachedDatabase.typeMapping
@@ -688,6 +765,11 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
   final String? evidenceSha256Hash;
   final String? capturedAddress;
   final String? creatorId;
+  final String? verificationStatus;
+  final int? isAltitudeMsl;
+  final int? gnssSatelliteCount;
+  final int? gnssSatellitesUsedInFix;
+  final String? gnssFixTimestamp;
   final int synced;
   final int isDeleted;
   const MediaEntry(
@@ -711,6 +793,11 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
       this.evidenceSha256Hash,
       this.capturedAddress,
       this.creatorId,
+      this.verificationStatus,
+      this.isAltitudeMsl,
+      this.gnssSatelliteCount,
+      this.gnssSatellitesUsedInFix,
+      this.gnssFixTimestamp,
       required this.synced,
       required this.isDeleted});
   @override
@@ -762,6 +849,22 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
     if (!nullToAbsent || creatorId != null) {
       map['creator_id'] = Variable<String>(creatorId);
     }
+    if (!nullToAbsent || verificationStatus != null) {
+      map['verification_status'] = Variable<String>(verificationStatus);
+    }
+    if (!nullToAbsent || isAltitudeMsl != null) {
+      map['is_altitude_msl'] = Variable<int>(isAltitudeMsl);
+    }
+    if (!nullToAbsent || gnssSatelliteCount != null) {
+      map['gnss_satellite_count'] = Variable<int>(gnssSatelliteCount);
+    }
+    if (!nullToAbsent || gnssSatellitesUsedInFix != null) {
+      map['gnss_satellites_used_in_fix'] =
+          Variable<int>(gnssSatellitesUsedInFix);
+    }
+    if (!nullToAbsent || gnssFixTimestamp != null) {
+      map['gnss_fix_timestamp'] = Variable<String>(gnssFixTimestamp);
+    }
     map['synced'] = Variable<int>(synced);
     map['is_deleted'] = Variable<int>(isDeleted);
     return map;
@@ -810,6 +913,21 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
       creatorId: creatorId == null && nullToAbsent
           ? const Value.absent()
           : Value(creatorId),
+      verificationStatus: verificationStatus == null && nullToAbsent
+          ? const Value.absent()
+          : Value(verificationStatus),
+      isAltitudeMsl: isAltitudeMsl == null && nullToAbsent
+          ? const Value.absent()
+          : Value(isAltitudeMsl),
+      gnssSatelliteCount: gnssSatelliteCount == null && nullToAbsent
+          ? const Value.absent()
+          : Value(gnssSatelliteCount),
+      gnssSatellitesUsedInFix: gnssSatellitesUsedInFix == null && nullToAbsent
+          ? const Value.absent()
+          : Value(gnssSatellitesUsedInFix),
+      gnssFixTimestamp: gnssFixTimestamp == null && nullToAbsent
+          ? const Value.absent()
+          : Value(gnssFixTimestamp),
       synced: Value(synced),
       isDeleted: Value(isDeleted),
     );
@@ -840,6 +958,13 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
           serializer.fromJson<String?>(json['evidenceSha256Hash']),
       capturedAddress: serializer.fromJson<String?>(json['capturedAddress']),
       creatorId: serializer.fromJson<String?>(json['creatorId']),
+      verificationStatus:
+          serializer.fromJson<String?>(json['verificationStatus']),
+      isAltitudeMsl: serializer.fromJson<int?>(json['isAltitudeMsl']),
+      gnssSatelliteCount: serializer.fromJson<int?>(json['gnssSatelliteCount']),
+      gnssSatellitesUsedInFix:
+          serializer.fromJson<int?>(json['gnssSatellitesUsedInFix']),
+      gnssFixTimestamp: serializer.fromJson<String?>(json['gnssFixTimestamp']),
       synced: serializer.fromJson<int>(json['synced']),
       isDeleted: serializer.fromJson<int>(json['isDeleted']),
     );
@@ -868,6 +993,12 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
       'evidenceSha256Hash': serializer.toJson<String?>(evidenceSha256Hash),
       'capturedAddress': serializer.toJson<String?>(capturedAddress),
       'creatorId': serializer.toJson<String?>(creatorId),
+      'verificationStatus': serializer.toJson<String?>(verificationStatus),
+      'isAltitudeMsl': serializer.toJson<int?>(isAltitudeMsl),
+      'gnssSatelliteCount': serializer.toJson<int?>(gnssSatelliteCount),
+      'gnssSatellitesUsedInFix':
+          serializer.toJson<int?>(gnssSatellitesUsedInFix),
+      'gnssFixTimestamp': serializer.toJson<String?>(gnssFixTimestamp),
       'synced': serializer.toJson<int>(synced),
       'isDeleted': serializer.toJson<int>(isDeleted),
     };
@@ -894,6 +1025,11 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
           Value<String?> evidenceSha256Hash = const Value.absent(),
           Value<String?> capturedAddress = const Value.absent(),
           Value<String?> creatorId = const Value.absent(),
+          Value<String?> verificationStatus = const Value.absent(),
+          Value<int?> isAltitudeMsl = const Value.absent(),
+          Value<int?> gnssSatelliteCount = const Value.absent(),
+          Value<int?> gnssSatellitesUsedInFix = const Value.absent(),
+          Value<String?> gnssFixTimestamp = const Value.absent(),
           int? synced,
           int? isDeleted}) =>
       MediaEntry(
@@ -924,6 +1060,20 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
             ? capturedAddress.value
             : this.capturedAddress,
         creatorId: creatorId.present ? creatorId.value : this.creatorId,
+        verificationStatus: verificationStatus.present
+            ? verificationStatus.value
+            : this.verificationStatus,
+        isAltitudeMsl:
+            isAltitudeMsl.present ? isAltitudeMsl.value : this.isAltitudeMsl,
+        gnssSatelliteCount: gnssSatelliteCount.present
+            ? gnssSatelliteCount.value
+            : this.gnssSatelliteCount,
+        gnssSatellitesUsedInFix: gnssSatellitesUsedInFix.present
+            ? gnssSatellitesUsedInFix.value
+            : this.gnssSatellitesUsedInFix,
+        gnssFixTimestamp: gnssFixTimestamp.present
+            ? gnssFixTimestamp.value
+            : this.gnssFixTimestamp,
         synced: synced ?? this.synced,
         isDeleted: isDeleted ?? this.isDeleted,
       );
@@ -962,6 +1112,21 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
           ? data.capturedAddress.value
           : this.capturedAddress,
       creatorId: data.creatorId.present ? data.creatorId.value : this.creatorId,
+      verificationStatus: data.verificationStatus.present
+          ? data.verificationStatus.value
+          : this.verificationStatus,
+      isAltitudeMsl: data.isAltitudeMsl.present
+          ? data.isAltitudeMsl.value
+          : this.isAltitudeMsl,
+      gnssSatelliteCount: data.gnssSatelliteCount.present
+          ? data.gnssSatelliteCount.value
+          : this.gnssSatelliteCount,
+      gnssSatellitesUsedInFix: data.gnssSatellitesUsedInFix.present
+          ? data.gnssSatellitesUsedInFix.value
+          : this.gnssSatellitesUsedInFix,
+      gnssFixTimestamp: data.gnssFixTimestamp.present
+          ? data.gnssFixTimestamp.value
+          : this.gnssFixTimestamp,
       synced: data.synced.present ? data.synced.value : this.synced,
       isDeleted: data.isDeleted.present ? data.isDeleted.value : this.isDeleted,
     );
@@ -990,6 +1155,11 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
           ..write('evidenceSha256Hash: $evidenceSha256Hash, ')
           ..write('capturedAddress: $capturedAddress, ')
           ..write('creatorId: $creatorId, ')
+          ..write('verificationStatus: $verificationStatus, ')
+          ..write('isAltitudeMsl: $isAltitudeMsl, ')
+          ..write('gnssSatelliteCount: $gnssSatelliteCount, ')
+          ..write('gnssSatellitesUsedInFix: $gnssSatellitesUsedInFix, ')
+          ..write('gnssFixTimestamp: $gnssFixTimestamp, ')
           ..write('synced: $synced, ')
           ..write('isDeleted: $isDeleted')
           ..write(')'))
@@ -1018,6 +1188,11 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
         evidenceSha256Hash,
         capturedAddress,
         creatorId,
+        verificationStatus,
+        isAltitudeMsl,
+        gnssSatelliteCount,
+        gnssSatellitesUsedInFix,
+        gnssFixTimestamp,
         synced,
         isDeleted
       ]);
@@ -1045,6 +1220,11 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
           other.evidenceSha256Hash == this.evidenceSha256Hash &&
           other.capturedAddress == this.capturedAddress &&
           other.creatorId == this.creatorId &&
+          other.verificationStatus == this.verificationStatus &&
+          other.isAltitudeMsl == this.isAltitudeMsl &&
+          other.gnssSatelliteCount == this.gnssSatelliteCount &&
+          other.gnssSatellitesUsedInFix == this.gnssSatellitesUsedInFix &&
+          other.gnssFixTimestamp == this.gnssFixTimestamp &&
           other.synced == this.synced &&
           other.isDeleted == this.isDeleted);
 }
@@ -1070,6 +1250,11 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
   final Value<String?> evidenceSha256Hash;
   final Value<String?> capturedAddress;
   final Value<String?> creatorId;
+  final Value<String?> verificationStatus;
+  final Value<int?> isAltitudeMsl;
+  final Value<int?> gnssSatelliteCount;
+  final Value<int?> gnssSatellitesUsedInFix;
+  final Value<String?> gnssFixTimestamp;
   final Value<int> synced;
   final Value<int> isDeleted;
   final Value<int> rowid;
@@ -1094,6 +1279,11 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
     this.evidenceSha256Hash = const Value.absent(),
     this.capturedAddress = const Value.absent(),
     this.creatorId = const Value.absent(),
+    this.verificationStatus = const Value.absent(),
+    this.isAltitudeMsl = const Value.absent(),
+    this.gnssSatelliteCount = const Value.absent(),
+    this.gnssSatellitesUsedInFix = const Value.absent(),
+    this.gnssFixTimestamp = const Value.absent(),
     this.synced = const Value.absent(),
     this.isDeleted = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -1119,6 +1309,11 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
     this.evidenceSha256Hash = const Value.absent(),
     this.capturedAddress = const Value.absent(),
     this.creatorId = const Value.absent(),
+    this.verificationStatus = const Value.absent(),
+    this.isAltitudeMsl = const Value.absent(),
+    this.gnssSatelliteCount = const Value.absent(),
+    this.gnssSatellitesUsedInFix = const Value.absent(),
+    this.gnssFixTimestamp = const Value.absent(),
     this.synced = const Value.absent(),
     this.isDeleted = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -1148,6 +1343,11 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
     Expression<String>? evidenceSha256Hash,
     Expression<String>? capturedAddress,
     Expression<String>? creatorId,
+    Expression<String>? verificationStatus,
+    Expression<int>? isAltitudeMsl,
+    Expression<int>? gnssSatelliteCount,
+    Expression<int>? gnssSatellitesUsedInFix,
+    Expression<String>? gnssFixTimestamp,
     Expression<int>? synced,
     Expression<int>? isDeleted,
     Expression<int>? rowid,
@@ -1174,6 +1374,13 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
         'evidence_sha256_hash': evidenceSha256Hash,
       if (capturedAddress != null) 'captured_address': capturedAddress,
       if (creatorId != null) 'creator_id': creatorId,
+      if (verificationStatus != null) 'verification_status': verificationStatus,
+      if (isAltitudeMsl != null) 'is_altitude_msl': isAltitudeMsl,
+      if (gnssSatelliteCount != null)
+        'gnss_satellite_count': gnssSatelliteCount,
+      if (gnssSatellitesUsedInFix != null)
+        'gnss_satellites_used_in_fix': gnssSatellitesUsedInFix,
+      if (gnssFixTimestamp != null) 'gnss_fix_timestamp': gnssFixTimestamp,
       if (synced != null) 'synced': synced,
       if (isDeleted != null) 'is_deleted': isDeleted,
       if (rowid != null) 'rowid': rowid,
@@ -1201,6 +1408,11 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
       Value<String?>? evidenceSha256Hash,
       Value<String?>? capturedAddress,
       Value<String?>? creatorId,
+      Value<String?>? verificationStatus,
+      Value<int?>? isAltitudeMsl,
+      Value<int?>? gnssSatelliteCount,
+      Value<int?>? gnssSatellitesUsedInFix,
+      Value<String?>? gnssFixTimestamp,
       Value<int>? synced,
       Value<int>? isDeleted,
       Value<int>? rowid}) {
@@ -1225,6 +1437,12 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
       evidenceSha256Hash: evidenceSha256Hash ?? this.evidenceSha256Hash,
       capturedAddress: capturedAddress ?? this.capturedAddress,
       creatorId: creatorId ?? this.creatorId,
+      verificationStatus: verificationStatus ?? this.verificationStatus,
+      isAltitudeMsl: isAltitudeMsl ?? this.isAltitudeMsl,
+      gnssSatelliteCount: gnssSatelliteCount ?? this.gnssSatelliteCount,
+      gnssSatellitesUsedInFix:
+          gnssSatellitesUsedInFix ?? this.gnssSatellitesUsedInFix,
+      gnssFixTimestamp: gnssFixTimestamp ?? this.gnssFixTimestamp,
       synced: synced ?? this.synced,
       isDeleted: isDeleted ?? this.isDeleted,
       rowid: rowid ?? this.rowid,
@@ -1294,6 +1512,22 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
     if (creatorId.present) {
       map['creator_id'] = Variable<String>(creatorId.value);
     }
+    if (verificationStatus.present) {
+      map['verification_status'] = Variable<String>(verificationStatus.value);
+    }
+    if (isAltitudeMsl.present) {
+      map['is_altitude_msl'] = Variable<int>(isAltitudeMsl.value);
+    }
+    if (gnssSatelliteCount.present) {
+      map['gnss_satellite_count'] = Variable<int>(gnssSatelliteCount.value);
+    }
+    if (gnssSatellitesUsedInFix.present) {
+      map['gnss_satellites_used_in_fix'] =
+          Variable<int>(gnssSatellitesUsedInFix.value);
+    }
+    if (gnssFixTimestamp.present) {
+      map['gnss_fix_timestamp'] = Variable<String>(gnssFixTimestamp.value);
+    }
     if (synced.present) {
       map['synced'] = Variable<int>(synced.value);
     }
@@ -1329,6 +1563,11 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
           ..write('evidenceSha256Hash: $evidenceSha256Hash, ')
           ..write('capturedAddress: $capturedAddress, ')
           ..write('creatorId: $creatorId, ')
+          ..write('verificationStatus: $verificationStatus, ')
+          ..write('isAltitudeMsl: $isAltitudeMsl, ')
+          ..write('gnssSatelliteCount: $gnssSatelliteCount, ')
+          ..write('gnssSatellitesUsedInFix: $gnssSatellitesUsedInFix, ')
+          ..write('gnssFixTimestamp: $gnssFixTimestamp, ')
           ..write('synced: $synced, ')
           ..write('isDeleted: $isDeleted, ')
           ..write('rowid: $rowid')
@@ -2049,6 +2288,11 @@ typedef $$MediaTableCreateCompanionBuilder = MediaCompanion Function({
   Value<String?> evidenceSha256Hash,
   Value<String?> capturedAddress,
   Value<String?> creatorId,
+  Value<String?> verificationStatus,
+  Value<int?> isAltitudeMsl,
+  Value<int?> gnssSatelliteCount,
+  Value<int?> gnssSatellitesUsedInFix,
+  Value<String?> gnssFixTimestamp,
   Value<int> synced,
   Value<int> isDeleted,
   Value<int> rowid,
@@ -2074,6 +2318,11 @@ typedef $$MediaTableUpdateCompanionBuilder = MediaCompanion Function({
   Value<String?> evidenceSha256Hash,
   Value<String?> capturedAddress,
   Value<String?> creatorId,
+  Value<String?> verificationStatus,
+  Value<int?> isAltitudeMsl,
+  Value<int?> gnssSatelliteCount,
+  Value<int?> gnssSatellitesUsedInFix,
+  Value<String?> gnssFixTimestamp,
   Value<int> synced,
   Value<int> isDeleted,
   Value<int> rowid,
@@ -2195,6 +2444,25 @@ class $$MediaTableFilterComposer extends Composer<_$AppDatabase, $MediaTable> {
 
   ColumnFilters<String> get creatorId => $composableBuilder(
       column: $table.creatorId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get verificationStatus => $composableBuilder(
+      column: $table.verificationStatus,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get isAltitudeMsl => $composableBuilder(
+      column: $table.isAltitudeMsl, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get gnssSatelliteCount => $composableBuilder(
+      column: $table.gnssSatelliteCount,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get gnssSatellitesUsedInFix => $composableBuilder(
+      column: $table.gnssSatellitesUsedInFix,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get gnssFixTimestamp => $composableBuilder(
+      column: $table.gnssFixTimestamp,
+      builder: (column) => ColumnFilters(column));
 
   ColumnFilters<int> get synced => $composableBuilder(
       column: $table.synced, builder: (column) => ColumnFilters(column));
@@ -2332,6 +2600,26 @@ class $$MediaTableOrderingComposer
   ColumnOrderings<String> get creatorId => $composableBuilder(
       column: $table.creatorId, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<String> get verificationStatus => $composableBuilder(
+      column: $table.verificationStatus,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get isAltitudeMsl => $composableBuilder(
+      column: $table.isAltitudeMsl,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get gnssSatelliteCount => $composableBuilder(
+      column: $table.gnssSatelliteCount,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get gnssSatellitesUsedInFix => $composableBuilder(
+      column: $table.gnssSatellitesUsedInFix,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get gnssFixTimestamp => $composableBuilder(
+      column: $table.gnssFixTimestamp,
+      builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<int> get synced => $composableBuilder(
       column: $table.synced, builder: (column) => ColumnOrderings(column));
 
@@ -2441,6 +2729,21 @@ class $$MediaTableAnnotationComposer
 
   GeneratedColumn<String> get creatorId =>
       $composableBuilder(column: $table.creatorId, builder: (column) => column);
+
+  GeneratedColumn<String> get verificationStatus => $composableBuilder(
+      column: $table.verificationStatus, builder: (column) => column);
+
+  GeneratedColumn<int> get isAltitudeMsl => $composableBuilder(
+      column: $table.isAltitudeMsl, builder: (column) => column);
+
+  GeneratedColumn<int> get gnssSatelliteCount => $composableBuilder(
+      column: $table.gnssSatelliteCount, builder: (column) => column);
+
+  GeneratedColumn<int> get gnssSatellitesUsedInFix => $composableBuilder(
+      column: $table.gnssSatellitesUsedInFix, builder: (column) => column);
+
+  GeneratedColumn<String> get gnssFixTimestamp => $composableBuilder(
+      column: $table.gnssFixTimestamp, builder: (column) => column);
 
   GeneratedColumn<int> get synced =>
       $composableBuilder(column: $table.synced, builder: (column) => column);
@@ -2556,6 +2859,11 @@ class $$MediaTableTableManager extends RootTableManager<
             Value<String?> evidenceSha256Hash = const Value.absent(),
             Value<String?> capturedAddress = const Value.absent(),
             Value<String?> creatorId = const Value.absent(),
+            Value<String?> verificationStatus = const Value.absent(),
+            Value<int?> isAltitudeMsl = const Value.absent(),
+            Value<int?> gnssSatelliteCount = const Value.absent(),
+            Value<int?> gnssSatellitesUsedInFix = const Value.absent(),
+            Value<String?> gnssFixTimestamp = const Value.absent(),
             Value<int> synced = const Value.absent(),
             Value<int> isDeleted = const Value.absent(),
             Value<int> rowid = const Value.absent(),
@@ -2581,6 +2889,11 @@ class $$MediaTableTableManager extends RootTableManager<
             evidenceSha256Hash: evidenceSha256Hash,
             capturedAddress: capturedAddress,
             creatorId: creatorId,
+            verificationStatus: verificationStatus,
+            isAltitudeMsl: isAltitudeMsl,
+            gnssSatelliteCount: gnssSatelliteCount,
+            gnssSatellitesUsedInFix: gnssSatellitesUsedInFix,
+            gnssFixTimestamp: gnssFixTimestamp,
             synced: synced,
             isDeleted: isDeleted,
             rowid: rowid,
@@ -2606,6 +2919,11 @@ class $$MediaTableTableManager extends RootTableManager<
             Value<String?> evidenceSha256Hash = const Value.absent(),
             Value<String?> capturedAddress = const Value.absent(),
             Value<String?> creatorId = const Value.absent(),
+            Value<String?> verificationStatus = const Value.absent(),
+            Value<int?> isAltitudeMsl = const Value.absent(),
+            Value<int?> gnssSatelliteCount = const Value.absent(),
+            Value<int?> gnssSatellitesUsedInFix = const Value.absent(),
+            Value<String?> gnssFixTimestamp = const Value.absent(),
             Value<int> synced = const Value.absent(),
             Value<int> isDeleted = const Value.absent(),
             Value<int> rowid = const Value.absent(),
@@ -2631,6 +2949,11 @@ class $$MediaTableTableManager extends RootTableManager<
             evidenceSha256Hash: evidenceSha256Hash,
             capturedAddress: capturedAddress,
             creatorId: creatorId,
+            verificationStatus: verificationStatus,
+            isAltitudeMsl: isAltitudeMsl,
+            gnssSatelliteCount: gnssSatelliteCount,
+            gnssSatellitesUsedInFix: gnssSatellitesUsedInFix,
+            gnssFixTimestamp: gnssFixTimestamp,
             synced: synced,
             isDeleted: isDeleted,
             rowid: rowid,

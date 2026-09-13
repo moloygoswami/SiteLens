@@ -114,7 +114,6 @@ class _LocationTimelineViewState extends ConsumerState<LocationTimelineView> {
 
         return _buildTimelineRow(
           result: currentResult,
-          stepIndex: index + 1,
           timeDelta: timeDelta,
           isFirst: isFirst,
           isLast: isLast,
@@ -125,7 +124,6 @@ class _LocationTimelineViewState extends ConsumerState<LocationTimelineView> {
 
   Widget _buildTimelineRow({
     required NearbyMediaResult result,
-    required int stepIndex,
     required String timeDelta,
     required bool isFirst,
     required bool isLast,
@@ -140,9 +138,9 @@ class _LocationTimelineViewState extends ConsumerState<LocationTimelineView> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 1. Vertical Connected Line & Node Indicator
+          // 1. Vertical Connected Timeline Line
           SizedBox(
-            width: 36,
+            width: 16,
             child: Column(
               children: [
                 // Top line
@@ -150,33 +148,6 @@ class _LocationTimelineViewState extends ConsumerState<LocationTimelineView> {
                   width: 2,
                   height: 12,
                   color: isFirst ? Colors.transparent : AppColors.border,
-                ),
-                // Step Node Circle
-                Container(
-                  width: 26,
-                  height: 26,
-                  decoration: BoxDecoration(
-                    color: nodeColor,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: nodeColor.withAlpha(80),
-                        blurRadius: 4,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Center(
-                    child: Text(
-                      '$stepIndex',
-                      style: const TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
                 ),
                 // Bottom connecting line
                 Expanded(
@@ -216,20 +187,10 @@ class _LocationTimelineViewState extends ConsumerState<LocationTimelineView> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Top Header: Step label & Time Delta
+                        // Top Header: Time Delta
                         Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          mainAxisAlignment: MainAxisAlignment.end,
                           children: [
-                            Text(
-                              'STEP #$stepIndex',
-                              style: TextStyle(
-                                fontFamily: 'monospace',
-                                fontSize: 10,
-                                fontWeight: FontWeight.w800,
-                                color: nodeColor,
-                                letterSpacing: 0.5,
-                              ),
-                            ),
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                               decoration: BoxDecoration(

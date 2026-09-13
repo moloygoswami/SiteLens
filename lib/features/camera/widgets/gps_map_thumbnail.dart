@@ -44,6 +44,7 @@ class _GpsMapThumbnailState extends ConsumerState<GpsMapThumbnail> {
   double _lastSnapshotLat = 0.0;
   double _lastSnapshotLon = 0.0;
   AppMapType? _lastSnapshotMapType;
+  bool _isSnapshotInProgress = false;
 
   @override
   void initState() {
@@ -98,14 +99,30 @@ class _GpsMapThumbnailState extends ConsumerState<GpsMapThumbnail> {
           );
         }
 
-        // Proactively schedule pre-cache snapshot so an authentic live frame is
-        // available prior to shutter, respecting the internal 15s interval throttle.
-        _preCacheTimer?.cancel();
-        _preCacheTimer = Timer(const Duration(milliseconds: 600), () {
-          if (mounted) {
-            _captureSnapshotIfEligible(widget.latitude, widget.longitude);
-          }
-        });
+        // Check whether a valid pre-warmed snapshot is already available
+        final hasValidSnapshot = ref
+                .read(mapThumbnailControllerProvider.notifier)
+                .getValidCachedSnapshotBytes(
+                  lat: widget.latitude,
+                  lon: widget.longitude,
+                  mapType: currentMapType,
+                ) !=
+            null;
+
+        if (!hasValidSnapshot && !_isSnapshotInProgress) {
+          // Pre-warm snapshot immediately when GPS fix and live map are ready
+          _captureSnapshotIfEligible(widget.latitude, widget.longitude, force: true);
+        } else if (distance >= MapThumbnailPolicy.movementThresholdMeters ||
+            _preCacheTimer == null ||
+            !_preCacheTimer!.isActive) {
+          // Proactively schedule background snapshot refresh without timer starvation on GPS jitter
+          _preCacheTimer?.cancel();
+          _preCacheTimer = Timer(const Duration(milliseconds: 400), () {
+            if (mounted) {
+              _captureSnapshotIfEligible(widget.latitude, widget.longitude);
+            }
+          });
+        }
       }
     });
   }
@@ -120,9 +137,14 @@ class _GpsMapThumbnailState extends ConsumerState<GpsMapThumbnail> {
     });
   }
 
-  Future<void> _captureSnapshotIfEligible(double lat, double lon) async {
+  Future<void> _captureSnapshotIfEligible(
+    double lat,
+    double lon, {
+    bool force = false,
+  }) async {
     if (!mounted || _googleMapController == null || !widget.isLocked) return;
     if (lat == 0.0 && lon == 0.0) return;
+    if (_isSnapshotInProgress) return;
 
     final controllerNotifier = ref.read(mapThumbnailControllerProvider.notifier);
     final currentMapType = ref.read(mapTypeSettingsProvider);
@@ -153,12 +175,14 @@ class _GpsMapThumbnailState extends ConsumerState<GpsMapThumbnail> {
         ? const Duration(hours: 1)
         : now.difference(_lastSnapshotTime!);
 
-    if (!isMapTypeChanged &&
+    if (!force &&
+        !isMapTypeChanged &&
         distance < MapThumbnailPolicy.movementThresholdMeters &&
         elapsed < MapThumbnailPolicy.minSnapshotInterval) {
       return;
     }
 
+    _isSnapshotInProgress = true;
     try {
       final snapshot = await _googleMapController?.takeSnapshot();
       if (snapshot != null && snapshot.isNotEmpty && mounted) {
@@ -182,7 +206,10 @@ class _GpsMapThumbnailState extends ConsumerState<GpsMapThumbnail> {
           _lastSnapshotMapType = currentMapType;
         }
       }
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      _isSnapshotInProgress = false;
+    }
   }
 
   void _showMapTypeSelectorSheet() {
@@ -532,15 +559,19 @@ class _GpsMapThumbnailState extends ConsumerState<GpsMapThumbnail> {
                 () => controller.takeSnapshot(),
               )
               ..onLiveMapInitialized();
-            _preCacheTimer?.cancel();
-            _preCacheTimer = Timer(const Duration(milliseconds: 1000), () {
-              if (mounted) {
-                _captureSnapshotIfEligible(widget.latitude, widget.longitude);
-              }
-            });
+            if (widget.isLocked && (widget.latitude != 0.0 || widget.longitude != 0.0)) {
+              _preCacheTimer?.cancel();
+              _preCacheTimer = Timer(const Duration(milliseconds: 200), () {
+                if (mounted) {
+                  _captureSnapshotIfEligible(widget.latitude, widget.longitude, force: true);
+                }
+              });
+            }
           },
           onCameraIdle: () {
-            _captureSnapshotIfEligible(widget.latitude, widget.longitude);
+            if (widget.isLocked && (widget.latitude != 0.0 || widget.longitude != 0.0)) {
+              _captureSnapshotIfEligible(widget.latitude, widget.longitude, force: true);
+            }
           },
         ),
       ),

@@ -4,11 +4,26 @@ import '../local/database/app_database.dart';
 import '../local/database/database_provider.dart';
 import '../../domain/models/site_model.dart';
 
+class SiteReferencedByMediaException implements Exception {
+  final String message;
+  const SiteReferencedByMediaException([this.message = 'Cannot delete site because captured media references this site.']);
+  @override
+  String toString() => message;
+}
+
+class DuplicateSiteCodeException implements Exception {
+  final String message;
+  const DuplicateSiteCodeException([this.message = 'Site code already exists.']);
+  @override
+  String toString() => message;
+}
+
 abstract class SiteRepository {
   Future<List<SiteModel>> getAllSites({String? creatorId});
   Future<SiteModel?> getSiteById(String id);
   Future<void> saveSite(SiteModel site);
-  Future<void> deleteSite(String id);
+  Future<void> deleteSite(String id, {String? creatorId});
+  Future<bool> hasMediaForSite(String siteId);
   Future<void> seedDefaultSitesIfEmpty();
 }
 
@@ -19,10 +34,11 @@ class LocalSiteRepository implements SiteRepository {
 
   @override
   Future<List<SiteModel>> getAllSites({String? creatorId}) async {
-    final query = _db.select(_db.sites);
-    if (creatorId != null && creatorId.isNotEmpty) {
-      query.where((tbl) => tbl.creatorId.equals(creatorId) | tbl.creatorId.isNull());
+    if (creatorId == null || creatorId.isEmpty) {
+      // Fail closed: Never return all sites across users when unauthenticated or creatorId omitted
+      return [];
     }
+    final query = _db.select(_db.sites)..where((tbl) => tbl.creatorId.equals(creatorId));
     final entries = await query.get();
     return entries
         .map((e) => SiteModel(
@@ -62,8 +78,29 @@ class LocalSiteRepository implements SiteRepository {
   }
 
   @override
-  Future<void> deleteSite(String id) async {
-    await (_db.delete(_db.sites)..where((tbl) => tbl.id.equals(id))).go();
+  Future<bool> hasMediaForSite(String siteId) async {
+    final countExpr = _db.media.id.count();
+    final query = _db.selectOnly(_db.media)
+      ..addColumns([countExpr])
+      ..where(_db.media.siteId.equals(siteId));
+    final row = await query.getSingleOrNull();
+    final count = row?.read(countExpr) ?? 0;
+    return count > 0;
+  }
+
+  @override
+  Future<void> deleteSite(String id, {String? creatorId}) async {
+    final hasMedia = await hasMediaForSite(id);
+    if (hasMedia) {
+      throw const SiteReferencedByMediaException(
+        'Cannot delete site because captured media references this site.',
+      );
+    }
+    final query = _db.delete(_db.sites)..where((tbl) => tbl.id.equals(id));
+    if (creatorId != null && creatorId.isNotEmpty) {
+      query.where((tbl) => tbl.creatorId.equals(creatorId));
+    }
+    await query.go();
   }
 
   @override
