@@ -831,8 +831,8 @@ void main() {
 
       // Fullscreen Video route is opened
       expect(find.text('FULLSCREEN VIDEO EVIDENCE'), findsOneWidget);
-      // Bottom metadata is the canonical metadata card — the same component the
-      // Photo immersive viewer renders.
+      // Video evidence has no burned-in HUD, so the fullscreen viewer renders the
+      // canonical runtime metadata card.
       expect(find.byType(StandaloneMetadataWidget), findsOneWidget);
       // Canonical siteCode (from the persisted site), never the internal
       // Firestore-style site document id.
@@ -1011,7 +1011,7 @@ void main() {
     });
   });
 
-  group('Canonical Metadata Card Parity (Photo & Video)', () {
+  group('Runtime Metadata Card Scope (Photo & Video)', () {
     Widget buildDetail({
       required SiteRepository siteRepository,
       EvidenceStorageService? storage,
@@ -1075,86 +1075,134 @@ void main() {
       );
     }
 
-    testWidgets(
-        'Photo and Video fullscreen render the exact same canonical metadata card component',
+    testWidgets('Video fullscreen renders the canonical runtime metadata card',
         (tester) async {
-      Future<void> assertFullscreenCard(String title, MediaItemType type) async {
-        await tester.pumpWidget(
-          buildDetail(
-            siteRepository: MockSiteRepository(testSite),
-            item: parityItem(type),
-          ),
-        );
-        await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        buildDetail(
+          siteRepository: MockSiteRepository(testSite),
+          item: parityItem(MediaItemType.video),
+        ),
+      );
+      await tester.pumpAndSettle();
 
-        // The runtime card must NOT be mounted in the normal Detail body.
-        expect(find.byType(StandaloneMetadataWidget), findsNothing);
+      // The runtime card must NOT be mounted in the normal Detail body.
+      expect(find.byType(StandaloneMetadataWidget), findsNothing);
 
-        await openFullscreen(tester, title);
-        expect(find.byType(StandaloneMetadataWidget), findsOneWidget);
+      await openFullscreen(tester, 'FULLSCREEN VIDEO EVIDENCE');
 
-        await tester.pumpWidget(const SizedBox());
-        await tester.pumpAndSettle();
-      }
+      // Video evidence carries no burned-in HUD, so the runtime card remains
+      // the metadata presentation for the fullscreen video surface.
+      expect(find.byType(StandaloneMetadataWidget), findsOneWidget);
 
-      await assertFullscreenCard(
-          'FULLSCREEN VIDEO EVIDENCE', MediaItemType.video);
-      await assertFullscreenCard(
-          'IMMERSIVE EVIDENCE VIEWER', MediaItemType.photo);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
     });
 
     testWidgets(
-        'Photo and Video fullscreen render identical common metadata fields',
+        'Photo fullscreen mounts NO runtime metadata card over the burned JPEG',
         (tester) async {
-      Future<void> assertCardFields(
-          String title, MediaItemType type) async {
-        await tester.pumpWidget(
-          buildDetail(
-            siteRepository: MockSiteRepository(testSite),
-            item: parityItem(type),
-          ),
-        );
-        await tester.pumpAndSettle();
-        await openFullscreen(tester, title);
+      final tempDir = Directory.systemTemp.createTempSync('sitelens_photo_fs_');
+      final evidFile = File('${tempDir.path}/evid_parity.jpg')
+        ..writeAsBytesSync(const [9, 8, 7, 6, 5]);
+      final before = evidFile.readAsBytesSync();
+      final storage = FakeEvidenceStorageServiceMap({
+        'media/evid_parity.jpg': evidFile.path,
+      });
 
-        // Canonical siteCode (never the internal site document id).
-        expect(find.textContaining('SITE: SL-001', findRichText: true),
-            findsOneWidget);
-        expect(find.textContaining('site-alpha', findRichText: true),
-            findsNothing);
-        // UTC + local capture timestamps
-        expect(
-          find.textContaining('UTC: 2026-08-15 12:00:00 UTC • Local:',
-              findRichText: true),
-          findsOneWidget,
-        );
-        // Coordinates + altitude with datum
-        expect(find.textContaining('Lat 22.562980° N', findRichText: true),
-            findsOneWidget);
-        expect(find.textContaining('Long 88.300850° E', findRichText: true),
-            findsOneWidget);
-        expect(find.textContaining('Alt: +18.2m', findRichText: true),
-            findsWidgets);
-        // Verification status badge
-        expect(find.text('VERIFIED'), findsOneWidget);
-        // Accuracy + satellite count preserved
-        expect(find.textContaining('±4.0m • SATS: 10/15', findRichText: true),
-            findsOneWidget);
-        // Persisted forensic hash
-        expect(find.textContaining('SHA: c3d4e5f6', findRichText: true),
-            findsOneWidget);
+      await tester.pumpWidget(
+        buildDetail(
+          siteRepository: MockSiteRepository(testSite),
+          storage: storage,
+          item: parityItem(MediaItemType.photo),
+        ),
+      );
+      await tester.pumpAndSettle();
 
-        await tester.pumpWidget(const SizedBox());
-        await tester.pumpAndSettle();
-      }
+      expect(find.byType(StandaloneMetadataWidget), findsNothing);
 
-      await assertCardFields(
-          'FULLSCREEN VIDEO EVIDENCE', MediaItemType.video);
-      await assertCardFields('IMMERSIVE EVIDENCE VIEWER', MediaItemType.photo);
+      await openFullscreen(tester, 'IMMERSIVE EVIDENCE VIEWER');
+
+      // No runtime metadata card / overlay is mounted over the burned artifact.
+      expect(find.byType(StandaloneMetadataWidget), findsNothing);
+      // ...and none of its runtime fields are drawn.
+      expect(find.textContaining('SITE: SL-001', findRichText: true),
+          findsNothing);
+      expect(find.textContaining('SHA: c3d4e5f6', findRichText: true),
+          findsNothing);
+
+      // The persisted burned evidence JPEG is the sole evidence surface,
+      // rendered as-is (never the original, never a re-composition).
+      final renderedImages = tester.widgetList<Image>(find.byType(Image));
+      expect(
+        renderedImages.any((img) =>
+            img.image is FileImage &&
+            (img.image as FileImage).file.path == evidFile.path),
+        isTrue,
+      );
+
+      // Header/title controls and tap-to-toggle behaviour are preserved.
+      expect(find.text('IMMERSIVE EVIDENCE VIEWER'), findsOneWidget);
+      await tester.tap(find.byType(InteractiveViewer));
+      await tester.pumpAndSettle();
+      expect(find.text('IMMERSIVE EVIDENCE VIEWER'), findsNothing);
+      expect(find.byType(StandaloneMetadataWidget), findsNothing);
+      await tester.tap(find.byType(InteractiveViewer));
+      await tester.pumpAndSettle();
+      expect(find.text('IMMERSIVE EVIDENCE VIEWER'), findsOneWidget);
+      expect(find.byType(StandaloneMetadataWidget), findsNothing);
+
+      // The burned artifact itself is never rewritten by viewing it.
+      expect(evidFile.readAsBytesSync(), equals(before));
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+      tempDir.deleteSync(recursive: true);
     });
 
     testWidgets(
-        'Photo and Video fall back truthfully when siteCode is unavailable (never to siteId)',
+        'Video fullscreen renders its common metadata fields from persisted capture-time metadata',
+        (tester) async {
+      await tester.pumpWidget(
+        buildDetail(
+          siteRepository: MockSiteRepository(testSite),
+          item: parityItem(MediaItemType.video),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await openFullscreen(tester, 'FULLSCREEN VIDEO EVIDENCE');
+
+      // Canonical siteCode (never the internal site document id).
+      expect(find.textContaining('SITE: SL-001', findRichText: true),
+          findsOneWidget);
+      expect(find.textContaining('site-alpha', findRichText: true), findsNothing);
+      // UTC + local capture timestamps
+      expect(
+        find.textContaining('UTC: 2026-08-15 12:00:00 UTC • Local:',
+            findRichText: true),
+        findsOneWidget,
+      );
+      // Coordinates + altitude with datum
+      expect(find.textContaining('Lat 22.562980° N', findRichText: true),
+          findsOneWidget);
+      expect(find.textContaining('Long 88.300850° E', findRichText: true),
+          findsOneWidget);
+      expect(find.textContaining('Alt: +18.2m', findRichText: true),
+          findsWidgets);
+      // Verification status badge
+      expect(find.text('VERIFIED'), findsOneWidget);
+      // Accuracy + satellite count preserved
+      expect(find.textContaining('±4.0m • SATS: 10/15', findRichText: true),
+          findsOneWidget);
+      // Persisted forensic hash
+      expect(find.textContaining('SHA: c3d4e5f6', findRichText: true),
+          findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets(
+        'Video fullscreen falls back truthfully when siteCode is unavailable (never to siteId)',
         (tester) async {
       Future<void> assertFallback(
         SiteModel site,
@@ -1182,7 +1230,7 @@ void main() {
         await tester.pumpAndSettle();
       }
 
-      // 1. Site record missing entirely (photo).
+      // 1. Site record missing entirely (video fullscreen runtime card).
       await assertFallback(
         const SiteModel(
           id: 'unrelated-site',
@@ -1190,8 +1238,8 @@ void main() {
           name: 'Unrelated',
           address: 'Elsewhere',
         ),
-        'IMMERSIVE EVIDENCE VIEWER',
-        MediaItemType.photo,
+        'FULLSCREEN VIDEO EVIDENCE',
+        MediaItemType.video,
       );
       // 2. Site record present but its code is blank (video).
       await assertFallback(

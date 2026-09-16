@@ -140,6 +140,7 @@ void main() {
 
       // Redundant minimap/metadata HUD card must NOT be rendered by Review & Tag
       expect(find.byType(EvidenceMetadataHudCard), findsNothing);
+      expect(find.byType(StandaloneMetadataWidget), findsNothing);
 
       // Verify no hardcoded AspectRatio widget enforces 3:4
       expect(find.byType(AspectRatio), findsNothing);
@@ -162,6 +163,7 @@ void main() {
 
       // Redundant minimap/metadata HUD card must NOT be mounted below the preview
       expect(find.byType(EvidenceMetadataHudCard), findsNothing);
+      expect(find.byType(StandaloneMetadataWidget), findsNothing);
 
       // Form and action controls remain present
       expect(find.text('ACTIVITY / WORK STAGE'), findsOneWidget);

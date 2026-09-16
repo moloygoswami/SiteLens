@@ -263,10 +263,14 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                         ),
                       ),
 
-                    // 3. Bottom canonical metadata card, shared by Photo and Video
-                    //    (does not intercept touches). Rendered at runtime from
-                    //    persisted capture-time metadata via HudFormatter.fromMediaItem.
-                    if (showHud)
+                    // 3. Bottom canonical metadata card — VIDEO ONLY (does not
+                    //    intercept touches). Video evidence has no burned-in HUD, so
+                    //    the card is rendered at runtime from persisted capture-time
+                    //    metadata via HudFormatter.fromMediaItem. Photo evidence
+                    //    already carries the authoritative burned HUD (minimap +
+                    //    metadata card) inside the persisted JPEG, so drawing a
+                    //    runtime card here would duplicate it over the artifact.
+                    if (showHud && isVideo)
                       Positioned(
                         bottom: 24,
                         left: 12,
