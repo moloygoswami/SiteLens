@@ -31,6 +31,18 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
   double? _activeSiteLon;
   final List<Position> _recentPositions = [];
 
+  /// True while the position subscription is paused because the app left the
+  /// foreground. A subscription paused for lifecycle reasons must not be relied
+  /// on for recovery: on Android the native stream behind it can stay silent
+  /// indefinitely after backgrounding, so lifecycle resume rebuilds the native
+  /// stream instead of resuming this subscription.
+  bool _isStreamPausedByLifecycle = false;
+
+  /// Bumped by every pause/resume request so an in-flight
+  /// [resumeLocationStream] abandons its work when a newer lifecycle transition
+  /// supersedes it (e.g. the app is backgrounded again mid-revalidation).
+  int _lifecycleGeneration = 0;
+
   /// A fix older than this without a fresh stream emission is treated as
   /// stale and dropped to searching (coordinates cleared). Chosen to sit well
   /// above the 1s stream interval / throttle while staying below a plausible
@@ -122,6 +134,7 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
 
   void _startStream() {
     _positionSubscription?.cancel();
+    _isStreamPausedByLifecycle = false;
     _positionSubscription = _service.getPositionStream().listen(
       (position) {
         _processPosition(position);
@@ -137,6 +150,26 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
         }
       },
     );
+  }
+
+  /// Cancels the current subscription and drops the reference, so the next
+  /// [_startStream] is served by a brand-new native stream.
+  ///
+  /// The subscription is cancelled rather than resumed: a subscription paused
+  /// for lifecycle reasons is not a reliable recovery path, and cancelling is
+  /// what makes `geolocator_android` discard its cached position stream.
+  ///
+  /// The returned future is deliberately not awaited — Dart does not complete
+  /// the cancellation of a *paused* subscription promptly, while the cached
+  /// stream is invalidated synchronously inside the cancel, so the stream
+  /// requested immediately afterwards is already a fresh native subscription.
+  void _releaseStream() {
+    final existing = _positionSubscription;
+    _positionSubscription = null;
+    _isStreamPausedByLifecycle = false;
+    if (existing != null) {
+      unawaited(existing.cancel());
+    }
   }
 
   Future<void> _processPosition(Position position, {bool isInitial = false}) async {
@@ -332,7 +365,12 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
 
   void pauseLocationStream() {
     if (!mounted) return;
-    _positionSubscription?.pause();
+    _lifecycleGeneration++;
+    if (_isStreamPausedByLifecycle) return; // idempotent: never double-pause
+
+    final subscription = _positionSubscription;
+    _isStreamPausedByLifecycle = subscription != null;
+    subscription?.pause();
     _stalenessTimer?.cancel();
     _stalenessTimer = null;
     _service.stopGnssUpdates();
@@ -348,8 +386,15 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
   /// stale/cached coordinate can be mistaken for a live fix. A previously valid
   /// fix is kept only while still fresh; otherwise it is cleared and the state
   /// transitions back through Acquiring until a new live position arrives.
+  ///
+  /// The stream itself is rebuilt rather than resumed: a subscription paused by
+  /// a lifecycle pause can stay silent indefinitely after resume, so a fresh
+  /// native stream is created through [_startStream]. Only a genuine emission
+  /// from that stream can restore a live fix.
   Future<void> resumeLocationStream() async {
     if (!mounted) return;
+
+    final int requestGeneration = ++_lifecycleGeneration;
 
     _service.startGnssUpdates();
     refreshGnssStatus();
@@ -357,7 +402,7 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
     // 1. Revalidate permission + location service from the OS.
     final bool serviceEnabled = await _service.isLocationServiceEnabled();
     final LocationPermission permission = await _service.checkPermission();
-    if (!mounted) return;
+    if (!mounted || requestGeneration != _lifecycleGeneration) return;
 
     state = state.copyWith(
       isLocationServiceEnabled: serviceEnabled,
@@ -370,9 +415,7 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
     if (!serviceEnabled || !granted) {
       // Cannot acquire: stop the stream and drop any latched fix so no stale or
       // cached coordinate can be promoted to a live fix.
-      final existing = _positionSubscription;
-      _positionSubscription = null;
-      await existing?.cancel();
+      _releaseStream();
       _stalenessTimer?.cancel();
       _stalenessTimer = null;
       _recentPositions.clear();
@@ -414,12 +457,13 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
       );
     }
 
-    // 3. Revalidate the subscription: never create a duplicate stream.
-    final subscription = _positionSubscription;
-    if (subscription == null) {
+    // 3. Re-establish the stream. A subscription paused by a lifecycle pause is
+    //    replaced by a brand-new native stream (resuming it is not a reliable
+    //    recovery path); an already-active subscription is left untouched so
+    //    repeated resumes never open a duplicate stream.
+    if (_isStreamPausedByLifecycle || _positionSubscription == null) {
+      _releaseStream();
       _startStream();
-    } else if (subscription.isPaused) {
-      subscription.resume();
     }
   }
 

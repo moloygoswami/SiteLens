@@ -102,6 +102,48 @@ class _CountingLocationService extends MockLocationService {
   }
 }
 
+/// Location fake that reproduces the physical Android failure mode: the stream
+/// that exists when the app is backgrounded goes permanently silent — the
+/// platform subscription accepts `resume()` but never delivers again — while a
+/// newly created stream delivers normally.
+///
+/// Used to prove that lifecycle recovery rebuilds the native stream instead of
+/// relying on `Subscription.resume()`.
+class _StreamDiesOnPauseLocationService extends MockLocationService {
+  final List<StreamController<Position>> _generations = [];
+  int positionStreamRequests = 0;
+  int deliveredCount = 0;
+  bool _nativeStreamDead = false;
+
+  @override
+  Stream<Position> getPositionStream({LocationSettings? locationSettings}) {
+    positionStreamRequests++;
+    _nativeStreamDead = false; // a brand-new stream is alive
+    final controller = StreamController<Position>.broadcast();
+    _generations.add(controller);
+    return controller.stream;
+  }
+
+  /// Simulates backgrounding: the native stream behind the current subscription
+  /// stops delivering and never recovers on its own.
+  void markNativeStreamDead() => _nativeStreamDead = true;
+
+  /// Delivers to the newest stream generation — unless the native stream is
+  /// dead, in which case the emission is silently lost (as on the device).
+  void emit(Position pos) {
+    super.emitPosition(pos); // keeps altitude telemetry bookkeeping honest
+    if (_nativeStreamDead || _generations.isEmpty) return;
+    deliveredCount++;
+    _generations.last.add(pos);
+  }
+
+  void closeGenerations() {
+    for (final controller in _generations) {
+      controller.close();
+    }
+  }
+}
+
 Position createFakePosition({
   required double latitude,
   required double longitude,
@@ -1289,20 +1331,26 @@ void main() {
       await notifier.resumeLocationStream();
       expect(service.positionStreamRequests, 1);
 
-      // Pause then resume reuses the paused subscription.
+      // Pause then resume REBUILDS the stream: a lifecycle-paused subscription is
+      // not trusted to deliver again (see _StreamDiesOnPauseLocationService), so
+      // recovery always creates exactly one fresh native stream.
       notifier.pauseLocationStream();
       await notifier.resumeLocationStream();
-      expect(service.positionStreamRequests, 1);
+      expect(service.positionStreamRequests, 2);
+
+      // Repeated resumes while the rebuilt stream is active add no more.
+      await notifier.resumeLocationStream();
+      expect(service.positionStreamRequests, 2);
 
       // Revoking permission cancels the stream; re-granting creates exactly one.
       service.permission = LocationPermission.denied;
       await notifier.resumeLocationStream();
       service.permission = LocationPermission.whileInUse;
       await notifier.resumeLocationStream();
-      expect(service.positionStreamRequests, 2);
+      expect(service.positionStreamRequests, 3);
 
       await notifier.resumeLocationStream();
-      expect(service.positionStreamRequests, 2);
+      expect(service.positionStreamRequests, 3);
 
       notifier.dispose();
     });
@@ -1323,6 +1371,195 @@ void main() {
       // Late recovery after disposal must not touch platform or state.
       await notifier.resumeLocationStream();
       expect(mockService.isGnssUpdatesStarted, isFalse);
+    });
+
+    test(
+        'B1 lifecycle recovery: no lifecycle pause keeps the live fix and the current stream',
+        () {
+      fakeAsync((async) {
+        final service = _StreamDiesOnPauseLocationService();
+        addTearDown(service.closeGenerations);
+        final notifier = GpsHardwareNotifier(service);
+        async.flushMicrotasks();
+        expect(service.positionStreamRequests, 1);
+
+        service.emit(createFakePosition(
+          latitude: 22.57264,
+          longitude: 88.36391,
+          accuracy: 3.5,
+        ));
+        async.flushMicrotasks();
+        expect(notifier.state.hasLiveFix, isTrue);
+
+        // A resume with no preceding pause must not touch the live stream.
+        notifier.resumeLocationStream();
+        async.flushMicrotasks();
+        notifier.resumeLocationStream();
+        async.flushMicrotasks();
+
+        expect(service.positionStreamRequests, 1);
+        expect(notifier.state.hasLiveFix, isTrue);
+        expect(notifier.state.blockReason, isNull);
+
+        notifier.dispose();
+      });
+    });
+
+    test(
+        'B1 lifecycle recovery: a dead paused stream delivers nothing (models the physical failure)',
+        () {
+      fakeAsync((async) {
+        final service = _StreamDiesOnPauseLocationService();
+        addTearDown(service.closeGenerations);
+        final notifier = GpsHardwareNotifier(service);
+        async.flushMicrotasks();
+
+        service.emit(createFakePosition(
+          latitude: 22.57264,
+          longitude: 88.36391,
+          accuracy: 3.5,
+        ));
+        async.flushMicrotasks();
+        expect(service.deliveredCount, 1);
+        expect(notifier.state.hasLiveFix, isTrue);
+
+        // Backgrounded: the native stream behind the subscription dies and never
+        // revives, so a later emission cannot reach the paused subscription.
+        notifier.pauseLocationStream();
+        service.markNativeStreamDead();
+        async.elapse(const Duration(seconds: 20));
+        async.flushMicrotasks();
+
+        service.emit(createFakePosition(
+          latitude: 22.57280,
+          longitude: 88.36400,
+          accuracy: 2.8,
+        ));
+        async.flushMicrotasks();
+
+        // The emission was lost: resuming a paused subscription cannot recover.
+        expect(service.deliveredCount, 1);
+
+        notifier.dispose();
+      });
+    });
+
+    test(
+        'B1 lifecycle recovery: a stale fix is cleared and recovery rebuilds the native stream',
+        () {
+      fakeAsync((async) {
+        final service = _StreamDiesOnPauseLocationService();
+        addTearDown(service.closeGenerations);
+        final notifier = GpsHardwareNotifier(service);
+        async.flushMicrotasks();
+        expect(service.positionStreamRequests, 1);
+
+        service.emit(createFakePosition(
+          latitude: 22.57264,
+          longitude: 88.36391,
+          accuracy: 3.5,
+        ));
+        async.flushMicrotasks();
+        expect(notifier.state.hasLiveFix, isTrue);
+
+        // ≥15s backgrounded with a dead native stream.
+        notifier.pauseLocationStream();
+        service.markNativeStreamDead();
+        async.elapse(const Duration(seconds: 20));
+        async.flushMicrotasks();
+
+        notifier.resumeLocationStream();
+        async.flushMicrotasks();
+
+        // Existing B1 staleness semantics are untouched: the stale fix is gone
+        // and capture stays locked.
+        expect(notifier.state.hasValidFix, isFalse);
+        expect(notifier.state.hasLiveFix, isFalse);
+        expect(notifier.state.blockReason, GpsBlockReason.searching);
+
+        // Recovery rebuilt the stream instead of resuming the dead one.
+        expect(service.positionStreamRequests, 2);
+
+        // Only a genuine position from the new stream unlocks capture.
+        service.emit(createFakePosition(
+          latitude: 22.57280,
+          longitude: 88.36400,
+          accuracy: 2.8,
+        ));
+        async.flushMicrotasks();
+        expect(service.deliveredCount, 2);
+        expect(notifier.state.hasLiveFix, isTrue);
+        expect(notifier.state.blockReason, isNull);
+
+        // Repeated resumes while active never open a duplicate stream.
+        notifier.resumeLocationStream();
+        async.flushMicrotasks();
+        notifier.resumeLocationStream();
+        async.flushMicrotasks();
+        expect(service.positionStreamRequests, 2);
+
+        // A second lifecycle cycle rebuilds exactly one more stream.
+        notifier.pauseLocationStream();
+        service.markNativeStreamDead();
+        async.elapse(const Duration(seconds: 20));
+        async.flushMicrotasks();
+        notifier.resumeLocationStream();
+        async.flushMicrotasks();
+        expect(service.positionStreamRequests, 3);
+        expect(notifier.state.hasLiveFix, isFalse);
+
+        notifier.dispose();
+      });
+    });
+
+    test(
+        'B1 lifecycle recovery: a last-known seed never becomes a live fix through stream recreation',
+        () {
+      fakeAsync((async) {
+        final service = _StreamDiesOnPauseLocationService()
+          ..lastKnown = createFakePosition(
+            latitude: 22.562856,
+            longitude: 88.300731,
+            accuracy: 4.6,
+            timestamp:
+                DateTime.now().toUtc().subtract(const Duration(seconds: 5)),
+          );
+        addTearDown(service.closeGenerations);
+        final notifier = GpsHardwareNotifier(service);
+        async.flushMicrotasks();
+
+        // Seeded from the OS cache: display-only, never capture-eligible.
+        expect(notifier.state.isLastKnownSeed, isTrue);
+        expect(notifier.state.hasLiveFix, isFalse);
+        expect(notifier.state.blockReason, GpsBlockReason.lastKnownOnly);
+
+        // Lifecycle round-trip inside the freshness window, dead native stream.
+        notifier.pauseLocationStream();
+        service.markNativeStreamDead();
+        async.elapse(const Duration(seconds: 5));
+        async.flushMicrotasks();
+        notifier.resumeLocationStream();
+        async.flushMicrotasks();
+
+        // The stream was rebuilt, and the preserved fix is still NOT live.
+        expect(service.positionStreamRequests, 2);
+        expect(notifier.state.isLastKnownSeed, isTrue);
+        expect(notifier.state.hasLiveFix, isFalse);
+        expect(notifier.state.blockReason, GpsBlockReason.lastKnownOnly);
+        expect(notifier.state.statusBadgeLabel, 'GPS: Last known');
+
+        // Only a genuine emission from the stream may unlock capture.
+        service.emit(createFakePosition(
+          latitude: 22.57264,
+          longitude: 88.36391,
+          accuracy: 3.5,
+        ));
+        async.flushMicrotasks();
+        expect(notifier.state.isLastKnownSeed, isFalse);
+        expect(notifier.state.hasLiveFix, isTrue);
+
+        notifier.dispose();
+      });
     });
   });
 }
