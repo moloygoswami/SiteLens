@@ -46,7 +46,6 @@ class MockPermissionService extends PermissionService {
   SiteLensPermissionStatus mockStatus = const SiteLensPermissionStatus(
     camera: PermissionStatus.granted,
     location: PermissionStatus.granted,
-    photos: PermissionStatus.granted,
   );
 
   @override

@@ -8,7 +8,6 @@ void main() {
       const status = SiteLensPermissionStatus(
         camera: PermissionStatus.granted,
         location: PermissionStatus.granted,
-        photos: PermissionStatus.granted,
       );
 
       expect(status.areCorePermissionsGranted, isTrue);

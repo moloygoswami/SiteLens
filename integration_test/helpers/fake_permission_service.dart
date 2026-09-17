@@ -8,7 +8,6 @@ class FakePermissionService extends StateNotifier<SiteLensPermissionStatus>
     super.initial = const SiteLensPermissionStatus(
       camera: PermissionStatus.granted,
       location: PermissionStatus.granted,
-      photos: PermissionStatus.granted,
       microphone: PermissionStatus.granted,
       notifications: PermissionStatus.granted,
     ),
@@ -29,9 +28,6 @@ class FakePermissionService extends StateNotifier<SiteLensPermissionStatus>
 
   @override
   Future<PermissionStatus> requestLocationPermission() async => state.location;
-
-  @override
-  Future<PermissionStatus> requestPhotosPermission() async => state.photos;
 
   @override
   Future<PermissionStatus> requestMicrophonePermission() async => state.microphone;

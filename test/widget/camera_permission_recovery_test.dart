@@ -96,7 +96,6 @@ class _TestPermissionService extends PermissionService {
     this.mockStatus = const SiteLensPermissionStatus(
       camera: PermissionStatus.granted,
       location: PermissionStatus.granted,
-      photos: PermissionStatus.granted,
     ),
   }) {
     state = mockStatus;
@@ -252,7 +251,6 @@ void main() {
         mockStatus: const SiteLensPermissionStatus(
           camera: PermissionStatus.denied,
           location: PermissionStatus.granted,
-          photos: PermissionStatus.granted,
         ),
       );
 
@@ -282,7 +280,6 @@ void main() {
         mockStatus: const SiteLensPermissionStatus(
           camera: PermissionStatus.permanentlyDenied,
           location: PermissionStatus.granted,
-          photos: PermissionStatus.granted,
         ),
       );
 
@@ -309,7 +306,6 @@ void main() {
         mockStatus: const SiteLensPermissionStatus(
           camera: PermissionStatus.restricted,
           location: PermissionStatus.granted,
-          photos: PermissionStatus.granted,
         ),
       );
 
@@ -335,7 +331,6 @@ void main() {
         mockStatus: const SiteLensPermissionStatus(
           camera: PermissionStatus.granted,
           location: PermissionStatus.granted,
-          photos: PermissionStatus.granted,
         ),
       );
 
@@ -364,7 +359,6 @@ void main() {
         mockStatus: const SiteLensPermissionStatus(
           camera: PermissionStatus.denied,
           location: PermissionStatus.granted,
-          photos: PermissionStatus.granted,
         ),
       );
 

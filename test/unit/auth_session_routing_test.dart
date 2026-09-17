@@ -96,7 +96,6 @@ class MockPermissionService extends PermissionService {
   SiteLensPermissionStatus mockStatus = const SiteLensPermissionStatus(
     camera: PermissionStatus.granted,
     location: PermissionStatus.granted,
-    photos: PermissionStatus.granted,
   );
 
   @override
@@ -194,7 +193,6 @@ void main() {
       mockPermission.mockStatus = const SiteLensPermissionStatus(
         camera: PermissionStatus.denied,
         location: PermissionStatus.denied,
-        photos: PermissionStatus.denied,
       );
 
       const user = AuthUser(uid: 'uid-revoked', email: 'revoked@sitelens.local');

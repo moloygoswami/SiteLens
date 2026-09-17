@@ -236,7 +236,6 @@ class _CameraTestPermissionService extends PermissionService {
     state = const SiteLensPermissionStatus(
       camera: PermissionStatus.granted,
       location: PermissionStatus.granted,
-      photos: PermissionStatus.granted,
     );
   }
 

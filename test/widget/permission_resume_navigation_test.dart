@@ -63,7 +63,6 @@ class TestMockPermissionService extends PermissionService {
   SiteLensPermissionStatus mockStatus = const SiteLensPermissionStatus(
     camera: PermissionStatus.granted,
     location: PermissionStatus.granted,
-    photos: PermissionStatus.granted,
   );
   int checkAllPermissionsCallCount = 0;
 
@@ -153,7 +152,6 @@ void main() {
       mockPermission.mockStatus = const SiteLensPermissionStatus(
         camera: PermissionStatus.granted,
         location: PermissionStatus.granted,
-        photos: PermissionStatus.granted,
       );
 
       const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local');
@@ -174,7 +172,6 @@ void main() {
       mockPermission.mockStatus = const SiteLensPermissionStatus(
         camera: PermissionStatus.denied,
         location: PermissionStatus.denied,
-        photos: PermissionStatus.denied,
       );
 
       const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local');
@@ -195,7 +192,6 @@ void main() {
       mockPermission.mockStatus = const SiteLensPermissionStatus(
         camera: PermissionStatus.denied,
         location: PermissionStatus.denied,
-        photos: PermissionStatus.denied,
       );
 
       const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local');
@@ -210,7 +206,6 @@ void main() {
       mockPermission.mockStatus = const SiteLensPermissionStatus(
         camera: PermissionStatus.granted,
         location: PermissionStatus.granted,
-        photos: PermissionStatus.granted,
       );
 
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
@@ -228,7 +223,6 @@ void main() {
       mockPermission.mockStatus = const SiteLensPermissionStatus(
         camera: PermissionStatus.granted,
         location: PermissionStatus.granted,
-        photos: PermissionStatus.granted,
       );
 
       const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local');
@@ -275,7 +269,6 @@ void main() {
       mockPermission.mockStatus = const SiteLensPermissionStatus(
         camera: PermissionStatus.permanentlyDenied,
         location: PermissionStatus.permanentlyDenied,
-        photos: PermissionStatus.permanentlyDenied,
       );
 
       const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local');
@@ -308,7 +301,6 @@ void main() {
       mockPermission.mockStatus = const SiteLensPermissionStatus(
         camera: PermissionStatus.granted,
         location: PermissionStatus.granted,
-        photos: PermissionStatus.granted,
       );
 
       // App resumed from settings
@@ -353,7 +345,6 @@ void main() {
       mockPermission.mockStatus = const SiteLensPermissionStatus(
         camera: PermissionStatus.granted,
         location: PermissionStatus.granted,
-        photos: PermissionStatus.granted,
       );
 
       const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local');
@@ -399,7 +390,6 @@ void main() {
       mockPermission.mockStatus = const SiteLensPermissionStatus(
         camera: PermissionStatus.granted,
         location: PermissionStatus.granted,
-        photos: PermissionStatus.granted,
       );
 
       const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local');

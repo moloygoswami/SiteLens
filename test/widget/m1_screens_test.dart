@@ -212,7 +212,8 @@ void main() {
       expect(find.text('Device Permissions'), findsOneWidget);
       expect(find.text('Camera Access'), findsOneWidget);
       expect(find.text('Precise Location / GPS'), findsOneWidget);
-      expect(find.text('Photos & Storage'), findsOneWidget);
+      // Unused device media-library access was removed: no Photos & Storage tile.
+      expect(find.text('Photos & Storage'), findsNothing);
     });
 
     testWidgets('PermissionRecoveryScreen renders instructions and actions', (tester) async {

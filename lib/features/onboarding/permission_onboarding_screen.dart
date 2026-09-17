@@ -237,18 +237,6 @@ class _PermissionOnboardingScreenState
                               ),
                               const SizedBox(height: 12),
                               _buildPermissionTile(
-                                icon: Icons.photo_library_rounded,
-                                title: 'Photos & Storage',
-                                subtitle: 'Save original evidence, thumbnails, and cache sites locally.',
-                                isRequired: true,
-                                status: status.photos,
-                                onRequest: () async {
-                                  await ref.read(permissionServiceProvider.notifier).requestPhotosPermission();
-                                  _checkProgression();
-                                },
-                              ),
-                              const SizedBox(height: 12),
-                              _buildPermissionTile(
                                 icon: Icons.mic_rounded,
                                 title: 'Microphone (Video Notes)',
                                 subtitle: 'Record verbal inspector notes during site video walk-throughs.',
@@ -353,18 +341,6 @@ class _PermissionOnboardingScreenState
                               status: status.location,
                               onRequest: () async {
                                 await ref.read(permissionServiceProvider.notifier).requestLocationPermission();
-                                _checkProgression();
-                              },
-                            ),
-                            const SizedBox(height: 12),
-                            _buildPermissionTile(
-                              icon: Icons.photo_library_rounded,
-                              title: 'Photos & Storage',
-                              subtitle: 'Save original evidence, thumbnails, and cache sites locally.',
-                              isRequired: true,
-                              status: status.photos,
-                              onRequest: () async {
-                                await ref.read(permissionServiceProvider.notifier).requestPhotosPermission();
                                 _checkProgression();
                               },
                             ),

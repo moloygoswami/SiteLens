@@ -5,14 +5,12 @@ import 'package:permission_handler/permission_handler.dart';
 class SiteLensPermissionStatus {
   final PermissionStatus camera;
   final PermissionStatus location;
-  final PermissionStatus photos;
   final PermissionStatus microphone;
   final PermissionStatus notifications;
 
   const SiteLensPermissionStatus({
     this.camera = PermissionStatus.denied,
     this.location = PermissionStatus.denied,
-    this.photos = PermissionStatus.denied,
     this.microphone = PermissionStatus.denied,
     this.notifications = PermissionStatus.denied,
   });
@@ -31,14 +29,12 @@ class SiteLensPermissionStatus {
   SiteLensPermissionStatus copyWith({
     PermissionStatus? camera,
     PermissionStatus? location,
-    PermissionStatus? photos,
     PermissionStatus? microphone,
     PermissionStatus? notifications,
   }) {
     return SiteLensPermissionStatus(
       camera: camera ?? this.camera,
       location: location ?? this.location,
-      photos: photos ?? this.photos,
       microphone: microphone ?? this.microphone,
       notifications: notifications ?? this.notifications,
     );
@@ -73,21 +69,12 @@ class PermissionService extends StateNotifier<SiteLensPermissionStatus> {
         }
       }
 
-      var photosStatus = await Permission.photos.status;
-      if (!photosStatus.isGranted) {
-        final storageStatus = await Permission.storage.status;
-        if (storageStatus.isGranted) {
-          photosStatus = storageStatus;
-        }
-      }
-
       final micStatus = await Permission.microphone.status;
       final notifStatus = await Permission.notification.status;
 
       final updated = SiteLensPermissionStatus(
         camera: cameraStatus,
         location: locationStatus,
-        photos: photosStatus,
         microphone: micStatus,
         notifications: notifStatus,
       );
@@ -115,15 +102,6 @@ class PermissionService extends StateNotifier<SiteLensPermissionStatus> {
     return res;
   }
 
-  Future<PermissionStatus> requestPhotosPermission() async {
-    var res = await Permission.photos.request();
-    if (!res.isGranted) {
-      res = await Permission.storage.request();
-    }
-    await checkAllPermissions();
-    return res;
-  }
-
   Future<PermissionStatus> requestMicrophonePermission() async {
     final res = await Permission.microphone.request();
     await checkAllPermissions();
@@ -141,8 +119,6 @@ class PermissionService extends StateNotifier<SiteLensPermissionStatus> {
     await [
       Permission.camera,
       Permission.location,
-      Permission.photos,
-      Permission.storage,
     ].request();
     await checkAllPermissions();
   }
