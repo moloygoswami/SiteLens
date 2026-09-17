@@ -92,10 +92,10 @@ describe('SiteLens Milestone M6-B Firebase Emulator Synchronization E2E Suite', 
   test('1. Active membership authorization: Active member can sync, inactive or non-member is blocked', async () => {
     await seedSiteAndMembers();
 
-    const bobDb = testEnv.authenticatedContext('engineer-bob').firestore();
-    const bobStorage = testEnv.authenticatedContext('engineer-bob').storage();
-    const revokedDb = testEnv.authenticatedContext('revoked-alice').firestore();
-    const outsiderDb = testEnv.authenticatedContext('outsider-charlie').firestore();
+    const bobDb = testEnv.authenticatedContext('engineer-bob', { email_verified: true }).firestore();
+    const bobStorage = testEnv.authenticatedContext('engineer-bob', { email_verified: true }).storage();
+    const revokedDb = testEnv.authenticatedContext('revoked-alice', { email_verified: true }).firestore();
+    const outsiderDb = testEnv.authenticatedContext('outsider-charlie', { email_verified: true }).firestore();
 
     // Active member can read site
     await assertSucceeds(bobDb.doc('sites/site-alpha').get());
@@ -128,7 +128,7 @@ describe('SiteLens Milestone M6-B Firebase Emulator Synchronization E2E Suite', 
   test('2. Creator authorization: Evidence creator_id must strictly match auth.uid', async () => {
     await seedSiteAndMembers();
 
-    const bobDb = testEnv.authenticatedContext('engineer-bob').firestore();
+    const bobDb = testEnv.authenticatedContext('engineer-bob', { email_verified: true }).firestore();
 
     // Bob creates evidence claiming he is the creator -> SUCCEEDS
     await assertSucceeds(
@@ -141,11 +141,12 @@ describe('SiteLens Milestone M6-B Firebase Emulator Synchronization E2E Suite', 
         lon: 88.3639,
         accuracy_m: 4.2,
         low_accuracy: false,
-        captured_at: new Date(),
+        captured_at: new Date().toISOString(),
         sha256_hash: '1'.repeat(64),
         evidence_sha256_hash: '2'.repeat(64),
         is_deleted: false,
-        synced_at: new Date(),
+        storage_original_path: 'sites/site-alpha/media/m-bob-1/original',
+        storage_thumbnail_path: 'sites/site-alpha/media/m-bob-1/thumbnail',
       })
     );
 
@@ -158,11 +159,13 @@ describe('SiteLens Milestone M6-B Firebase Emulator Synchronization E2E Suite', 
         type: 'photo',
         lat: 22.5726,
         lon: 88.3639,
-        captured_at: new Date(),
+        low_accuracy: false,
+        captured_at: new Date().toISOString(),
         sha256_hash: '1'.repeat(64),
         evidence_sha256_hash: '2'.repeat(64),
         is_deleted: false,
-        synced_at: new Date(),
+        storage_original_path: 'sites/site-alpha/media/m-impersonate/original',
+        storage_thumbnail_path: 'sites/site-alpha/media/m-impersonate/thumbnail',
       })
     );
   });
@@ -173,37 +176,15 @@ describe('SiteLens Milestone M6-B Firebase Emulator Synchronization E2E Suite', 
   test('3. Full 3-tier sync pipeline: Uploads original, thumbnail, and creates Firestore document', async () => {
     await seedSiteAndMembers();
 
-    const bobStorage = testEnv.authenticatedContext('engineer-bob').storage();
-    const bobDb = testEnv.authenticatedContext('engineer-bob').firestore();
+    const bobStorage = testEnv.authenticatedContext('engineer-bob', { email_verified: true }).storage();
+    const bobDb = testEnv.authenticatedContext('engineer-bob', { email_verified: true }).firestore();
 
     const origHash = 'a1b2c3d4e5f6'.padEnd(64, '0');
     const thumbHash = 'f6e5d4c3b2a1'.padEnd(64, '0');
 
-    // Step A: Storage Original Upload
-    const origRef = bobStorage.ref('sites/site-alpha/media/m-full-1/original');
-    const dummyImageBytes = Buffer.from('fake-jpeg-raw-bytes');
-    await assertSucceeds(
-      origRef.put(dummyImageBytes, {
-        contentType: 'image/jpeg',
-        customMetadata: {
-          'x-sitelens-original-sha256': origHash,
-        },
-      })
-    );
-
-    // Step B: Storage Thumbnail Upload
-    const thumbRef = bobStorage.ref('sites/site-alpha/media/m-full-1/thumbnail');
-    const dummyThumbBytes = Buffer.from('fake-jpeg-thumb-bytes');
-    await assertSucceeds(
-      thumbRef.put(dummyThumbBytes, {
-        contentType: 'image/jpeg',
-        customMetadata: {
-          'x-sitelens-thumbnail-sha256': thumbHash,
-        },
-      })
-    );
-
-    // Step C: Firestore Document Creation
+    // Step A: Firestore ledger document first — Storage rules require the
+    // media document to exist with a matching creator_id before artifacts
+    // may be written (ledger document is published before artifact uploads).
     const mediaDocRef = bobDb.doc('sites/site-alpha/media/m-full-1');
     await assertSucceeds(
       mediaDocRef.set({
@@ -215,14 +196,39 @@ describe('SiteLens Milestone M6-B Firebase Emulator Synchronization E2E Suite', 
         lon: 88.3639,
         accuracy_m: 3.5,
         low_accuracy: false,
-        captured_at: new Date(),
+        captured_at: new Date().toISOString(),
         sha256_hash: origHash,
-        evidence_sha256_hash: 'evid-hash'.padEnd(64, '0'),
+        evidence_sha256_hash: 'e'.repeat(64),
         activity_tag: 'Reinforcement Inspection',
         observation_type: 'general',
         note: 'Pillar 4B initial alignment',
         is_deleted: false,
-        synced_at: new Date(),
+        storage_original_path: 'sites/site-alpha/media/m-full-1/original',
+        storage_thumbnail_path: 'sites/site-alpha/media/m-full-1/thumbnail',
+      })
+    );
+
+    // Step B: Storage Original Upload
+    const origRef = bobStorage.ref('sites/site-alpha/media/m-full-1/original');
+    const dummyImageBytes = Buffer.from('fake-jpeg-raw-bytes');
+    await assertSucceeds(
+      origRef.put(dummyImageBytes, {
+        contentType: 'image/jpeg',
+        customMetadata: {
+          'x-sitelens-original-sha256': origHash,
+        },
+      })
+    );
+
+    // Step C: Storage Thumbnail Upload
+    const thumbRef = bobStorage.ref('sites/site-alpha/media/m-full-1/thumbnail');
+    const dummyThumbBytes = Buffer.from('fake-jpeg-thumb-bytes');
+    await assertSucceeds(
+      thumbRef.put(dummyThumbBytes, {
+        contentType: 'image/jpeg',
+        customMetadata: {
+          'x-sitelens-thumbnail-sha256': thumbHash,
+        },
       })
     );
 
@@ -240,7 +246,26 @@ describe('SiteLens Milestone M6-B Firebase Emulator Synchronization E2E Suite', 
     const origHash = 'hash-match-123'.padEnd(64, '0');
     const thumbHash = 'thumb-match-456'.padEnd(64, '0');
 
-    const bobStorage = testEnv.authenticatedContext('engineer-bob').storage();
+    // Ledger document must exist before artifacts may be written.
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await context.firestore().doc('sites/site-alpha/media/m-idempotent').set({
+        id: 'm-idempotent',
+        site_id: 'site-alpha',
+        creator_id: 'engineer-bob',
+        type: 'photo',
+        lat: 22.57,
+        lon: 88.36,
+        low_accuracy: false,
+        captured_at: new Date().toISOString(),
+        sha256_hash: origHash,
+        evidence_sha256_hash: 'b'.repeat(64),
+        is_deleted: false,
+        storage_original_path: 'sites/site-alpha/media/m-idempotent/original',
+        storage_thumbnail_path: 'sites/site-alpha/media/m-idempotent/thumbnail',
+      });
+    });
+
+    const bobStorage = testEnv.authenticatedContext('engineer-bob', { email_verified: true }).storage();
 
     // 1. Initial upload creates the storage object
     await assertSucceeds(
@@ -295,8 +320,25 @@ describe('SiteLens Milestone M6-B Firebase Emulator Synchronization E2E Suite', 
     const origHash = 'orig-partial-hash'.padEnd(64, '0');
     const thumbHash = 'thumb-partial-hash'.padEnd(64, '0');
 
-    // Seed original only (simulating crash before thumbnail upload)
+    // Seed the ledger document + original only (simulating a crash before the
+    // thumbnail upload). Storage rules require the media document to exist
+    // with a matching creator_id before artifacts may be written.
     await testEnv.withSecurityRulesDisabled(async (context) => {
+      await context.firestore().doc('sites/site-alpha/media/m-partial-1').set({
+        id: 'm-partial-1',
+        site_id: 'site-alpha',
+        creator_id: 'engineer-bob',
+        type: 'photo',
+        lat: 22.57,
+        lon: 88.36,
+        low_accuracy: false,
+        captured_at: new Date().toISOString(),
+        sha256_hash: origHash,
+        evidence_sha256_hash: 'b'.repeat(64),
+        is_deleted: false,
+        storage_original_path: 'sites/site-alpha/media/m-partial-1/original',
+        storage_thumbnail_path: 'sites/site-alpha/media/m-partial-1/thumbnail',
+      });
       const storage = context.storage();
       await storage.ref('sites/site-alpha/media/m-partial-1/original').put(
         Buffer.from('raw-orig-bytes'),
@@ -307,8 +349,8 @@ describe('SiteLens Milestone M6-B Firebase Emulator Synchronization E2E Suite', 
       );
     });
 
-    const bobStorage = testEnv.authenticatedContext('engineer-bob').storage();
-    const bobDb = testEnv.authenticatedContext('engineer-bob').firestore();
+    const bobStorage = testEnv.authenticatedContext('engineer-bob', { email_verified: true }).storage();
+    const bobDb = testEnv.authenticatedContext('engineer-bob', { email_verified: true }).firestore();
 
     // Step 1: Recovery inspects original metadata -> matches -> skips original upload
     const origMeta = await assertSucceeds(
@@ -327,22 +369,11 @@ describe('SiteLens Milestone M6-B Firebase Emulator Synchronization E2E Suite', 
       )
     );
 
-    // Step 3: Writes Firestore document
-    await assertSucceeds(
-      bobDb.doc('sites/site-alpha/media/m-partial-1').set({
-        id: 'm-partial-1',
-        site_id: 'site-alpha',
-        creator_id: 'engineer-bob',
-        type: 'photo',
-        lat: 22.57,
-        lon: 88.36,
-        captured_at: new Date(),
-        sha256_hash: origHash,
-        evidence_sha256_hash: 'evid-hash'.padEnd(64, '0'),
-        is_deleted: false,
-        synced_at: new Date(),
-      })
+    // Step 3: Ledger document remains present after recovery
+    const recovered = await assertSucceeds(
+      bobDb.doc('sites/site-alpha/media/m-partial-1').get()
     );
+    expect(recovered.exists).toBe(true);
   });
 
   // ---------------------------------------------------------------------------
@@ -377,14 +408,14 @@ describe('SiteLens Milestone M6-B Firebase Emulator Synchronization E2E Suite', 
       });
     });
 
-    const bobDb = testEnv.authenticatedContext('engineer-bob').firestore();
+    const bobDb = testEnv.authenticatedContext('engineer-bob', { email_verified: true }).firestore();
 
     // A. Updating mutable fields (note, tag, observation_type) -> SUCCEEDS
     await assertSucceeds(
       bobDb.doc('sites/site-alpha/media/m-existing').update({
         note: 'Updated note after structural review',
         activity_tag: 'Foundation Inspection',
-        observation_type: 'non_conformity',
+        observation_type: 'nonConformity',
       })
     );
 
@@ -430,7 +461,7 @@ describe('SiteLens Milestone M6-B Firebase Emulator Synchronization E2E Suite', 
       });
     });
 
-    const bobDb = testEnv.authenticatedContext('engineer-bob').firestore();
+    const bobDb = testEnv.authenticatedContext('engineer-bob', { email_verified: true }).firestore();
 
     // Soft-delete: update is_deleted: true -> SUCCEEDS
     await assertSucceeds(

@@ -4,7 +4,9 @@
   "description": "Automated security rule unit tests for SiteLens Firestore & Cloud Storage",
   "main": "security_rules.test.js",
   "scripts": {
-    "test": "jest --runInBand"
+    "test": "npm run test:rules && npm run test:jest",
+    "test:rules": "node node-test-gate.mjs",
+    "test:jest": "jest --runInBand"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^3.0.4",

@@ -82,7 +82,7 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
       });
     });
 
-    const hackerDb = testEnv.authenticatedContext('user-hacker').firestore();
+    const hackerDb = testEnv.authenticatedContext('user-hacker', { email_verified: true }).firestore();
 
     // Hacker tries to join site-1 by creating their own member document
     await assertFails(
@@ -102,7 +102,7 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
     const creatorDb = testEnv.authenticatedContext('user-creator', { email_verified: true }).firestore();
     const batch = creatorDb.batch();
 
-    const siteId = 'siteNewAutoId12345678';
+    const siteId = 'siteNewAutoId1234567';
     const siteRef = creatorDb.doc(`sites/${siteId}`);
     const memberRef = creatorDb.doc(`sites/${siteId}/members/user-creator`);
 
@@ -154,7 +154,7 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
       });
     });
 
-    const suspendedDb = testEnv.authenticatedContext('user-suspended').firestore();
+    const suspendedDb = testEnv.authenticatedContext('user-suspended', { email_verified: true }).firestore();
     await assertFails(suspendedDb.doc('sites/site-1/media/m1').get());
   });
 
@@ -190,7 +190,7 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
       });
     });
 
-    const userADb = testEnv.authenticatedContext('user-a').firestore();
+    const userADb = testEnv.authenticatedContext('user-a', { email_verified: true }).firestore();
     await assertFails(userADb.doc('sites/site-b/media/mb1').get());
   });
 
@@ -209,7 +209,7 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
       });
     });
 
-    const inspectorDb = testEnv.authenticatedContext('user-inspector').firestore();
+    const inspectorDb = testEnv.authenticatedContext('user-inspector', { email_verified: true }).firestore();
     const now = new Date();
 
     // Trying to claim user-a as creator
@@ -260,7 +260,7 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
       });
     });
 
-    const inspectorDb = testEnv.authenticatedContext('user-inspector').firestore();
+    const inspectorDb = testEnv.authenticatedContext('user-inspector', { email_verified: true }).firestore();
 
     // Attempting to change SHA-256 hash
     await assertFails(
@@ -311,7 +311,7 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
       });
     });
 
-    const inspectorDb = testEnv.authenticatedContext('user-inspector').firestore();
+    const inspectorDb = testEnv.authenticatedContext('user-inspector', { email_verified: true }).firestore();
 
     await assertSucceeds(
       inspectorDb.doc('sites/site-1/media/m1').update({
@@ -363,9 +363,9 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
       });
     });
 
-    const otherDb = testEnv.authenticatedContext('user-other').firestore();
-    const creatorDb = testEnv.authenticatedContext('user-creator').firestore();
-    const adminDb = testEnv.authenticatedContext('user-admin').firestore();
+    const otherDb = testEnv.authenticatedContext('user-other', { email_verified: true }).firestore();
+    const creatorDb = testEnv.authenticatedContext('user-creator', { email_verified: true }).firestore();
+    const adminDb = testEnv.authenticatedContext('user-admin', { email_verified: true }).firestore();
 
     // 1. Other inspector cannot soft delete
     await assertFails(
@@ -421,7 +421,7 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
       });
     });
 
-    const adminDb = testEnv.authenticatedContext('user-admin').firestore();
+    const adminDb = testEnv.authenticatedContext('user-admin', { email_verified: true }).firestore();
     await assertFails(adminDb.doc('sites/site-1/media/m1').delete());
   });
 
@@ -429,8 +429,8 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
   // 11. User Profile IDOR Prevention (vuln-0003 / CWE-639)
   // ---------------------------------------------------------------------------
   test('11. User Profile IDOR Prevention: User A can read/write own profile, User B cannot read User A profile', async () => {
-    const userADb = testEnv.authenticatedContext('user-a').firestore();
-    const userBDb = testEnv.authenticatedContext('user-b').firestore();
+    const userADb = testEnv.authenticatedContext('user-a', { email_verified: true }).firestore();
+    const userBDb = testEnv.authenticatedContext('user-b', { email_verified: true }).firestore();
 
     // 1. User A writes own profile
     await assertSucceeds(
@@ -472,7 +472,7 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
       });
     });
 
-    const userADb = testEnv.authenticatedContext('user-a').firestore();
+    const userADb = testEnv.authenticatedContext('user-a', { email_verified: true }).firestore();
 
     // 1. Valid deterministic storage paths and valid originalUri succeed
     await assertSucceeds(
@@ -485,6 +485,7 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
         lat: 22.56298,
         lon: 88.30085,
         type: 'photo',
+        low_accuracy: false,
         is_deleted: false,
         storage_original_path: 'sites/site-1/media/m-valid/original',
         storage_thumbnail_path: 'sites/site-1/media/m-valid/thumbnail',
@@ -505,6 +506,7 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
         lat: 22.56298,
         lon: 88.30085,
         type: 'photo',
+        low_accuracy: false,
         is_deleted: false,
         storage_original_path: 'sites/site-1/media/m-traversal/original',
         storage_thumbnail_path: 'sites/site-1/media/m-traversal/thumbnail',
@@ -525,6 +527,7 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
         lat: 22.56298,
         lon: 88.30085,
         type: 'photo',
+        low_accuracy: false,
         is_deleted: false,
         storage_original_path: 'other/arbitrary/path',
         storage_thumbnail_path: 'sites/site-1/media/m-badpath/thumbnail',
