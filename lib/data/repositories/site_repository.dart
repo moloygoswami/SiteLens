@@ -79,10 +79,21 @@ class LocalSiteRepository implements SiteRepository {
 
   @override
   Future<bool> hasMediaForSite(String siteId) async {
+    // Site deletion is blocked if:
+    // 1. Active media exists (is_deleted == 0), OR
+    // 2. A published tombstone is still pending sync (is_deleted == 1 & synced != 0 & tombstone_reconciled == 0).
+    // Site deletion is allowed when only never-published (synced == 0) or fully reconciled
+    // (tombstone_reconciled == 1) tombstones remain.
     final countExpr = _db.media.id.count();
     final query = _db.selectOnly(_db.media)
       ..addColumns([countExpr])
-      ..where(_db.media.siteId.equals(siteId));
+      ..where(
+        _db.media.siteId.equals(siteId) &
+            (_db.media.isDeleted.equals(0) |
+                (_db.media.isDeleted.equals(1) &
+                    _db.media.synced.equals(0).not() &
+                    _db.media.tombstoneReconciled.equals(0))),
+      );
     final row = await query.getSingleOrNull();
     final count = row?.read(countExpr) ?? 0;
     return count > 0;
@@ -90,17 +101,37 @@ class LocalSiteRepository implements SiteRepository {
 
   @override
   Future<void> deleteSite(String id, {String? creatorId}) async {
-    final hasMedia = await hasMediaForSite(id);
-    if (hasMedia) {
-      throw const SiteReferencedByMediaException(
-        'Cannot delete site because captured media references this site.',
-      );
-    }
-    final query = _db.delete(_db.sites)..where((tbl) => tbl.id.equals(id));
-    if (creatorId != null && creatorId.isNotEmpty) {
-      query.where((tbl) => tbl.creatorId.equals(creatorId));
-    }
-    await query.go();
+    await _db.transaction(() async {
+      // Creator authorization check: if creatorId is specified, verify site ownership
+      if (creatorId != null && creatorId.isNotEmpty) {
+        final site = await (_db.select(_db.sites)
+              ..where((tbl) => tbl.id.equals(id) & tbl.creatorId.equals(creatorId)))
+            .getSingleOrNull();
+        if (site == null) {
+          // Site does not exist or does not belong to creator
+          return;
+        }
+      }
+
+      final hasBlockingMedia = await hasMediaForSite(id);
+      if (hasBlockingMedia) {
+        throw const SiteReferencedByMediaException(
+          'Cannot delete site because captured media references this site.',
+        );
+      }
+
+      // Atomically remove eligible tombstones (never-published or fully reconciled)
+      // before deleting the site, satisfying the SQLite FOREIGN KEY constraint.
+      await (_db.delete(_db.media)
+            ..where((tbl) => tbl.siteId.equals(id) & tbl.isDeleted.equals(1)))
+          .go();
+
+      final query = _db.delete(_db.sites)..where((tbl) => tbl.id.equals(id));
+      if (creatorId != null && creatorId.isNotEmpty) {
+        query.where((tbl) => tbl.creatorId.equals(creatorId));
+      }
+      await query.go();
+    });
   }
 
   @override

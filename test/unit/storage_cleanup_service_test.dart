@@ -66,6 +66,9 @@ class FakeMediaRepository implements MediaRepository {
   Future<void> updateSyncStatus(String mediaId, SyncStatusType status) async {}
 
   @override
+  Future<void> markTombstoneReconciled(String mediaId) async {}
+
+  @override
   Future<void> updateTags({required String mediaId, required String activityTag, required ObservationType observationType, String? note, String? linkedMediaId}) async {}
 
   @override

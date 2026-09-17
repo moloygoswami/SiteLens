@@ -49,6 +49,7 @@ class Media extends Table {
   TextColumn get gnssFixTimestamp => text().nullable().named('gnss_fix_timestamp')(); // Added in v8
   IntColumn get synced => integer().withDefault(const Constant(0))();
   IntColumn get isDeleted => integer().withDefault(const Constant(0)).named('is_deleted')(); // soft delete
+  IntColumn get tombstoneReconciled => integer().withDefault(const Constant(0)).named('tombstone_reconciled')(); // Added in v9 (0=pending, 1=reconciled)
 
   @override
   Set<Column> get primaryKey => {id};
@@ -88,7 +89,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? e]) : super(e ?? _openConnection());
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 9;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -135,6 +136,10 @@ class AppDatabase extends _$AppDatabase {
         await m.addColumn(media, media.gnssSatelliteCount);
         await m.addColumn(media, media.gnssSatellitesUsedInFix);
         await m.addColumn(media, media.gnssFixTimestamp);
+      }
+      if (from < 9) {
+        // v9: track whether a tombstone has been reconciled with cloud sync
+        await m.addColumn(media, media.tombstoneReconciled);
       }
     },
   );

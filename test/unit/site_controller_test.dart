@@ -53,7 +53,9 @@ void main() {
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
-    db = AppDatabase(NativeDatabase.memory());
+    db = AppDatabase(NativeDatabase.memory(setup: (rawDb) {
+      rawDb.execute('PRAGMA foreign_keys = ON;');
+    }));
     siteRepo = LocalSiteRepository(db);
 
     // Test fixtures scoped to testUserId
@@ -357,19 +359,25 @@ void main() {
   });
 
   group('Delete-Site Media Foreign Key Integrity Tests', () {
-    test('Cannot delete site referenced by media in database', () async {
-      // Insert a media item referencing site-4092
+    test('Cannot delete site referenced by active media in database', () async {
+      // Active media (isDeleted = 0) referencing site-4092
       await db.into(db.media).insert(
         MediaCompanion.insert(
-          id: 'media-001',
+          id: 'media-active-001',
           uri: 'file:///data/orig_001.jpg',
           lat: 22.57,
           lon: 88.36,
           capturedAt: DateTime.now().toUtc().toIso8601String(),
           siteId: const Value('site-4092'),
           creatorId: const Value(testUserId),
+          isDeleted: const Value(0),
+          synced: const Value(0),
+          tombstoneReconciled: const Value(0),
         ),
       );
+
+      // Verify hasMediaForSite returns true
+      expect(await siteRepo.hasMediaForSite('site-4092'), isTrue);
 
       // Attempting to delete site-4092 must throw SiteReferencedByMediaException
       expect(
@@ -380,6 +388,145 @@ void main() {
       // Verify site-4092 is preserved in DB and still in controller
       await siteController.loadSitesAndActiveContext();
       expect(siteController.state.availableSites.any((s) => s.id == 'site-4092'), isTrue);
+    });
+
+    test('Cannot delete site referenced by pending tombstone (published but sync pending)', () async {
+      // Published tombstone (isDeleted = 1, synced = 1, tombstoneReconciled = 0)
+      await db.into(db.media).insert(
+        MediaCompanion.insert(
+          id: 'media-pending-tombstone',
+          uri: 'file:///data/orig_002.jpg',
+          lat: 22.57,
+          lon: 88.36,
+          capturedAt: DateTime.now().toUtc().toIso8601String(),
+          siteId: const Value('site-4092'),
+          creatorId: const Value(testUserId),
+          isDeleted: const Value(1),
+          synced: const Value(1), // Published before deletion
+          tombstoneReconciled: const Value(0), // Not yet synced to Firestore
+        ),
+      );
+
+      // Pending tombstone blocks deletion
+      expect(await siteRepo.hasMediaForSite('site-4092'), isTrue);
+
+      expect(
+        () => siteController.deleteSite('site-4092'),
+        throwsA(isA<SiteReferencedByMediaException>()),
+      );
+
+      await siteController.loadSitesAndActiveContext();
+      expect(siteController.state.availableSites.any((s) => s.id == 'site-4092'), isTrue);
+    });
+
+    test('Can delete site when only never-published tombstones remain', () async {
+      // Never-published tombstone (isDeleted = 1, synced = 0, tombstoneReconciled = 0)
+      await db.into(db.media).insert(
+        MediaCompanion.insert(
+          id: 'media-never-published-tombstone',
+          uri: 'file:///data/orig_003.jpg',
+          lat: 22.57,
+          lon: 88.36,
+          capturedAt: DateTime.now().toUtc().toIso8601String(),
+          siteId: const Value('site-4092'),
+          creatorId: const Value(testUserId),
+          isDeleted: const Value(1),
+          synced: const Value(0), // Never published
+          tombstoneReconciled: const Value(0),
+        ),
+      );
+
+      // Never-published tombstone does NOT block deletion
+      expect(await siteRepo.hasMediaForSite('site-4092'), isFalse);
+
+      // Deletion succeeds without FK violation
+      await siteController.deleteSite('site-4092');
+
+      await siteController.loadSitesAndActiveContext();
+      expect(siteController.state.availableSites.any((s) => s.id == 'site-4092'), isFalse);
+
+      // Tombstone row was atomically removed from DB
+      final remainingMedia = await (db.select(db.media)..where((tbl) => tbl.siteId.equals('site-4092'))).get();
+      expect(remainingMedia, isEmpty);
+    });
+
+    test('Can delete site when only fully reconciled tombstones remain', () async {
+      // Reconciled tombstone (isDeleted = 1, synced = 1, tombstoneReconciled = 1)
+      await db.into(db.media).insert(
+        MediaCompanion.insert(
+          id: 'media-reconciled-tombstone',
+          uri: 'file:///data/orig_004.jpg',
+          lat: 22.57,
+          lon: 88.36,
+          capturedAt: DateTime.now().toUtc().toIso8601String(),
+          siteId: const Value('site-4092'),
+          creatorId: const Value(testUserId),
+          isDeleted: const Value(1),
+          synced: const Value(1),
+          tombstoneReconciled: const Value(1), // Fully reconciled with cloud
+        ),
+      );
+
+      // Fully reconciled tombstone does NOT block deletion
+      expect(await siteRepo.hasMediaForSite('site-4092'), isFalse);
+
+      // Deletion succeeds without FK violation
+      await siteController.deleteSite('site-4092');
+
+      await siteController.loadSitesAndActiveContext();
+      expect(siteController.state.availableSites.any((s) => s.id == 'site-4092'), isFalse);
+
+      // Tombstone row was atomically removed from DB
+      final remainingMedia = await (db.select(db.media)..where((tbl) => tbl.siteId.equals('site-4092'))).get();
+      expect(remainingMedia, isEmpty);
+    });
+
+    test('No SQLite FK violation when atomically deleting site with multiple and linked tombstones', () async {
+      // Parent tombstone
+      await db.into(db.media).insert(
+        MediaCompanion.insert(
+          id: 'tombstone-parent',
+          uri: 'file:///data/orig_parent.jpg',
+          lat: 22.57,
+          lon: 88.36,
+          capturedAt: DateTime.now().toUtc().toIso8601String(),
+          siteId: const Value('site-4092'),
+          creatorId: const Value(testUserId),
+          isDeleted: const Value(1),
+          synced: const Value(1),
+          tombstoneReconciled: const Value(1),
+        ),
+      );
+
+      // Child tombstone linked to parent tombstone
+      await db.into(db.media).insert(
+        MediaCompanion.insert(
+          id: 'tombstone-child',
+          uri: 'file:///data/orig_child.jpg',
+          lat: 22.57,
+          lon: 88.36,
+          capturedAt: DateTime.now().toUtc().toIso8601String(),
+          siteId: const Value('site-4092'),
+          creatorId: const Value(testUserId),
+          linkedMediaId: const Value('tombstone-parent'),
+          isDeleted: const Value(1),
+          synced: const Value(0), // never published
+          tombstoneReconciled: const Value(0),
+        ),
+      );
+
+      // Has media check must allow deletion
+      expect(await siteRepo.hasMediaForSite('site-4092'), isFalse);
+
+      // Must delete cleanly under strict PRAGMA foreign_keys = ON
+      await siteRepo.deleteSite('site-4092', creatorId: testUserId);
+
+      // Both site and tombstones must be cleanly removed
+      final siteInDb = await (db.select(db.sites)..where((tbl) => tbl.id.equals('site-4092'))).getSingleOrNull();
+      expect(siteInDb, isNull);
+
+      final mediaInDb = await (db.select(db.media)..where((tbl) => tbl.siteId.equals('site-4092'))).get();
+      expect(mediaInDb, isEmpty);
     });
 
     test('Can delete site when no media references it', () async {

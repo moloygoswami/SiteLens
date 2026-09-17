@@ -116,6 +116,14 @@ class FakeMediaRepository implements MediaRepository {
   }
 
   @override
+  Future<void> markTombstoneReconciled(String mediaId) async {
+    final index = _items.indexWhere((i) => i.id == mediaId);
+    if (index != -1) {
+      _items[index] = _items[index].copyWith(tombstoneReconciled: true);
+    }
+  }
+
+  @override
   Future<void> deletePermanently(String mediaId) async {
     // C-2 semantics: permanent user deletion converts the row into a hidden
     // tombstone candidate instead of destroying it, so the cloud ledger can
@@ -1479,6 +1487,41 @@ void main() {
       mockCloudSync.tombstoneExceptionToThrow = null;
       await coordinator.triggerSync(isManual: true);
       expect(mockCloudSync.tombstoneCallCount, equals(2));
+
+      coordinator.dispose();
+    });
+
+    test('Tombstone sync failure preserves tombstoneReconciled=false, success marks tombstoneReconciled=true', () async {
+      final item = MediaItem(
+        id: 'm-tombstone-sync-state',
+        siteId: 'site-1',
+        originalUri: 'media/orig_state.jpg',
+        uri: 'media/evid_state.jpg',
+        type: MediaItemType.photo,
+        lat: 22.5,
+        lon: 88.3,
+        capturedAt: DateTime.now(),
+        creatorId: 'user-123',
+        syncStatus: SyncStatusType.synced,
+        isDeleted: true,
+        tombstoneReconciled: false,
+      );
+      mockRepo.setItems([item]);
+
+      // 1. Failure scenario
+      mockCloudSync.tombstoneExceptionToThrow = RetryableSyncException('Network down');
+      final coordinator = buildCoordinator();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(mockCloudSync.tombstoneCallCount, equals(1));
+      expect(mockRepo._items.single.tombstoneReconciled, isFalse);
+
+      // 2. Success scenario on retry
+      mockCloudSync.tombstoneExceptionToThrow = null;
+      await coordinator.triggerSync(isManual: true);
+
+      expect(mockCloudSync.tombstoneCallCount, equals(2));
+      expect(mockRepo._items.single.tombstoneReconciled, isTrue);
 
       coordinator.dispose();
     });

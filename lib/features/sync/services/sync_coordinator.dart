@@ -341,6 +341,8 @@ class SyncCoordinator extends StateNotifier<SyncState> with WidgetsBindingObserv
       // Successfully synced
       if (!isTombstone) {
         await _mediaRepo.updateSyncStatus(item.id, SyncStatusType.synced);
+      } else {
+        await _mediaRepo.markTombstoneReconciled(item.id);
       }
       _retryCounts.remove(item.id);
       _nextRetryTimes.remove(item.id);

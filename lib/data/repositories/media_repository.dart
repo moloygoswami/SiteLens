@@ -68,6 +68,10 @@ abstract class MediaRepository {
   Future<void> updateSyncStatus(String mediaId, SyncStatusType status);
   Future<void> resetStuckSyncingMedia();
 
+  /// Marks a tombstone row as reconciled after its deletion ledger has been
+  /// synced to the cloud (or confirmed to have never been published).
+  Future<void> markTombstoneReconciled(String mediaId);
+
   /// Returns soft-deleted rows whose cloud deletion ledger may still be
   /// pending (Cross-Cutting Audit B, B-1). A tombstone candidate is any
   /// deleted row that is not currently mid-sync; the tombstone itself is a
@@ -173,6 +177,7 @@ class LocalMediaRepository implements MediaRepository {
             creatorId: drift.Value(item.creatorId),                   // audit: creator UID for sync authorization
             synced: drift.Value(item.syncStatus.toInt()),
             isDeleted: drift.Value(item.isDeleted ? 1 : 0),
+            tombstoneReconciled: drift.Value(item.tombstoneReconciled ? 1 : 0),
           ),
         );
   }
@@ -596,6 +601,13 @@ class LocalMediaRepository implements MediaRepository {
   }
 
   @override
+  Future<void> markTombstoneReconciled(String mediaId) async {
+    await (_db.update(_db.media)..where((tbl) => tbl.id.equals(mediaId))).write(
+      const MediaCompanion(tombstoneReconciled: drift.Value(1)),
+    );
+  }
+
+  @override
   Future<List<MediaItem>> getTombstoneSyncCandidates({String? creatorId}) async {
     final query = _db.select(_db.media)
       ..where((tbl) =>
@@ -695,6 +707,7 @@ class LocalMediaRepository implements MediaRepository {
       creatorId: e.creatorId,                   // audit: creator UID for sync authorization
       syncStatus: SyncStatusType.fromInt(e.synced),
       isDeleted: e.isDeleted == 1,
+      tombstoneReconciled: e.tombstoneReconciled == 1,
     );
   }
 

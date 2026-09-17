@@ -485,6 +485,14 @@ class $MediaTable extends Media with TableInfo<$MediaTable, MediaEntry> {
       type: DriftSqlType.int,
       requiredDuringInsert: false,
       defaultValue: const Constant(0));
+  static const VerificationMeta _tombstoneReconciledMeta =
+      const VerificationMeta('tombstoneReconciled');
+  @override
+  late final GeneratedColumn<int> tombstoneReconciled = GeneratedColumn<int>(
+      'tombstone_reconciled', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
   @override
   List<GeneratedColumn> get $columns => [
         id,
@@ -513,7 +521,8 @@ class $MediaTable extends Media with TableInfo<$MediaTable, MediaEntry> {
         gnssSatellitesUsedInFix,
         gnssFixTimestamp,
         synced,
-        isDeleted
+        isDeleted,
+        tombstoneReconciled
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -671,6 +680,12 @@ class $MediaTable extends Media with TableInfo<$MediaTable, MediaEntry> {
       context.handle(_isDeletedMeta,
           isDeleted.isAcceptableOrUnknown(data['is_deleted']!, _isDeletedMeta));
     }
+    if (data.containsKey('tombstone_reconciled')) {
+      context.handle(
+          _tombstoneReconciledMeta,
+          tombstoneReconciled.isAcceptableOrUnknown(
+              data['tombstone_reconciled']!, _tombstoneReconciledMeta));
+    }
     return context;
   }
 
@@ -735,6 +750,8 @@ class $MediaTable extends Media with TableInfo<$MediaTable, MediaEntry> {
           .read(DriftSqlType.int, data['${effectivePrefix}synced'])!,
       isDeleted: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}is_deleted'])!,
+      tombstoneReconciled: attachedDatabase.typeMapping.read(
+          DriftSqlType.int, data['${effectivePrefix}tombstone_reconciled'])!,
     );
   }
 
@@ -772,6 +789,7 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
   final String? gnssFixTimestamp;
   final int synced;
   final int isDeleted;
+  final int tombstoneReconciled;
   const MediaEntry(
       {required this.id,
       this.siteId,
@@ -799,7 +817,8 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
       this.gnssSatellitesUsedInFix,
       this.gnssFixTimestamp,
       required this.synced,
-      required this.isDeleted});
+      required this.isDeleted,
+      required this.tombstoneReconciled});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -867,6 +886,7 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
     }
     map['synced'] = Variable<int>(synced);
     map['is_deleted'] = Variable<int>(isDeleted);
+    map['tombstone_reconciled'] = Variable<int>(tombstoneReconciled);
     return map;
   }
 
@@ -930,6 +950,7 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
           : Value(gnssFixTimestamp),
       synced: Value(synced),
       isDeleted: Value(isDeleted),
+      tombstoneReconciled: Value(tombstoneReconciled),
     );
   }
 
@@ -967,6 +988,8 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
       gnssFixTimestamp: serializer.fromJson<String?>(json['gnssFixTimestamp']),
       synced: serializer.fromJson<int>(json['synced']),
       isDeleted: serializer.fromJson<int>(json['isDeleted']),
+      tombstoneReconciled:
+          serializer.fromJson<int>(json['tombstoneReconciled']),
     );
   }
   @override
@@ -1001,6 +1024,7 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
       'gnssFixTimestamp': serializer.toJson<String?>(gnssFixTimestamp),
       'synced': serializer.toJson<int>(synced),
       'isDeleted': serializer.toJson<int>(isDeleted),
+      'tombstoneReconciled': serializer.toJson<int>(tombstoneReconciled),
     };
   }
 
@@ -1031,7 +1055,8 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
           Value<int?> gnssSatellitesUsedInFix = const Value.absent(),
           Value<String?> gnssFixTimestamp = const Value.absent(),
           int? synced,
-          int? isDeleted}) =>
+          int? isDeleted,
+          int? tombstoneReconciled}) =>
       MediaEntry(
         id: id ?? this.id,
         siteId: siteId.present ? siteId.value : this.siteId,
@@ -1076,6 +1101,7 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
             : this.gnssFixTimestamp,
         synced: synced ?? this.synced,
         isDeleted: isDeleted ?? this.isDeleted,
+        tombstoneReconciled: tombstoneReconciled ?? this.tombstoneReconciled,
       );
   MediaEntry copyWithCompanion(MediaCompanion data) {
     return MediaEntry(
@@ -1129,6 +1155,9 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
           : this.gnssFixTimestamp,
       synced: data.synced.present ? data.synced.value : this.synced,
       isDeleted: data.isDeleted.present ? data.isDeleted.value : this.isDeleted,
+      tombstoneReconciled: data.tombstoneReconciled.present
+          ? data.tombstoneReconciled.value
+          : this.tombstoneReconciled,
     );
   }
 
@@ -1161,7 +1190,8 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
           ..write('gnssSatellitesUsedInFix: $gnssSatellitesUsedInFix, ')
           ..write('gnssFixTimestamp: $gnssFixTimestamp, ')
           ..write('synced: $synced, ')
-          ..write('isDeleted: $isDeleted')
+          ..write('isDeleted: $isDeleted, ')
+          ..write('tombstoneReconciled: $tombstoneReconciled')
           ..write(')'))
         .toString();
   }
@@ -1194,7 +1224,8 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
         gnssSatellitesUsedInFix,
         gnssFixTimestamp,
         synced,
-        isDeleted
+        isDeleted,
+        tombstoneReconciled
       ]);
   @override
   bool operator ==(Object other) =>
@@ -1226,7 +1257,8 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
           other.gnssSatellitesUsedInFix == this.gnssSatellitesUsedInFix &&
           other.gnssFixTimestamp == this.gnssFixTimestamp &&
           other.synced == this.synced &&
-          other.isDeleted == this.isDeleted);
+          other.isDeleted == this.isDeleted &&
+          other.tombstoneReconciled == this.tombstoneReconciled);
 }
 
 class MediaCompanion extends UpdateCompanion<MediaEntry> {
@@ -1257,6 +1289,7 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
   final Value<String?> gnssFixTimestamp;
   final Value<int> synced;
   final Value<int> isDeleted;
+  final Value<int> tombstoneReconciled;
   final Value<int> rowid;
   const MediaCompanion({
     this.id = const Value.absent(),
@@ -1286,6 +1319,7 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
     this.gnssFixTimestamp = const Value.absent(),
     this.synced = const Value.absent(),
     this.isDeleted = const Value.absent(),
+    this.tombstoneReconciled = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   MediaCompanion.insert({
@@ -1316,6 +1350,7 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
     this.gnssFixTimestamp = const Value.absent(),
     this.synced = const Value.absent(),
     this.isDeleted = const Value.absent(),
+    this.tombstoneReconciled = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         uri = Value(uri),
@@ -1350,6 +1385,7 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
     Expression<String>? gnssFixTimestamp,
     Expression<int>? synced,
     Expression<int>? isDeleted,
+    Expression<int>? tombstoneReconciled,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -1383,6 +1419,8 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
       if (gnssFixTimestamp != null) 'gnss_fix_timestamp': gnssFixTimestamp,
       if (synced != null) 'synced': synced,
       if (isDeleted != null) 'is_deleted': isDeleted,
+      if (tombstoneReconciled != null)
+        'tombstone_reconciled': tombstoneReconciled,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1415,6 +1453,7 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
       Value<String?>? gnssFixTimestamp,
       Value<int>? synced,
       Value<int>? isDeleted,
+      Value<int>? tombstoneReconciled,
       Value<int>? rowid}) {
     return MediaCompanion(
       id: id ?? this.id,
@@ -1445,6 +1484,7 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
       gnssFixTimestamp: gnssFixTimestamp ?? this.gnssFixTimestamp,
       synced: synced ?? this.synced,
       isDeleted: isDeleted ?? this.isDeleted,
+      tombstoneReconciled: tombstoneReconciled ?? this.tombstoneReconciled,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1534,6 +1574,9 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
     if (isDeleted.present) {
       map['is_deleted'] = Variable<int>(isDeleted.value);
     }
+    if (tombstoneReconciled.present) {
+      map['tombstone_reconciled'] = Variable<int>(tombstoneReconciled.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1570,6 +1613,7 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
           ..write('gnssFixTimestamp: $gnssFixTimestamp, ')
           ..write('synced: $synced, ')
           ..write('isDeleted: $isDeleted, ')
+          ..write('tombstoneReconciled: $tombstoneReconciled, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -2295,6 +2339,7 @@ typedef $$MediaTableCreateCompanionBuilder = MediaCompanion Function({
   Value<String?> gnssFixTimestamp,
   Value<int> synced,
   Value<int> isDeleted,
+  Value<int> tombstoneReconciled,
   Value<int> rowid,
 });
 typedef $$MediaTableUpdateCompanionBuilder = MediaCompanion Function({
@@ -2325,6 +2370,7 @@ typedef $$MediaTableUpdateCompanionBuilder = MediaCompanion Function({
   Value<String?> gnssFixTimestamp,
   Value<int> synced,
   Value<int> isDeleted,
+  Value<int> tombstoneReconciled,
   Value<int> rowid,
 });
 
@@ -2469,6 +2515,10 @@ class $$MediaTableFilterComposer extends Composer<_$AppDatabase, $MediaTable> {
 
   ColumnFilters<int> get isDeleted => $composableBuilder(
       column: $table.isDeleted, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get tombstoneReconciled => $composableBuilder(
+      column: $table.tombstoneReconciled,
+      builder: (column) => ColumnFilters(column));
 
   $$SitesTableFilterComposer get siteId {
     final $$SitesTableFilterComposer composer = $composerBuilder(
@@ -2626,6 +2676,10 @@ class $$MediaTableOrderingComposer
   ColumnOrderings<int> get isDeleted => $composableBuilder(
       column: $table.isDeleted, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<int> get tombstoneReconciled => $composableBuilder(
+      column: $table.tombstoneReconciled,
+      builder: (column) => ColumnOrderings(column));
+
   $$SitesTableOrderingComposer get siteId {
     final $$SitesTableOrderingComposer composer = $composerBuilder(
         composer: this,
@@ -2751,6 +2805,9 @@ class $$MediaTableAnnotationComposer
   GeneratedColumn<int> get isDeleted =>
       $composableBuilder(column: $table.isDeleted, builder: (column) => column);
 
+  GeneratedColumn<int> get tombstoneReconciled => $composableBuilder(
+      column: $table.tombstoneReconciled, builder: (column) => column);
+
   $$SitesTableAnnotationComposer get siteId {
     final $$SitesTableAnnotationComposer composer = $composerBuilder(
         composer: this,
@@ -2866,6 +2923,7 @@ class $$MediaTableTableManager extends RootTableManager<
             Value<String?> gnssFixTimestamp = const Value.absent(),
             Value<int> synced = const Value.absent(),
             Value<int> isDeleted = const Value.absent(),
+            Value<int> tombstoneReconciled = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               MediaCompanion(
@@ -2896,6 +2954,7 @@ class $$MediaTableTableManager extends RootTableManager<
             gnssFixTimestamp: gnssFixTimestamp,
             synced: synced,
             isDeleted: isDeleted,
+            tombstoneReconciled: tombstoneReconciled,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -2926,6 +2985,7 @@ class $$MediaTableTableManager extends RootTableManager<
             Value<String?> gnssFixTimestamp = const Value.absent(),
             Value<int> synced = const Value.absent(),
             Value<int> isDeleted = const Value.absent(),
+            Value<int> tombstoneReconciled = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               MediaCompanion.insert(
@@ -2956,6 +3016,7 @@ class $$MediaTableTableManager extends RootTableManager<
             gnssFixTimestamp: gnssFixTimestamp,
             synced: synced,
             isDeleted: isDeleted,
+            tombstoneReconciled: tombstoneReconciled,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0

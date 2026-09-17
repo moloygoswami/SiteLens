@@ -29,6 +29,7 @@ class MediaItem {
   final String? creatorId;          // Creator user UID for multi-user sync authorization — Added in v5
   final SyncStatusType syncStatus;
   final bool isDeleted; // Soft-delete support (PRD Section 10 & 26)
+  final bool tombstoneReconciled; // Tombstone cloud-ledger reconciliation status
 
   const MediaItem({
     required this.id,
@@ -58,6 +59,7 @@ class MediaItem {
     this.creatorId,
     this.syncStatus = SyncStatusType.pending,
     this.isDeleted = false,
+    this.tombstoneReconciled = false,
   });
 
   MediaItem copyWith({
@@ -88,6 +90,7 @@ class MediaItem {
     String? creatorId,
     SyncStatusType? syncStatus,
     bool? isDeleted,
+    bool? tombstoneReconciled,
   }) {
     return MediaItem(
       id: id ?? this.id,
@@ -117,6 +120,7 @@ class MediaItem {
       creatorId: creatorId ?? this.creatorId,
       syncStatus: syncStatus ?? this.syncStatus,
       isDeleted: isDeleted ?? this.isDeleted,
+      tombstoneReconciled: tombstoneReconciled ?? this.tombstoneReconciled,
     );
   }
 
