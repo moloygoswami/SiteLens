@@ -42,7 +42,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   MediaItem? _linkedItem;
   String? _resolvedEvidencePath;
   String? _resolvedOriginalPath;
-  bool _isShaExpanded = false;
+  bool _isOriginalShaExpanded = false;
+  bool _isEvidenceShaExpanded = false;
   bool _isRecovering = false;
 
   /// Canonical persisted site code for [_item]'s site, resolved from the site
@@ -347,24 +348,44 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     }
   }
 
-  void _copyShaToClipboard() {
-    final hash = _item.sha256Hash ?? _item.evidenceSha256Hash ?? 'UNKNOWN';
-    Clipboard.setData(ClipboardData(text: hash));
+  /// Copies the digest of exactly the artifact named by [label].
+  ///
+  /// RD-M4-02: a missing digest is disclosed as unavailable and nothing is
+  /// copied — the other artifact's hash is never substituted (Rule 5).
+  void _copyHashToClipboard(String? hash, String label) {
     ScaffoldMessenger.of(context).removeCurrentSnackBar();
+
+    if (hash == null || hash.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '$label unavailable — nothing copied',
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+          ),
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    Clipboard.setData(ClipboardData(text: hash));
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
+      SnackBar(
         content: Row(
           children: [
-            Icon(Icons.check_circle_outline_rounded,
+            const Icon(Icons.check_circle_outline_rounded,
                 color: AppColors.statusGreenLight, size: 16),
-            SizedBox(width: 8),
-            Text(
-              'Full SHA-256 Checksum copied to clipboard',
-              style: TextStyle(fontFamily: 'monospace', fontSize: 11),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '$label copied to clipboard',
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+              ),
             ),
           ],
         ),
-        duration: Duration(seconds: 2),
+        duration: const Duration(seconds: 2),
         behavior: SnackBarBehavior.floating,
       ),
     );
@@ -489,8 +510,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     final isDegradedStatus = _item.verificationStatus == HudStatus.degraded;
     final isVerifiedStatus = _item.verificationStatus == HudStatus.verified;
     final isPendingStatus = _item.verificationStatus == HudStatus.pending;
-    final fullSha = _item.sha256Hash ?? 'UNKNOWN';
-    final hashPrefix = fullSha.length > 16 ? fullSha.substring(0, 16) : fullSha;
+    // RD-M4-02: the two persisted digests identify two different artifacts and
+    // are presented independently — never conflated via a fallback.
+    final originalSha = _item.sha256Hash;
+    final evidenceSha = _item.evidenceSha256Hash;
     final screenHeight = MediaQuery.of(context).size.height;
 
     return Scaffold(
@@ -957,45 +980,29 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                           ),
                         ],
                         const SizedBox(height: 8),
-                        InkWell(
-                          onTap: () =>
-                              setState(() => _isShaExpanded = !_isShaExpanded),
-                          borderRadius: BorderRadius.circular(6),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: AppColors.surfaceContainerHigh,
-                              borderRadius: BorderRadius.circular(6),
-                              border: Border.all(color: AppColors.border),
-                            ),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    _isShaExpanded
-                                        ? 'SHA256:\n$fullSha'
-                                        : 'SHA256: $hashPrefix...',
-                                    style: const TextStyle(
-                                      fontFamily: 'monospace',
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w700,
-                                      color: AppColors.primaryLight,
-                                      height: 1.3,
-                                    ),
-                                  ),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.copy_rounded,
-                                      size: 16, color: AppColors.textSecondary),
-                                  tooltip: 'Copy SHA-256 Hash',
-                                  onPressed: _copyShaToClipboard,
-                                  constraints: const BoxConstraints(
-                                      minWidth: 48, minHeight: 48),
-                                ),
-                              ],
-                            ),
-                          ),
+                        // RD-M4-02: each persisted digest is labelled by the
+                        // artifact it belongs to and copied independently. For
+                        // video evidence the recorded MP4 is both the original
+                        // and the evidence artifact, so both digests are the
+                        // same value by design.
+                        _buildHashRow(
+                          label: 'ORIGINAL SHA-256',
+                          hash: originalSha,
+                          isExpanded: _isOriginalShaExpanded,
+                          onToggleExpand: () => setState(() =>
+                              _isOriginalShaExpanded = !_isOriginalShaExpanded),
+                          onCopy: () => _copyHashToClipboard(
+                              originalSha, 'ORIGINAL SHA-256'),
+                        ),
+                        const SizedBox(height: 6),
+                        _buildHashRow(
+                          label: 'EVIDENCE SHA-256',
+                          hash: evidenceSha,
+                          isExpanded: _isEvidenceShaExpanded,
+                          onToggleExpand: () => setState(() =>
+                              _isEvidenceShaExpanded = !_isEvidenceShaExpanded),
+                          onCopy: () => _copyHashToClipboard(
+                              evidenceSha, 'EVIDENCE SHA-256'),
                         ),
                       ],
                     ),
@@ -1091,6 +1098,60 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     final hasAudio = _item.hasAudioTrack;
     if (hasAudio == null) return '—';
     return hasAudio ? 'CAPTURED' : 'MUTED';
+  }
+
+  /// Renders one labelled forensic digest with its own expand/copy
+  /// affordances, so a copied hash always identifies the labelled artifact.
+  /// An absent digest is disclosed as UNAVAILABLE rather than substituted.
+  Widget _buildHashRow({
+    required String label,
+    required String? hash,
+    required bool isExpanded,
+    required VoidCallback onToggleExpand,
+    required VoidCallback onCopy,
+  }) {
+    final hasHash = hash != null && hash.isNotEmpty;
+    final valueText = !hasHash
+        ? '$label: UNAVAILABLE'
+        : isExpanded
+            ? '$label:\n$hash'
+            : '$label: ${hash.length > 16 ? hash.substring(0, 16) : hash}...';
+
+    return InkWell(
+      onTap: onToggleExpand,
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceContainerHigh,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                valueText,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.primaryLight,
+                  height: 1.3,
+                ),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.copy_rounded,
+                  size: 16, color: AppColors.textSecondary),
+              tooltip: 'Copy $label Hash',
+              onPressed: onCopy,
+              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildTelemetryRow(String label, String value) {

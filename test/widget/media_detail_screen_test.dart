@@ -295,25 +295,31 @@ void main() {
     });
 
     testWidgets(
-        'Displays original and evidence file paths and copies SHA-256 hash',
+        'Displays original and evidence file paths and copies the labelled SHA-256 hash',
         (tester) async {
       await tester.pumpWidget(createWidgetUnderTest(testPhotoItem));
       await tester.pumpAndSettle();
 
-      // Ensure SHA-256 card is scrolled into view
-      await tester.ensureVisible(find.byIcon(Icons.copy_rounded));
+      // Ensure the forensic integrity card is scrolled into view
+      await tester.ensureVisible(
+          find.byTooltip('Copy ORIGINAL SHA-256 Hash'));
       await tester.pumpAndSettle();
 
       expect(find.text('ORIGINAL: media/orig_m1.jpg'), findsOneWidget);
       expect(find.text('EVIDENCE: media/evid_m1.jpg'), findsOneWidget);
       expect(find.text('THUMBNAIL: media/thumb_m1.jpg'), findsOneWidget);
 
-      // Tap copy SHA-256 icon
-      await tester.tap(find.byIcon(Icons.copy_rounded));
+      // RD-M4-02: the original and evidence digests are labelled distinctly
+      // and never conflated. This fixture records only the original digest.
+      expect(find.textContaining('ORIGINAL SHA-256: a1b2c3d4e5f67890'),
+          findsOneWidget);
+      expect(find.text('EVIDENCE SHA-256: UNAVAILABLE'), findsOneWidget);
+
+      // Tap the ORIGINAL digest copy affordance
+      await tester.tap(find.byTooltip('Copy ORIGINAL SHA-256 Hash'));
       await tester.pump();
 
-      expect(find.text('Full SHA-256 Checksum copied to clipboard'),
-          findsOneWidget);
+      expect(find.text('ORIGINAL SHA-256 copied to clipboard'), findsOneWidget);
 
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();

@@ -222,15 +222,20 @@ class SingleItemShareSheet extends ConsumerWidget {
               },
             ),
 
-            // Option 3: Copy Full SHA-256 Checksum
+            // Option 3: Copy SHA-256 Checksum of the artifact this sheet
+            // shares (item.uri). For photos that is the burned evidence JPEG
+            // (evid_<id>.jpg), for videos the recorded MP4 — in both cases the
+            // digest is item.evidenceSha256Hash. The original-artifact digest
+            // (item.sha256Hash) is never substituted for a different file.
             _ShareOptionTile(
               icon: Icons.fingerprint_rounded,
               iconColor: AppColors.statusGreen,
               title: 'Copy SHA-256 Checksum',
-              subtitle: 'Copy full 64-character forensic hash to clipboard',
+              subtitle:
+                  'Copy the shared evidence file\'s full 64-character SHA-256',
               onTap: () async {
                 Navigator.of(context).pop();
-                final hash = item.sha256Hash ?? item.evidenceSha256Hash ?? 'UNKNOWN';
+                final hash = item.evidenceSha256Hash ?? 'UNKNOWN';
                 await Clipboard.setData(ClipboardData(text: hash));
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).removeCurrentSnackBar();
