@@ -588,6 +588,56 @@ void main() {
       );
     });
 
+    test('keepForLater throws SiteAssociationException when siteId is empty', () async {
+      final emptySiteSnapshot = EvidenceMetadataSnapshot(
+        mediaId: interruptedSnapshot.mediaId,
+        siteId: '',
+        siteCode: '',
+        siteName: '',
+        latitude: 22.56298,
+        longitude: 88.30085,
+        altitudeMeters: 10.0,
+        accuracyMeters: 3.5,
+        lowAccuracy: false,
+        capturedAtUtc: interruptedSnapshot.capturedAtUtc,
+        canonicalTimestampUtc: interruptedSnapshot.canonicalTimestampUtc,
+        resolvedAddress: 'Sonar Kella Apartment, Kolkata',
+      );
+      final emptySitePayload = interruptedPayload.copyWith(
+        metadataSnapshot: emptySiteSnapshot,
+      );
+
+      await expectLater(
+        () => coordinator.keepForLater(emptySitePayload),
+        throwsA(isA<SiteAssociationException>()),
+      );
+    });
+
+    test('keepForLater throws SiteAssociationException when site does not exist in local database', () async {
+      final nonExistentSiteSnapshot = EvidenceMetadataSnapshot(
+        mediaId: interruptedSnapshot.mediaId,
+        siteId: 'NON_EXISTENT_SITE_999',
+        siteCode: 'NONE',
+        siteName: 'Non Existent',
+        latitude: 22.56298,
+        longitude: 88.30085,
+        altitudeMeters: 10.0,
+        accuracyMeters: 3.5,
+        lowAccuracy: false,
+        capturedAtUtc: interruptedSnapshot.capturedAtUtc,
+        canonicalTimestampUtc: interruptedSnapshot.canonicalTimestampUtc,
+        resolvedAddress: 'Sonar Kella Apartment, Kolkata',
+      );
+      final nonExistentSitePayload = interruptedPayload.copyWith(
+        metadataSnapshot: nonExistentSiteSnapshot,
+      );
+
+      await expectLater(
+        () => coordinator.keepForLater(nonExistentSitePayload),
+        throwsA(isA<SiteAssociationException>()),
+      );
+    });
+
     test('keepForLater cleans up capture artifacts when DB transaction fails', () async {
       final failingCoordinator = MediaPersistenceCoordinator(
         db,

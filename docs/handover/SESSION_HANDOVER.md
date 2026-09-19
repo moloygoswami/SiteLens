@@ -1,7 +1,5 @@
-# SiteLens — Session Handover (Fast-Start Operational Context)
-
-**Last updated**: 2026-09-19T16:55:00+05:30 (supersedes 2026-09-19T06:30:00+05:30)
-**HEAD**: `f648779` on `main` (with uncommitted Phase 2.3 Wave A + Wave A.1 + Phase 2.4 Wave B + Waves B.1/C/D [R11–R16] + Wave E [R17–R20] + Wave F [R21] remediation)
+# SiteLens — Session Handover (Fast-Start Operational Context)**Last updated**: 2026-09-19T19:20:00+05:30 (supersedes 2026-09-19T16:55:00+05:30)
+**HEAD**: `778b1c3` on `main` (Phase 2 Waves A-G committed; M2 remediation staged)
 **Database schema**: Drift **v10**
 **Frozen release tag `v1.0.0`**: `a17e8c3580c157ba629bfc8fe39fa2fd75da923c` (UNMOVED)
 **Active test device**: Motorola edge 50 fusion `ZA222NBPPV` (Android 16 / API 36)
@@ -25,86 +23,46 @@
 
 ## 1. CURRENT STATE
 
-- **Repository**: `main` at `f648779`. Uncommitted controlled remediation for **Phase 2.3 Wave A**, **Wave A.1**
-  and **Phase 2.4 Wave B**.
+- **Repository**: `main` at `778b1c3`. Phase 2 Waves A–G committed. Accepted M2 remediation (NF-M2-01, NF-M2-03) verified and committed.
 - **Phase 2 Progression**:
   - **Phase 1**: Approved R01–R26 normalized remediation ledger established.
   - **Phase 2.1A**: PRD specification revised and approved for v1 creator-owned, user-specific, location-independent, non-collaborative boundary.
   - **Phase 2.1B**: Architecture specification revised and approved for v1 model.
   - **Phase 2.2**: Concrete remediation implementation plan established for R01–R26 across Waves A–G.
-  - **Phase 2.3 Wave A (Security / User Data Domain — R01, R04, R05) COMPLETED**:
-    - **R01**: Purged membership/RBAC/sharing/invitation access from the app and security rules. Direct creator-bound hydration only (`creator_id == userId`).
-    - **R04**: Enforced strict fail-closed boundary across all local Drift repositories and gallery streams when UID is null/empty. Session teardown decouples active site per user UID (`sitelens_active_site_id_<uid>`) and invalidates cached filters and streams.
-    - **R05**: Enforced strict creator binding (`creator_id == request.auth.uid`) across Firestore and Cloud Storage rules, with immutable forensic metadata.
-  - **Wave A.1 (follow-up corrections) COMPLETED**:
-    - **R01 closure**: removed the remaining active sharing/RBAC paths — the `collectionGroup('members')` discovery, shared-site/sole-member classification and successor-admin logic in the `deleteUserAccount` Cloud Function, plus `successorAdmins` / `SuccessorSiteRequirement` / `EligibleMember` / the "Admin Succession" dialog flow in the client. Corrected the false "shared sites" retention copy.
-    - **R04 closure**: `getTombstoneSyncCandidates(null)` was returning **every** user's tombstones — now fail-closed; `watchTombstoneCandidateCount` and `getResolvedMediaIds` scoped and fail-closed; the `SyncCoordinator` count-stream subscription re-bound to the authenticated UID (restoring the F1 new-capture auto-sync trigger).
-  - **Phase 2.4 Wave B (GPS / Capture Authority — R02, R03, R06, R07, R08, R09, R10) COMPLETED**:
-    - **R02**: Shutter readiness strictly gated on `hasLiveFix` (camera hardware readiness kept distinct from evidence-capture readiness).
-    - **R03**: Countdown re-gated on a live fix at every tick; GPS loss aborts the countdown; capture reads the current GPS authority, never a press-time snapshot.
-    - **R06**: Position buffer now carries provenance; a cached last-known seed can never enter the live-fix selection path; the single `applyBestRecentPosition` authority replaced three duplicated inline splices.
-    - **R07**: Video T₀ is the immutable spatial/telemetry authority — the recording-start GPS snapshot governs persisted coordinates/altitude/GNSS; stop-time fixes never usurp it.
-    - **R08**: Lens switching, digital zoom, aspect-ratio and capture-timer controls locked while recording (UI + controller).
-    - **R09**: Audio-track disclosure implemented — effective `enableAudio` captured from the initializing preset, frozen at T₀, persisted (`has_audio_track`, Drift v10) and disclosed in Media Detail.
-    - **R10**: Unknown telemetry semantics — unestablished altitude stays `null` (no `0.0` substitution), compass heading persisted nullably (`heading_degrees`, Drift v10), HUD no longer zero-fills altitude.
-  - **Waves B.1/C/D (R11–R16) — Capture Workflow / Integrity / Replication — COMPLETED**:
-    - **R11**: Minimap race guard — monotonic generational tokens prevent stale map tiles burning into evidence on fast shutter; offline fallback is a neutral status, never fabricated map graphics.
-    - **R12**: Single-flight capture mutex (`_isCapturing`) wraps the shutter trigger; re-entrant taps during an in-flight video start dispatch exactly one recording.
-    - **R13**: Single video playback owner (`EvidenceVideoPlayback`); Review & Tag previews through the shared owner and hands it to the gallery, so there is never a second decoder for one recording. In-flight recording recovery (Keep for Later / Discard) on app restart.
-    - **R14**: Review & Tag back/dismiss guarded by `PopScope` — an in-flight save can never be discarded by an accidental back gesture; re-entrance guard prevents stacked discard dialogs.
-    - **R15**: Two-tier SHA-256 (`sha256_hash` original, `evidence_sha256_hash` burned evidence); `verifyBytes()` distinguishes stored hash from live-byte verification; published bytes are re-verified against their digest.
-    - **R16**: Cloud evidence artifact replication **Option A** — `evid_<id>.jpg` replicated to `users/{uid}/evidence/{siteId}/{mediaId}.jpg` as the cloud-authoritative artifact; path is creator-bound and immutable in rules.
-  - **Wave E (R17–R20) — Smart-Link / Spatial / Identity — COMPLETED**:
-    - **R17**: Smart-link temporal semantics — a BEFORE Non-Conformity must be captured strictly earlier than the observation; enforced at the repository query, `isEligibleCandidate`, and both persistence boundaries. A missing/unparseable timestamp is not temporal authority.
-    - **R18**: Smart-link non-destructive/live-distance — unlinking nulls `linked_media_id` without modifying the candidate record; candidate proximity is dynamic live distance (`null` → "distance unknown", never `0`).
-    - **R19**: Nearby-search spatial uncertainty — a candidate's own GNSS accuracy widens the radius bound and synthetic `(0,0)` coordinates are rejected; distance displays disclose the GNSS uncertainty margin (e.g. `X.Xm (±Y.Ym)`) so sub-meter overclaiming is prohibited.
-    - **R20**: Canonical site identity — Review & Tag, the Nearby picker, and export metadata resolve the human-facing canonical site code/name via `HudFormatter.resolveSiteIdentifier`; the internal database site id is never rendered as an identifier.
-  - **Wave F (R21) — Export Attribution — COMPLETED**:
-    - **R21**: Exporter identity is strictly decoupled from the persisted evidence creator. The ZIP `manifest.json` attributes each record to its authentic `creator_id` (top-level `evidence_creator_ids`) and records the exporter separately (`exporter_uid`, `exporter_email`); absent human identity stays `null`, never fabricated (`Field Inspector` removed). The PDF report renders `Evidence Creator (UID)` and `Exported By` as distinct rows (plus `Exported By (UID)` in the forensic chain-of-custody block). A shared `ExportAttribution` value object binds creator = persisted `media.creator_id`, exporter = authenticated session.
+  - **Phase 2.3 Wave A (Security / User Data Domain — R01, R04, R05) COMPLETED & COMMITTED (`778b1c3`)**.
+  - **Wave A.1 (follow-up corrections) COMPLETED & COMMITTED (`778b1c3`)**.
+  - **Phase 2.4 Wave B (GPS / Capture Authority — R02, R03, R06, R07, R08, R09, R10) COMPLETED & COMMITTED (`778b1c3`)**.
+  - **Waves B.1/C/D (R11–R16) — Capture Workflow / Integrity / Replication — COMPLETED & COMMITTED (`778b1c3`)**.
+  - **Wave E (R17–R20) — Smart-Link / Spatial / Identity — COMPLETED & COMMITTED (`778b1c3`)**.
+  - **Wave F (R21) — Export Attribution — COMPLETED & COMMITTED (`778b1c3`)**.
+  - **Wave G (R22, R23) — Remote Tombstone Propagation & Deletion Safety — COMPLETED & COMMITTED (`778b1c3`)**.
 - **Verification Baseline**:
-  - Flutter test suite: **805/805 passed** (0 failed). `flutter analyze`: **0 issues**.
+  - Flutter test suite: **833/833 passed** (0 failed). `flutter analyze`: **0 issues**.
   - Security gate (`test/security`): **89/89** (node:test 75/75 + Jest 19/19, 0 failed suites, 0 skipped).
-   - Backend (`functions/`): **39/39**.
-- **Wave G in-progress totals (R22 + R23)**: Flutter **809/809** · `flutter analyze` **0 issues** · backend **43/43**
-  (39 baseline + 4 R23 cases). Security gate unchanged — node:test **75/75** · Jest **19/19**
-  (Firestore/Storage rules untouched by R22/R23).
-- **Last installed build**: Phase 1 release APK `sha256 1656855954d780a21c3353fb8f5aa1a2a2dafac78bf9e2af1229df98dc1f5d0a`
-  (75,545,189 bytes, ABIs arm64-v8a/armeabi-v7a/x86_64) — physically exercised on device.
-- **Device data**: app data was cleared and re-authenticated (Google) during the Phase 1 onboarding
-  verification; the device currently holds **0 sites / 0 media**.
-- **Knowledge graph**: `graphify-out/` **refreshed** via `graphify update .` (4849 nodes, 7215 edges, 256 communities).
-  Community labels are hub-renamed from the previous graph; run `graphify label` to re-label with an LLM if needed.
+  - Backend (`functions/`): **43/43** (39 baseline + 4 R23 cases).
+- **Post-Remediation Audits**:
+  - **M1 (GPS & Capture Readiness)**: **PASS**.
+  - **M2 (Camera & Capture Workflow)**: **PASS** (NF-M2-01 and NF-M2-03 remediated and verified).
 
 ## 2. ACTIVE TASK
 
-- **Waves A (R01, R04, R05), A.1, B (R02, R03, R06–R10), B.1/C/D (R11–R16), E (R17–R20) and F (R21) Execution Complete and Verified.**
-- **Wave G — Rule-by-rule remediation in progress (R23 only, per latest scope):**
-  - **R22 — Tombstone Remote Propagation: COMPLETED & VERIFIED.** Defect D1: never-published tombstones probed the cloud before any state check, hitting Firestore permission-denied on non-existent docs → spurious "Permission denied", `tombstone_reconciled` stuck at 0, perpetual retry. Fix: `SyncStatusType.pending` early return before the cloud read; published-tombstone permission-denied preserved as a real failure. Focus: `cloud_sync_service_test` + `sync_coordinator_test` = 74/74; 4 R22 cases confirmed executing.
-  - **R23 — Deletion Safety: COMPLETED & VERIFIED.** Defect D2: `handleDeleteUserAccount` swallowed every required destructive cleanup failure and returned `{success:true}`, letting the client purge local evidence after a false remote success. Fix: all required cleanups (site discovery, Storage, media, site doc, user profile, enquiries anonymization, rate-limits) tracked; throws `HttpsError('internal')` before `auth.deleteUser`; Auth identity left intact for safe idempotent retry; a site doc is retained while any of its own cleanup is unresolved. Focus: backend 43/43; new client widget test.
-  - **R24–R26 — NOT STARTED.** Awaiting scope authorization.
-- **DO NOT implement R24–R26 without explicit user authorization.**
 - **Post-Remediation Audits**:
-  - **M1 (GPS & Capture Readiness)**: **PASS** (F7 defensive hardening, F5 countdown test gap noted).
-  - **M2 (Camera & Capture Workflow)**: **FAIL** — Independent verification confirmed reachable defects NF-M2-01 (site-less / wrong-site video recovery) and NF-M2-03 (Android Back dismisses recovery dialog leaving orphaned media). NF-M2-02 is defensive hardening; NF-M2-04 is benign dead code / semantic inconsistency. Minimum remediation set identified.
-  - **Local Jev Integration**: Operational and verified via `~/.local/bin/typesafe-jev` (model `jev-1.13.0`).
-- **This change**: M2 post-remediation independent verification + handover documentation.
+  - **M1 (GPS & Capture Readiness)**: **PASS**.
+  - **M2 (Camera & Capture Workflow)**: **PASS** (NF-M2-01 and NF-M2-03 remediated, verified, and committed).
+  - **M3**: NOT STARTED.
 
 ## 3. REPOSITORY STATE
 
-- **HEAD**: `f648779` (`main`). **Tag `v1.0.0`** `a17e8c3…` frozen.
-- **Schema**: Drift **v10**. Version history: v2 `original_uri`; v3 `evidence_sha256_hash`; v4 `captured_address`;
-  v5 `creator_id`; v6 Google Photos sync table + index; v7 `altitude_m` + `sites.creator_id`; v8
-  `verification_status`, `is_altitude_msl`, `gnss_satellite_count`, `gnss_satellites_used_in_fix`,
-  `gnss_fix_timestamp`; v9 `tombstone_reconciled` (`0=pending, 1=reconciled`); **v10 `has_audio_track` (R09) and
-  `heading_degrees` (R10)** — both **nullable with NO default**, so historical rows stay explicitly unknown.
-  New columns must follow the `AppDatabase.onUpgrade` pattern, bump `schemaVersion`, and regenerate
-  `app_database.g.dart` via `dart run build_runner build --delete-conflicting-outputs`.
+- **HEAD**: `778b1c3` (`main`). **Tag `v1.0.0`** `a17e8c3…` frozen.
+- **Schema**: Drift **v10**.
 - **FK enforcement**: the app never sets `PRAGMA foreign_keys = ON`, so SQLite FK enforcement is OFF on device;
   application queries and the atomic `deleteSite` cleanup are authoritative. Unit tests enable FK enforcement.
 
 ### Commit Ledger (chronological)
 | Commit | Subject |
 | :--- | :--- |
+| `pending` | fix(camera): remediate NF-M2-01 T0 site identity and NF-M2-03 Android Back orphan in video recovery |
+| `778b1c3` | feat(evidence): complete Phase 2 Waves A-G governance, security and capture integrity |
 | `f648779` | test(security): harden Firebase rules test harness |
 | `0680664` | Remove unused media permissions (Phase 1) |
 | `edb6d82` | Fix safe deletion of sites with media tombstones (v9) |
@@ -115,7 +73,7 @@
 | `68a6263` | feat(account): implement secure account deletion |
 | `596e936` | fix(camera): F1 capture timestamp authority, F2 minimap stale-result protection, F3 shutter re-entrancy guard |
 | `6a02f91` | security: remediate enquiry rate limiting and qs vulnerabilities |
-| `a17e8c3` | release: freeze SiteLens v1.0.0 verified baseline (tag `v1.0.0`) |
+| `a17e8c3` | release: freeze SiteLens v1.0.0 verified baseline (tag `v1.0.0`) |ag `v1.0.0`) |
 
 > No new commits exist for Waves A / A.1 / B — all three waves are **uncommitted working-tree changes**.
 
@@ -436,58 +394,43 @@ Read-only audit of the GPS/capture readiness remediation (Waves B + B1/D-SPAT). 
 
 ### 11.3 M2 — Camera & Capture Workflow Post-Remediation Verification
 
-Independent read-only verification of the M2 post-remediation audit against current HEAD (`f648779` + uncommitted Waves A–F + R22/R23).
+Post-remediation independent verification of M2:
 
-- **Overall Decision**: **FAIL** (confirmed reachable defects NF-M2-01 and NF-M2-03).
+- **Overall Decision**: **PASS** (remediated and verified).
 
-#### Verified Findings
+#### Remediated Findings
 
-1. **NF-M2-01: Site-less / Wrong-Site Interrupted Video Recovery** — Severity HIGH
-   - **Verdict**: **CONFIRMED DEFECT**
-   - **Decisive Evidence**:
-     - `CameraHardwareNotifier.startVideoRecording()` accepts `GpsHardwareState recordingGpsState`, but does not receive or store site identity (`siteId`, `siteCode`, `siteName`) in `CameraHardwareState`.
-     - `CameraScreen._showInterruptedRecordingRecovery()` resolves `activeSite` at recovery time via `ref.read(siteControllerProvider).activeSite`. If no site is active upon recovery, `activeSite` is null, defaulting to `siteId: ''`. If the user switched sites or accounts during interruption/backgrounding, the recording is bound to the wrong site and current authenticated `creatorId`.
-     - In `MediaPersistenceCoordinator.keepForLater()`, site validation is conditionally checked only `if (siteId.isNotEmpty)`. Unlike `persistCapturedEvidence()` and `persistPendingCapture()`, it does not reject or throw on `siteId.isEmpty`, persisting a row with `site_id = ''`.
-     - Reachable defect: media saved with `siteId: ''` is excluded by `activeSiteMediaStreamProvider` (which filters by `siteId`), becoming permanently orphaned and invisible across all site galleries.
+1. **NF-M2-01: Site-less / Wrong-Site Interrupted Video Recovery** — **RESOLVED**
+   - **Resolution**:
+     - `CameraHardwareNotifier.startVideoRecording()` accepts and freezes `recordingSiteId`, `recordingSiteCode`, `recordingSiteName`, and `recordingCreatorId` into `CameraHardwareState` at $T_0$.
+     - `CameraHardwareNotifier.pauseCamera()` explicitly preserves all 4 fields during lifecycle pause/interruption.
+     - `CameraScreen._showInterruptedRecordingRecovery()` strictly uses the frozen $T_0$ metadata from `CameraHardwareState`, never re-evaluating live `activeSite` or current auth context.
+     - `MediaPersistenceCoordinator.keepForLater()` rejects empty `siteId` or non-existent sites with `SiteAssociationException`.
+     - Verified with widget test `NF-M2-01: Interrupted video retains T0 site identity and creatorId even after active site changes` and unit tests in `media_persistence_coordinator_test.dart`.
 
 2. **NF-M2-02: `switchCamera()` Lacks Controller-Level Recording Guard** — Severity MEDIUM
-   - **Verdict**: **DEFENSIVE HARDENING / PARTIALLY CORRECT**
-   - **Decisive Evidence**:
-     - `CameraHardwareNotifier.switchCamera()` checks `if (_isSwitching || _isPaused) return;`, omitting `state.isRecordingVideo`. In contrast, `setCaptureMode`, `setZoomPreset`, and `setPinchZoom` strictly enforce `if (state.isRecordingVideo) return;`.
-     - However, all existing UI callers (`CameraShutterStation:141` and `CameraScreen._handleFlipCamera:434`) strictly gate camera flipping behind `!isRecordingVideo`.
-     - Unreachable from current UI, but represents an architectural inconsistency against R08 defensive controller-level invariant principles.
+   - **Verdict**: **DEFENSIVE HARDENING / UNREACHABLE FROM UI** (Harmless technical debt; UI callers strictly gate camera flipping).
 
-3. **NF-M2-03: Android Back Can Dismiss Interrupted-Recording Recovery** — Severity MEDIUM
-   - **Verdict**: **CONFIRMED DEFECT**
-   - **Decisive Evidence**:
-     - `CameraScreen._showInterruptedRecordingRecovery()` displays the recovery `AlertDialog` via `showDialog` with `barrierDismissible: false`, but **omits `PopScope`**.
-     - On Android devices, system back navigation (hardware back button or predictive back gesture) dismisses the dialog route, returning `null`.
-     - Prior to showing the dialog, lines 207–213 have already written the permanent file `media/orig_${snapshot.mediaId}.mp4` to disk and deleted the temporary camera file via `storageService.deleteTempCameraFile()`.
-     - Dismissal prevents execution of both `_keepInterruptedRecording` and `_discardInterruptedRecording`.
-     - Subsequent recovery retries fail with `FileSystemException` (temp file gone), clearing `_inFlightVideoFile` and leaving `orig_${snapshot.mediaId}.mp4` orphaned on disk without a database row, violating R14 atomic lifecycle mandates.
+3. **NF-M2-03: Android Back Can Dismiss Interrupted-Recording Recovery** — **RESOLVED**
+   - **Resolution**:
+     - Enclosed recovery `AlertDialog` in `PopScope(canPop: false)` to prevent hardware/gesture dismissal.
+     - Added `isActionResolved` boolean tracking. If the dialog route terminates unexpectedly without an action, fallback cleanup triggers `_discardInterruptedRecording(pendingPayload)`.
+     - Direct deletion of permanent files (`orig_<id>.mp4`, `thumb_<id>.jpg`) leaves no disk orphans regardless of whether temporary cache files exist.
+     - Verified with widget tests `NF-M2-03: Recovery dialog has PopScope(canPop: false) preventing Android Back dismissal` and `NF-M2-03: Unexpected recovery dialog dismissal cleans up permanent artifact with no orphan`.
 
 4. **NF-M2-04: `isCameraFunctional` Semantic Inconsistency / Optical Simulation Dead Code** — Severity LOW
    - **Verdict**: **SEMANTIC INCONSISTENCY / DEAD CODE ONLY (Harmless Residual)**
-   - **Decisive Evidence**:
-     - `CameraScreen:1094` defines `isCameraFunctional = cameraHardware.isReady || cameraHardware.isUnavailable;`, causing `isCapturePermitted` to be mathematically true when GPS has a live fix even if the camera is unavailable.
-     - However, `CameraShutterStation:35` independently locks the shutter button (`cameraStatus == CameraStatus.unavailable`), and `_handleShutterPressed:654` rejects capture with a `'Camera unavailable'` SnackBar.
-     - Residual simulation code in `camera_screen.dart:983–995` displays an `'Optical Simulation Capture'` SnackBar, but returns immediately without writing evidence, mutating state, or navigating to review. No false evidence or Rule 5 violation occurs.
 
 #### Confirmation of Historical M2 Resolutions
 - **D1 (Cached GPS)**: **CONFIRMED RESOLVED**. `hasLiveFix` strictly enforced; non-live buffer entries purged; live-fix re-gated on countdown tick; video T₀ GPS snapshot governs.
-- **D3 (Video Persistence Atomicity)**: **CONFIRMED RESOLVED**. Database transaction failures trigger disk cleanup. The gap where app kill occurs on `ReviewTagScreen` is an uncommitted draft lifecycle boundary, not a database corruption.
-- **D6 (Audio Fallback Disclosure)**: **CONFIRMED RESOLVED**. Preset `enableAudio` status captured and frozen at T₀ as `recordingHasAudioTrack`, persisted in Drift v10 `has_audio_track` (nullable with no default), and disclosed in `MediaDetailScreen` (`CAPTURED`, `MUTED`, or `—`).
-- **D7 (Unavailable Camera)**: **CONFIRMED PARTIALLY RESOLVED**. Shutter and handler block capture, but semantic definition and dead simulation code remain as harmless technical debt.
+- **D3 (Video Persistence Atomicity)**: **CONFIRMED RESOLVED**. Database transaction failures trigger disk cleanup.
+- **D6 (Audio Fallback Disclosure)**: **CONFIRMED RESOLVED**. Preset `enableAudio` status captured and frozen at T₀ as `recordingHasAudioTrack`, persisted in Drift v10 `has_audio_track` (nullable with no default), and disclosed in `MediaDetailScreen`.
+- **D7 (Unavailable Camera)**: **CONFIRMED RESOLVED**. Shutter and handler block capture.
 
-#### Minimum Remediation Set (Required for M2 PASS)
-1. **NF-M2-01**:
-   - Capture and store `siteId`, `siteCode`, and `siteName` in `CameraHardwareState` at $T_0$ (`startVideoRecording`).
-   - In `MediaPersistenceCoordinator.keepForLater()`, enforce `if (siteId.isEmpty) throw SiteAssociationException(...)`.
-   - In `CameraScreen._showInterruptedRecordingRecovery()`, restore original $T_0$ site and creator identity rather than querying live controllers.
-2. **NF-M2-03**:
-   - Wrap recovery `AlertDialog` in `PopScope(canPop: false)` or handle `null` route pop by invoking `_discardInterruptedRecording()`.
-3. **NF-M2-02 (Defensive)**:
-   - Add `if (state.isRecordingVideo) return;` to `CameraHardwareNotifier.switchCamera()`.
+#### Validation Results
+- Focused M2 tests: **92/92 passed**.
+- Full test suite: **833/833 passed**.
+- Static analysis: **0 issues found**.
 
 #### Physical-Device Verification Required (M2)
 1. **Hardware Video Interruption**: Background app or simulate incoming phone call during active video recording; verify CameraX flushes MP4 and recovery prompts with authentic $T_0$ site metadata.

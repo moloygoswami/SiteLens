@@ -180,8 +180,6 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       final videoFile = ref.read(cameraHardwareProvider.notifier).inFlightVideoFile;
       if (!mounted || videoFile == null) return;
 
-      final activeSite = ref.read(siteControllerProvider).activeSite;
-      final currentUserId = ref.read(authServiceProvider).currentUser?.uid;
       final gpsHardware = ref.read(gpsHardwareProvider);
       final gpsSettings = ref.read(gpsSettingsProvider);
       final storageService = ref.read(evidenceStorageServiceProvider);
@@ -192,13 +190,14 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
 
       // Preserve the interrupted recording into app storage immediately so a
       // subsequent backgrounding cannot lose it.
+      // Uses the frozen T0 site and creator identity so identity cannot drift (NF-M2-01).
       final snapshot = EvidenceMetadataSnapshot.capture(
         gpsState: recordingGps,
-        siteId: activeSite?.id ?? '',
-        siteCode: activeSite?.siteCode ?? '',
-        siteName: activeSite?.name ?? '',
+        siteId: cameraState.recordingSiteId ?? '',
+        siteCode: cameraState.recordingSiteCode ?? '',
+        siteName: cameraState.recordingSiteName ?? '',
         resolvedAddress: recordingGps.resolvedLocationName ?? gpsHardware.resolvedLocationName,
-        creatorId: currentUserId,
+        creatorId: cameraState.recordingCreatorId,
         lowAccuracyThresholdMeters: gpsSettings.lowAccuracyThresholdMeters,
         customCaptureTimeUtc: cameraState.recordingStartedAtUtc ?? recordingGps.timestampUtc ?? DateTime.now().toUtc(),
         hasAudioTrack: cameraState.recordingHasAudioTrack,
@@ -254,33 +253,45 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
 
       if (!mounted) return;
 
+      bool isActionResolved = false;
       await showDialog<void>(
         context: context,
         barrierDismissible: false,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Recording interrupted'),
-          content: const Text(
-            'Your recording was interrupted before it could be reviewed. '
-            'Keep it for later or discard it.',
+        builder: (dialogContext) => PopScope(
+          canPop: false,
+          child: AlertDialog(
+            title: const Text('Recording interrupted'),
+            content: const Text(
+              'Your recording was interrupted before it could be reviewed. '
+              'Keep it for later or discard it.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  isActionResolved = true;
+                  Navigator.of(dialogContext).pop();
+                  _discardInterruptedRecording(pendingPayload);
+                },
+                child: const Text('Discard'),
+              ),
+              TextButton(
+                onPressed: () {
+                  isActionResolved = true;
+                  Navigator.of(dialogContext).pop();
+                  _keepInterruptedRecording(pendingPayload);
+                },
+                child: const Text('Keep for later'),
+              ),
+            ],
           ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-                _discardInterruptedRecording(pendingPayload);
-              },
-              child: const Text('Discard'),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-                _keepInterruptedRecording(pendingPayload);
-              },
-              child: const Text('Keep for later'),
-            ),
-          ],
         ),
       );
+
+      if (!isActionResolved) {
+        // Lifecycle safety (NF-M2-03): unexpected dialog dismissal must discard the
+        // permanent artifact so no unmanaged orig_<id>.mp4 is orphaned on disk.
+        _discardInterruptedRecording(pendingPayload);
+      }
     } catch (_) {
       // If the preserved file cannot be read, there is nothing to recover.
       // The flag stays clear — no fabricated recovery.
@@ -497,11 +508,11 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
 
           final snapshot = EvidenceMetadataSnapshot.capture(
             gpsState: candidateGps,
-            siteId: siteId,
-            siteCode: siteCode,
-            siteName: siteName,
+            siteId: cameraState.recordingSiteId ?? siteId,
+            siteCode: cameraState.recordingSiteCode ?? siteCode,
+            siteName: cameraState.recordingSiteName ?? siteName,
             resolvedAddress: candidateGps.resolvedLocationName ?? gpsHardware.resolvedLocationName,
-            creatorId: currentUserId,
+            creatorId: cameraState.recordingCreatorId ?? currentUserId,
             lowAccuracyThresholdMeters: gpsSettings.lowAccuracyThresholdMeters,
             customCaptureTimeUtc: cameraState.recordingStartedAtUtc ?? candidateGps.timestampUtc ?? DateTime.now().toUtc(),
             // R09: audio-track presence frozen at T0 — never assumed.
@@ -635,8 +646,13 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
         _isExecutingCapture = true;
         if (mounted) setState(() {});
         try {
+          final currentUserId = ref.read(authServiceProvider).currentUser?.uid;
           await ref.read(cameraHardwareProvider.notifier).startVideoRecording(
             recordingGpsState: gpsHardware,
+            recordingSiteId: siteId,
+            recordingSiteCode: siteCode,
+            recordingSiteName: siteName,
+            recordingCreatorId: currentUserId,
           );
         } finally {
           _isExecutingCapture = false;

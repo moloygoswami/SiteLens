@@ -424,7 +424,13 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
     }
   }
 
-  Future<bool> startVideoRecording({GpsHardwareState? recordingGpsState}) async {
+  Future<bool> startVideoRecording({
+    GpsHardwareState? recordingGpsState,
+    String? recordingSiteId,
+    String? recordingSiteCode,
+    String? recordingSiteName,
+    String? recordingCreatorId,
+  }) async {
     if (_controller == null) return false;
     if (_service.isRecordingVideo(_controller) || state.isRecordingVideo) return false;
 
@@ -446,6 +452,10 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
         recordingStartedAtUtc: startTime,
         recordingDurationSeconds: 0,
         recordingGpsState: recordingGpsState,
+        recordingSiteId: recordingSiteId,
+        recordingSiteCode: recordingSiteCode,
+        recordingSiteName: recordingSiteName,
+        recordingCreatorId: recordingCreatorId,
         // Freeze audio-track presence at T0 so it cannot be re-derived from a
         // later state and so it discloses truthfully (R09).
         recordingHasAudioTrack: state.isAudioEnabled,
@@ -516,6 +526,10 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
           hasInterruptedRecording: state.isRecordingVideo || _inFlightVideoFile != null,
           recordingStoppedAtUtc: DateTime.now().toUtc(),
           recordingGpsState: state.recordingGpsState,
+          recordingSiteId: state.recordingSiteId,
+          recordingSiteCode: state.recordingSiteCode,
+          recordingSiteName: state.recordingSiteName,
+          recordingCreatorId: state.recordingCreatorId,
         );
       }
     });
@@ -654,6 +668,7 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
     state = state.copyWith(
       hasInterruptedRecording: false,
       clearRecordingGpsState: true,
+      clearRecordingSiteIdentity: true,
     );
   }
 

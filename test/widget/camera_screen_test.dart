@@ -1086,6 +1086,150 @@ void main() {
       expect(coordinator.keepForLaterCalls, 0);
     });
 
+    testWidgets('NF-M2-01: Interrupted video retains T0 site identity and creatorId even after active site changes', (tester) async {
+      final coordinator = _RecordingRecoveryCoordinator();
+      final videoFile = (await tester.runAsync(createTempVideoFile))!;
+      final cameraService = _RecordingRecoveryCameraService(videoFile);
+
+      await tester.pumpWidget(buildRecoveryTestWidget(
+        cameraService: cameraService,
+        coordinator: coordinator,
+      ));
+      await tester.pumpAndSettle();
+
+      final element = tester.element(find.byType(CameraScreen));
+      final container = ProviderScope.containerOf(element);
+      final notifier = container.read(cameraHardwareProvider.notifier);
+
+      // Start recording with T0 identity explicitly established
+      await tester.runAsync(() async {
+        final started = await notifier.startVideoRecording(
+          recordingSiteId: 'site-t0-original',
+          recordingSiteCode: 'T0-CODE',
+          recordingSiteName: 'T0 Original Site',
+          recordingCreatorId: 'user-t0-original',
+        );
+        expect(started, isTrue);
+        await notifier.pauseCamera();
+      });
+      await tester.pump();
+
+      expect(notifier.state.hasInterruptedRecording, isTrue);
+      expect(notifier.state.recordingSiteId, 'site-t0-original');
+      expect(notifier.state.recordingCreatorId, 'user-t0-original');
+
+      // Change active site in siteController to a different site
+      const changedSite = SiteModel(
+        id: 'site-beta-switched',
+        siteCode: 'BETA',
+        name: 'Switched Beta Site',
+        address: '200 Switched Way',
+      );
+      container.read(siteControllerProvider.notifier).setActiveSite(changedSite);
+      await tester.pump();
+
+      // Trigger recovery on resume
+      await tester.runAsync(() async {
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      });
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.text('Recording interrupted'), findsOneWidget);
+
+      // Tap "Keep for later"
+      await tester.runAsync(() async {
+        await tester.tap(find.text('Keep for later'));
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      });
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(coordinator.keepForLaterCalls, 1);
+      final snapshot = coordinator.lastPayload!.metadataSnapshot;
+      expect(snapshot.siteId, 'site-t0-original', reason: 'Must preserve T0 site ID rather than switched active site');
+      expect(snapshot.siteCode, 'T0-CODE');
+      expect(snapshot.siteName, 'T0 Original Site');
+      expect(snapshot.creatorId, 'user-t0-original', reason: 'Must preserve T0 creator ID');
+    });
+
+    testWidgets('NF-M2-03: Recovery dialog has PopScope(canPop: false) preventing Android Back dismissal', (tester) async {
+      final coordinator = _RecordingRecoveryCoordinator();
+      final videoFile = (await tester.runAsync(createTempVideoFile))!;
+      final cameraService = _RecordingRecoveryCameraService(videoFile);
+
+      await tester.pumpWidget(buildRecoveryTestWidget(
+        cameraService: cameraService,
+        coordinator: coordinator,
+      ));
+      await tester.pumpAndSettle();
+
+      final notifier = await startRecording(tester);
+      expect(notifier.state.hasInterruptedRecording, isTrue);
+
+      await tester.runAsync(() async {
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      });
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.text('Recording interrupted'), findsOneWidget);
+
+      // Verify PopScope with canPop: false exists in the dialog tree
+      final anyPopScope = find.byWidgetPredicate((w) => w is PopScope && !w.canPop);
+      expect(anyPopScope, findsOneWidget);
+
+      // Attempt to trigger system back route navigation
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+
+      // Dialog remains present and was not silently dismissed
+      expect(find.text('Recording interrupted'), findsOneWidget);
+    });
+
+    testWidgets('NF-M2-03: Unexpected recovery dialog dismissal cleans up permanent artifact with no orphan', (tester) async {
+      final coordinator = _RecordingRecoveryCoordinator();
+      final videoFile = (await tester.runAsync(createTempVideoFile))!;
+      final cameraService = _RecordingRecoveryCameraService(videoFile);
+
+      await tester.pumpWidget(buildRecoveryTestWidget(
+        cameraService: cameraService,
+        coordinator: coordinator,
+      ));
+      await tester.pumpAndSettle();
+
+      final notifier = await startRecording(tester);
+      expect(notifier.state.hasInterruptedRecording, isTrue);
+
+      await tester.runAsync(() async {
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      });
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.text('Recording interrupted'), findsOneWidget);
+
+      // Force pop the dialog route programmatically without tapping Keep or Discard
+      await tester.runAsync(() async {
+        Navigator.of(tester.element(find.text('Recording interrupted'))).pop();
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      });
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // Dialog is gone
+      expect(find.text('Recording interrupted'), findsNothing);
+      // Keep for later was NOT called
+      expect(coordinator.keepForLaterCalls, 0);
+      // Discard snackbar is shown confirming cleanup executed
+      expect(find.textContaining('discarded'), findsOneWidget);
+      // Interrupted recording state was cleared
+      expect(notifier.state.hasInterruptedRecording, isFalse);
+    });
+
     testWidgets('C-1: Normal video stop hands off cleanly — no interrupted-recording state remains', (tester) async {
       final videoFile = (await tester.runAsync(createTempVideoFile))!;
       final cameraService = _RecordingRecoveryCameraService(videoFile);

@@ -657,5 +657,49 @@ void main() {
       expect(notifier.state.recordingGpsState, isNull);
     });
 
+    test('startVideoRecording stores T0 site identity and creatorId and pauseCamera preserves it across interruption', () async {
+      const mockCamera = CameraDescription(
+        name: '0',
+        lensDirection: CameraLensDirection.back,
+        sensorOrientation: 90,
+      );
+      final fakeService = FakeCameraService([mockCamera]);
+      final notifier = CameraHardwareNotifier(fakeService);
+      await Future.delayed(Duration.zero);
+      expect(notifier.state.status, CameraStatus.ready);
+
+      const t0SiteId = 'SITE_ORIGINAL_001';
+      const t0SiteCode = 'ORIG';
+      const t0SiteName = 'Original Site Name';
+      const t0CreatorId = 'creator-original-42';
+
+      await notifier.startVideoRecording(
+        recordingSiteId: t0SiteId,
+        recordingSiteCode: t0SiteCode,
+        recordingSiteName: t0SiteName,
+        recordingCreatorId: t0CreatorId,
+      );
+      expect(notifier.state.isRecordingVideo, isTrue);
+      expect(notifier.state.recordingSiteId, equals(t0SiteId));
+      expect(notifier.state.recordingSiteCode, equals(t0SiteCode));
+      expect(notifier.state.recordingSiteName, equals(t0SiteName));
+      expect(notifier.state.recordingCreatorId, equals(t0CreatorId));
+
+      // Pause during recording simulates lifecycle interruption
+      await notifier.pauseCamera();
+      expect(notifier.state.hasInterruptedRecording, isTrue);
+      expect(notifier.state.recordingSiteId, equals(t0SiteId));
+      expect(notifier.state.recordingSiteCode, equals(t0SiteCode));
+      expect(notifier.state.recordingSiteName, equals(t0SiteName));
+      expect(notifier.state.recordingCreatorId, equals(t0CreatorId));
+
+      // Clear interrupted recording clears T0 identity
+      notifier.clearInterruptedRecording();
+      expect(notifier.state.hasInterruptedRecording, isFalse);
+      expect(notifier.state.recordingSiteId, isNull);
+      expect(notifier.state.recordingSiteCode, isNull);
+      expect(notifier.state.recordingSiteName, isNull);
+      expect(notifier.state.recordingCreatorId, isNull);
+    });
   });
 }

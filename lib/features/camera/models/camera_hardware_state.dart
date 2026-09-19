@@ -42,6 +42,13 @@ class CameraHardwareState {
   /// recording has established it. Null means unknown — never an assumption.
   final bool? recordingHasAudioTrack;
 
+  /// Site identity frozen at recording start (T0) for truthfulness and recovery.
+  final String? recordingSiteId;
+  final String? recordingSiteCode;
+  final String? recordingSiteName;
+
+  /// Authenticated creator ID frozen at recording start (T0).
+  final String? recordingCreatorId;
 
   const CameraHardwareState({
     this.status = CameraStatus.initializing,
@@ -61,6 +68,10 @@ class CameraHardwareState {
     this.recordingGpsState,
     this.isAudioEnabled = false,
     this.recordingHasAudioTrack,
+    this.recordingSiteId,
+    this.recordingSiteCode,
+    this.recordingSiteName,
+    this.recordingCreatorId,
   });
 
   bool get isReady =>
@@ -141,6 +152,11 @@ class CameraHardwareState {
     bool clearRecordingGpsState = false,
     bool? isAudioEnabled,
     bool? recordingHasAudioTrack,
+    String? recordingSiteId,
+    String? recordingSiteCode,
+    String? recordingSiteName,
+    String? recordingCreatorId,
+    bool clearRecordingSiteIdentity = false,
   }) {
     return CameraHardwareState(
       status: status ?? this.status,
@@ -160,6 +176,10 @@ class CameraHardwareState {
       recordingGpsState: clearRecordingGpsState ? null : (recordingGpsState ?? this.recordingGpsState),
       isAudioEnabled: isAudioEnabled ?? this.isAudioEnabled,
       recordingHasAudioTrack: recordingHasAudioTrack ?? this.recordingHasAudioTrack,
+      recordingSiteId: clearRecordingSiteIdentity ? null : (recordingSiteId ?? this.recordingSiteId),
+      recordingSiteCode: clearRecordingSiteIdentity ? null : (recordingSiteCode ?? this.recordingSiteCode),
+      recordingSiteName: clearRecordingSiteIdentity ? null : (recordingSiteName ?? this.recordingSiteName),
+      recordingCreatorId: clearRecordingSiteIdentity ? null : (recordingCreatorId ?? this.recordingCreatorId),
     );
   }
 }
