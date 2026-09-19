@@ -518,7 +518,12 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
             icon: const Icon(Icons.ios_share_rounded,
                 color: AppColors.primaryLight),
             tooltip: 'Share & Export Evidence',
-            onPressed: () => SingleItemShareSheet.show(context, _item),
+            onPressed: () => SingleItemShareSheet.show(
+              context,
+              _item,
+              siteCode: _siteCode,
+              siteName: _siteName,
+            ),
           ),
           IconButton(
             icon: const Icon(Icons.edit_note_rounded,

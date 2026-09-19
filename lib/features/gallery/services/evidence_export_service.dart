@@ -508,7 +508,7 @@ class EvidenceExportService {
     final effectiveSiteCode = HudFormatter.resolveSiteIdentifier(siteCode);
     final effectiveSiteName = (siteName != null && siteName.isNotEmpty)
         ? siteName
-        : 'Active Inspection Site';
+        : 'Inspection Site';
     final effectiveAddress =
         (item.capturedAddress != null && item.capturedAddress!.isNotEmpty)
             ? item.capturedAddress!

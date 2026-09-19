@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/theme.dart';
 import '../../core/services/auth_service.dart';
 import '../../data/repositories/media_repository.dart';
+import '../../data/repositories/site_repository.dart';
 import '../../domain/models/enums.dart';
 import '../../domain/models/media_item.dart';
 import '../../shared/utils/responsive_layout.dart';
@@ -76,9 +77,52 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
     }
   }
 
+  Future<({String? siteCode, String? siteName})> _resolveBatchSiteContext(
+    List<MediaItem> selectedItems,
+  ) async {
+    final siteIds = selectedItems
+        .map((item) => item.siteId.trim())
+        .where((s) => s.isNotEmpty)
+        .toSet();
+
+    // If multiple sites or no site: neutral site context rather than
+    // assigning one site's identity to all evidence.
+    if (siteIds.length != 1) {
+      return (siteCode: null, siteName: null);
+    }
+
+    final singleSiteId = siteIds.first;
+
+    // 1. Check in-memory availableSites
+    final availableSites = ref.read(siteControllerProvider).availableSites;
+    for (final s in availableSites) {
+      if (s.id == singleSiteId) {
+        return (siteCode: s.siteCode, siteName: s.name);
+      }
+    }
+
+    // 2. Query SiteRepository
+    AuthUser? currentUser;
+    try {
+      currentUser = ref.read(authServiceProvider).currentUser;
+    } catch (_) {}
+    final effectiveCreatorId = selectedItems.first.creatorId ?? currentUser?.uid;
+
+    try {
+      final siteRepo = ref.read(siteRepositoryProvider);
+      final site =
+          await siteRepo.getSiteById(singleSiteId, creatorId: effectiveCreatorId);
+      if (site != null) {
+        return (siteCode: site.siteCode, siteName: site.name);
+      }
+    } catch (_) {}
+
+    return (siteCode: null, siteName: null);
+  }
+
   Future<void> _handleBatchExportPdf(List<MediaItem> selectedItems) async {
     final exportService = ref.read(evidenceExportServiceProvider);
-    final activeSite = ref.read(siteControllerProvider).activeSite;
+    final (:siteCode, :siteName) = await _resolveBatchSiteContext(selectedItems);
     AuthUser? exporter;
     try {
       exporter = ref.read(authServiceProvider).currentUser;
@@ -87,8 +131,8 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
     try {
       await exportService.exportBatchPdf(
         selectedItems,
-        siteCode: activeSite?.siteCode,
-        siteName: activeSite?.name,
+        siteCode: siteCode,
+        siteName: siteName,
         exporterEmail: exporter?.email,
         exporterUid: exporter?.uid,
       );
@@ -106,7 +150,7 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
 
   Future<void> _handleBatchExportZip(List<MediaItem> selectedItems) async {
     final exportService = ref.read(evidenceExportServiceProvider);
-    final activeSite = ref.read(siteControllerProvider).activeSite;
+    final (:siteCode, :siteName) = await _resolveBatchSiteContext(selectedItems);
     AuthUser? exporter;
     try {
       exporter = ref.read(authServiceProvider).currentUser;
@@ -115,8 +159,8 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
     try {
       await exportService.exportBatchZip(
         selectedItems,
-        siteCode: activeSite?.siteCode,
-        siteName: activeSite?.name,
+        siteCode: siteCode,
+        siteName: siteName,
         exporterEmail: exporter?.email,
         exporterUid: exporter?.uid,
       );

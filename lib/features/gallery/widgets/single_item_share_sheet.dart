@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/theme.dart';
 import '../../../core/services/auth_service.dart';
+import '../../../data/repositories/site_repository.dart';
 import '../../../domain/models/enums.dart';
 import '../../../domain/models/media_item.dart';
 import '../../camera/hud/hud_formatter.dart';
@@ -12,13 +13,22 @@ import '../services/evidence_export_service.dart';
 
 class SingleItemShareSheet extends ConsumerWidget {
   final MediaItem item;
+  final String? siteCode;
+  final String? siteName;
 
   const SingleItemShareSheet({
     super.key,
     required this.item,
+    this.siteCode,
+    this.siteName,
   });
 
-  static Future<void> show(BuildContext context, MediaItem item) {
+  static Future<void> show(
+    BuildContext context,
+    MediaItem item, {
+    String? siteCode,
+    String? siteName,
+  }) {
     return showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppColors.surfaceContainerHigh,
@@ -26,13 +36,55 @@ class SingleItemShareSheet extends ConsumerWidget {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (ctx) => SingleItemShareSheet(item: item),
+      builder: (ctx) => SingleItemShareSheet(
+        item: item,
+        siteCode: siteCode,
+        siteName: siteName,
+      ),
     );
+  }
+
+  Future<({String? siteCode, String? siteName})> _resolveSiteContext(
+    WidgetRef ref,
+  ) async {
+    if (siteCode != null && siteCode!.isNotEmpty) {
+      return (siteCode: siteCode, siteName: siteName);
+    }
+
+    final targetSiteId = item.siteId.trim();
+    if (targetSiteId.isEmpty) {
+      return (siteCode: null, siteName: null);
+    }
+
+    // 1. Check in-memory availableSites
+    final availableSites = ref.read(siteControllerProvider).availableSites;
+    for (final s in availableSites) {
+      if (s.id == targetSiteId) {
+        return (siteCode: s.siteCode, siteName: s.name);
+      }
+    }
+
+    // 2. Query SiteRepository by item.siteId
+    AuthUser? currentUser;
+    try {
+      currentUser = ref.read(authServiceProvider).currentUser;
+    } catch (_) {}
+    final effectiveCreatorId = item.creatorId ?? currentUser?.uid;
+
+    try {
+      final siteRepo = ref.read(siteRepositoryProvider);
+      final site =
+          await siteRepo.getSiteById(targetSiteId, creatorId: effectiveCreatorId);
+      if (site != null) {
+        return (siteCode: site.siteCode, siteName: site.name);
+      }
+    } catch (_) {}
+
+    return (siteCode: null, siteName: null);
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final activeSite = ref.watch(siteControllerProvider).activeSite;
     AuthUser? currentUser;
     try {
       currentUser = ref.watch(authServiceProvider).currentUser;
@@ -121,10 +173,11 @@ class SingleItemShareSheet extends ConsumerWidget {
                 try {
                   final targetUri = item.uri;
                   final absPath = await storageService.resolveAbsolutePath(targetUri);
+                  final (:siteCode, :siteName) = await _resolveSiteContext(ref);
                   await exportService.shareSingleFile(
                     absPath,
                     text:
-                        'SiteLens Evidence: ${HudFormatter.resolveSiteIdentifier(activeSite?.siteCode)} • ${item.capturedAddress ?? ""}',
+                        'SiteLens Evidence: ${HudFormatter.resolveSiteIdentifier(siteCode)} • ${item.capturedAddress ?? ""}',
                   );
                 } catch (e) {
                   if (context.mounted) {
@@ -148,10 +201,11 @@ class SingleItemShareSheet extends ConsumerWidget {
               onTap: () async {
                 Navigator.of(context).pop();
                 try {
+                  final (:siteCode, :siteName) = await _resolveSiteContext(ref);
                   await exportService.exportSingleInspectionNotePdf(
                     item: item,
-                    siteCode: activeSite?.siteCode,
-                    siteName: activeSite?.name,
+                    siteCode: siteCode,
+                    siteName: siteName,
                     exporterEmail: currentUser?.email,
                     exporterUid: currentUser?.uid,
                   );
