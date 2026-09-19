@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqlite3/open.dart';
+import 'package:sitelens/core/services/auth_service.dart';
+import 'package:sitelens/core/services/session_service.dart';
 import 'package:sitelens/data/local/database/app_database.dart';
 import 'package:sitelens/data/repositories/media_repository.dart';
 import 'package:sitelens/data/repositories/site_repository.dart';
@@ -14,16 +16,39 @@ import 'package:sitelens/domain/models/site_model.dart';
 import 'package:sitelens/features/gallery/controllers/gallery_controller.dart';
 import 'package:sitelens/features/sites/site_controller.dart';
 
+class FakeSessionService extends StateNotifier<UserSessionState> implements SessionService {
+  FakeSessionService(super.state);
+
+  void setUser(AuthUser? user) {
+    if (user == null) {
+      state = const UserSessionState(
+        status: SessionStatus.unauthenticated,
+        user: null,
+      );
+    } else {
+      state = UserSessionState(
+        status: SessionStatus.authenticatedReady,
+        user: user,
+      );
+    }
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 void main() {
   late AppDatabase db;
   late MediaRepository mediaRepo;
   late ProviderContainer container;
+  late FakeSessionService fakeSessionService;
 
   const testSite = SiteModel(
     id: 'site-alpha',
     siteCode: 'SL-001',
     name: 'Sector Alpha',
     address: '100 Construction Way',
+    creatorId: 'user-alpha',
   );
 
   setUpAll(() {
@@ -36,8 +61,16 @@ void main() {
     db = AppDatabase(NativeDatabase.memory());
     mediaRepo = LocalMediaRepository(db);
 
+    fakeSessionService = FakeSessionService(
+      const UserSessionState(
+        status: SessionStatus.authenticatedReady,
+        user: AuthUser(uid: 'user-alpha', email: 'alpha@example.com'),
+      ),
+    );
+
     container = ProviderContainer(
       overrides: [
+        sessionServiceProvider.overrideWith((ref) => fakeSessionService),
         mediaRepositoryProvider.overrideWithValue(mediaRepo),
         siteControllerProvider.overrideWith(
           (ref) => SiteController(MockSiteRepository(testSite)),
@@ -59,6 +92,7 @@ void main() {
           MediaCompanion.insert(
             id: 'm1',
             siteId: const drift.Value('site-alpha'),
+            creatorId: const drift.Value('user-alpha'),
             type: const drift.Value('photo'),
             uri: 'media/evid_m1.jpg',
             originalUri: const drift.Value('media/orig_m1.jpg'),
@@ -80,6 +114,7 @@ void main() {
           MediaCompanion.insert(
             id: 'm2',
             siteId: const drift.Value('site-alpha'),
+            creatorId: const drift.Value('user-alpha'),
             type: const drift.Value('photo'),
             uri: 'media/evid_m2.jpg',
             originalUri: const drift.Value('media/orig_m2.jpg'),
@@ -101,6 +136,7 @@ void main() {
           MediaCompanion.insert(
             id: 'm3',
             siteId: const drift.Value('site-alpha'),
+            creatorId: const drift.Value('user-alpha'),
             type: const drift.Value('video'),
             uri: 'media/evid_m3.jpg',
             originalUri: const drift.Value('media/orig_m3.mp4'),
@@ -122,6 +158,7 @@ void main() {
           MediaCompanion.insert(
             id: 'm4_deleted',
             siteId: const drift.Value('site-alpha'),
+            creatorId: const drift.Value('user-alpha'),
             type: const drift.Value('photo'),
             uri: 'media/evid_m4.jpg',
             originalUri: const drift.Value('media/orig_m4.jpg'),
@@ -252,6 +289,7 @@ void main() {
             MediaCompanion.insert(
               id: 'tie-c',
               siteId: const drift.Value('site-alpha'),
+              creatorId: const drift.Value('user-alpha'),
               type: const drift.Value('photo'),
               uri: 'media/evid_tie_c.jpg',
               originalUri: const drift.Value('media/orig_tie_c.jpg'),
@@ -265,6 +303,7 @@ void main() {
             MediaCompanion.insert(
               id: 'tie-a',
               siteId: const drift.Value('site-alpha'),
+              creatorId: const drift.Value('user-alpha'),
               type: const drift.Value('photo'),
               uri: 'media/evid_tie_a.jpg',
               originalUri: const drift.Value('media/orig_tie_a.jpg'),
@@ -278,6 +317,7 @@ void main() {
             MediaCompanion.insert(
               id: 'tie-b',
               siteId: const drift.Value('site-alpha'),
+              creatorId: const drift.Value('user-alpha'),
               type: const drift.Value('photo'),
               uri: 'media/evid_tie_b.jpg',
               originalUri: const drift.Value('media/orig_tie_b.jpg'),
@@ -292,6 +332,7 @@ void main() {
             MediaCompanion.insert(
               id: 'tie-newer',
               siteId: const drift.Value('site-alpha'),
+              creatorId: const drift.Value('user-alpha'),
               type: const drift.Value('photo'),
               uri: 'media/evid_tie_newer.jpg',
               originalUri: const drift.Value('media/orig_tie_newer.jpg'),
@@ -319,6 +360,20 @@ void main() {
         equals(['tie-newer', 'tie-a', 'tie-b', 'tie-c']),
       );
     });
+
+    test('Fail-closed isolation: Unauthenticated or null user session yields empty gallery', () async {
+      await seedTestMedia();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      var items = await container.read(filteredGalleryMediaProvider.future);
+      expect(items.length, equals(3));
+
+      // Transition session to unauthenticated
+      fakeSessionService.setUser(null);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      final unauthItems = await container.read(filteredGalleryMediaProvider.future);
+      expect(unauthItems, isEmpty);
+    });
   });
 }
 
@@ -330,7 +385,7 @@ class MockSiteRepository implements SiteRepository {
   Future<List<SiteModel>> getAllSites({String? creatorId}) async => [site];
 
   @override
-  Future<SiteModel?> getSiteById(String id) async => site.id == id ? site : null;
+  Future<SiteModel?> getSiteById(String id, {String? creatorId}) async => site.id == id ? site : null;
 
   @override
   Future<void> saveSite(SiteModel site) async {}
@@ -339,8 +394,11 @@ class MockSiteRepository implements SiteRepository {
   Future<void> deleteSite(String id, {String? creatorId}) async {}
 
   @override
-  Future<bool> hasMediaForSite(String siteId) async => false;
+  Future<bool> hasMediaForSite(String siteId, {String? creatorId}) async => false;
 
   @override
   Future<void> seedDefaultSitesIfEmpty() async {}
+
+  @override
+  Future<List<SiteModel>> hydrateRemoteSites(String userId) async => [];
 }

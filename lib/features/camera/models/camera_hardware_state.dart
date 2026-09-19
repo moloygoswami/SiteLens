@@ -31,6 +31,18 @@ class CameraHardwareState {
   final bool hasInterruptedRecording;
   final GpsHardwareState? recordingGpsState;
 
+  /// Whether AUDIO is enabled on the active camera controller. This is the
+  /// effective value of the preset that actually initialized (the init retry
+  /// loop can silently fall back to an audio-less preset), so it is the
+  /// truthful disclosure source for R09. Conservative default: audio is never
+  /// claimed unless the active controller established it.
+  final bool isAudioEnabled;
+
+  /// Audio-track presence frozen at recording start (T0), or null when no
+  /// recording has established it. Null means unknown — never an assumption.
+  final bool? recordingHasAudioTrack;
+
+
   const CameraHardwareState({
     this.status = CameraStatus.initializing,
     this.availableCameras = const [],
@@ -47,6 +59,8 @@ class CameraHardwareState {
     this.recordingStoppedAtUtc,
     this.hasInterruptedRecording = false,
     this.recordingGpsState,
+    this.isAudioEnabled = false,
+    this.recordingHasAudioTrack,
   });
 
   bool get isReady =>
@@ -125,6 +139,8 @@ class CameraHardwareState {
     bool? hasInterruptedRecording,
     GpsHardwareState? recordingGpsState,
     bool clearRecordingGpsState = false,
+    bool? isAudioEnabled,
+    bool? recordingHasAudioTrack,
   }) {
     return CameraHardwareState(
       status: status ?? this.status,
@@ -142,6 +158,8 @@ class CameraHardwareState {
       recordingStoppedAtUtc: recordingStoppedAtUtc ?? this.recordingStoppedAtUtc,
       hasInterruptedRecording: hasInterruptedRecording ?? this.hasInterruptedRecording,
       recordingGpsState: clearRecordingGpsState ? null : (recordingGpsState ?? this.recordingGpsState),
+      isAudioEnabled: isAudioEnabled ?? this.isAudioEnabled,
+      recordingHasAudioTrack: recordingHasAudioTrack ?? this.recordingHasAudioTrack,
     );
   }
 }

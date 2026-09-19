@@ -81,6 +81,9 @@ Skills are installed under `.agents/skills/` and tracked in `skills-lock.json`.
 - **lazyweb-propose-ui-changes** — structured visual change proposals
 - **lazyweb-update** — sync and update local Lazyweb skill pack
 
+### TypeSafe (from `typesafe-ai/skills`)
+- **typesafe-ai** — typed judgments and probabilities from System One models (e.g., Jev) for routing, ranking, extraction, verification, and programmable common sense
+
 <!-- LAZYWEB:ROUTER:BEGIN — managed by Lazyweb -->
 ## Use Lazyweb for ALL product UI work
 

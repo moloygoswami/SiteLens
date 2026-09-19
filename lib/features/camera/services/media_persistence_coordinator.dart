@@ -98,6 +98,8 @@ class MediaPersistenceCoordinator {
       gnssSatelliteCount: payload.metadataSnapshot.gnssSatelliteCount,
       gnssSatellitesUsedInFix: payload.metadataSnapshot.gnssSatellitesUsedInFix,
       gnssFixTimestampUtc: payload.metadataSnapshot.gnssFixTimestampUtc,
+      hasAudioTrack: payload.metadataSnapshot.hasAudioTrack,
+      headingDegrees: payload.metadataSnapshot.headingDegrees,
       activityTag: null,
       observationType: ObservationType.general,
       linkedMediaId: null,
@@ -182,6 +184,18 @@ class MediaPersistenceCoordinator {
           'Persistence Error: Linked BEFORE media "$cleanLinkedId" belongs to another site (${linkedEntry.siteId}). Site isolation violation.',
         );
       }
+
+      // R17: temporal precedence. A BEFORE Non-Conformity must have been
+      // captured strictly earlier than the observation it precedes; a later
+      // record can never be persisted as BEFORE, and an unestablished
+      // timestamp is not temporal authority.
+      final linkedCapturedAt = DateTime.tryParse(linkedEntry.capturedAt);
+      if (linkedCapturedAt == null ||
+          !linkedCapturedAt.toUtc().isBefore(snapshot.capturedAtUtc.toUtc())) {
+        throw MediaPersistenceException(
+          'Persistence Error: Linked BEFORE media "$cleanLinkedId" was not captured strictly earlier than this observation.',
+        );
+      }
     }
 
     // Phase 1c: Strict GPS Fix & Non-(0,0) Validation
@@ -236,6 +250,8 @@ class MediaPersistenceCoordinator {
       gnssSatelliteCount: snapshot.gnssSatelliteCount,
       gnssSatellitesUsedInFix: snapshot.gnssSatellitesUsedInFix,
       gnssFixTimestampUtc: snapshot.gnssFixTimestampUtc,
+      hasAudioTrack: snapshot.hasAudioTrack,
+      headingDegrees: snapshot.headingDegrees,
       activityTag: cleanActivity.isNotEmpty ? cleanActivity : null,
       observationType: observationType,
       linkedMediaId: validated.linkedMediaId,
@@ -287,13 +303,17 @@ class MediaPersistenceCoordinator {
     final snapshot = payload.metadataSnapshot;
     final siteId = snapshot.siteId.trim();
 
-    if (siteId.isNotEmpty) {
-      final siteEntry = await (_db.select(_db.sites)..where((tbl) => tbl.id.equals(siteId))).getSingleOrNull();
-      if (siteEntry == null) {
-        throw SiteAssociationException(
-          'Persistence Error: Site "$siteId" does not exist in local database.',
-        );
-      }
+    if (siteId.isEmpty) {
+      throw SiteAssociationException(
+        'Persistence Error: Active Site ID is empty. Media record must be associated with a valid site.',
+      );
+    }
+
+    final siteEntry = await (_db.select(_db.sites)..where((tbl) => tbl.id.equals(siteId))).getSingleOrNull();
+    if (siteEntry == null) {
+      throw SiteAssociationException(
+        'Persistence Error: Site "$siteId" does not exist in local database.',
+      );
     }
 
     // Phase 1c: Strict GPS Fix & Non-(0,0) Validation
@@ -334,6 +354,8 @@ class MediaPersistenceCoordinator {
       gnssSatelliteCount: snapshot.gnssSatelliteCount,
       gnssSatellitesUsedInFix: snapshot.gnssSatellitesUsedInFix,
       gnssFixTimestampUtc: snapshot.gnssFixTimestampUtc,
+      hasAudioTrack: snapshot.hasAudioTrack,
+      headingDegrees: snapshot.headingDegrees,
       activityTag: null,
       observationType: ObservationType.general,
       linkedMediaId: null,

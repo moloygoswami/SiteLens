@@ -109,6 +109,15 @@ class NearbySearchState {
     if (item.observationType != ObservationType.nonConformity) return false;
     final effectiveSiteId = targetSiteId ?? sourceMedia?.siteId;
     if (effectiveSiteId != null && item.siteId != effectiveSiteId) return false;
+
+    // R17: a candidate can only serve as BEFORE when its authoritative capture
+    // timestamp is strictly earlier than the observation it would precede.
+    final source = sourceMedia;
+    if (source != null &&
+        !item.capturedAt.toUtc().isBefore(source.capturedAt.toUtc())) {
+      return false;
+    }
+
     if (resolvedMediaIds.contains(item.id)) return false;
     return true;
   }

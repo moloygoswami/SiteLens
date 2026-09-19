@@ -341,66 +341,17 @@ extension AccountDeletionAuthService on AuthService {
   }
 
   /// Authoritatively invokes the 2nd-gen Cloud Function to delete the user account.
-  /// Server-side validation inspects all site memberships and cascades data deletion.
+  /// Server-side validation cascades deletion across the caller's creator-owned data.
   Future<Map<String, dynamic>> deleteAccount({
-    Map<String, String>? successorAdmins,
     FirebaseFunctions? functions,
   }) async {
     final fn = functions ?? FirebaseFunctions.instanceFor(region: 'us-central1');
     final callable = fn.httpsCallable('deleteUserAccount');
-    final response = await callable.call({
-      if (successorAdmins != null) 'successorAdmins': successorAdmins,
-    });
+    final response = await callable.call();
     if (response.data is Map) {
       return Map<String, dynamic>.from(response.data as Map);
     }
     return {'success': true};
-  }
-}
-
-/// Represents a shared site requiring an explicit successor admin assignment.
-class SuccessorSiteRequirement {
-  final String siteId;
-  final String siteName;
-  final List<EligibleMember> eligibleMembers;
-
-  const SuccessorSiteRequirement({
-    required this.siteId,
-    required this.siteName,
-    required this.eligibleMembers,
-  });
-
-  factory SuccessorSiteRequirement.fromMap(Map<dynamic, dynamic> map) {
-    final rawMembers = map['eligibleMembers'];
-    final membersList = rawMembers is List ? rawMembers : [];
-    return SuccessorSiteRequirement(
-      siteId: map['siteId']?.toString() ?? '',
-      siteName: map['siteName']?.toString() ?? '',
-      eligibleMembers: membersList
-          .map((m) => EligibleMember.fromMap(Map<dynamic, dynamic>.from(m as Map)))
-          .toList(),
-    );
-  }
-}
-
-/// Represents an active member eligible for admin succession on a shared site.
-class EligibleMember {
-  final String userId;
-  final String role;
-  final String status;
-
-  const EligibleMember({
-    required this.userId,
-    required this.role,
-    required this.status,
-  });
-
-  factory EligibleMember.fromMap(Map<dynamic, dynamic> map) {
-    return EligibleMember(
-      userId: map['userId']?.toString() ?? '',
-      role: map['role']?.toString() ?? 'member',
-      status: map['status']?.toString() ?? 'active',
-    );
   }
 }
 

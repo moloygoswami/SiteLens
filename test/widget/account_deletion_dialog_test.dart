@@ -1,5 +1,5 @@
 import 'dart:ffi' show DynamicLibrary;
-import 'package:cloud_functions/cloud_functions.dart';
+import 'package:drift/drift.dart' as drift;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -30,7 +30,6 @@ class FakeTestAuthService implements AuthService {
   bool isPassword = true;
   bool reauthenticateCalled = false;
   bool deleteAccountCalled = false;
-  Map<String, String>? lastSuccessors;
 
   @override
   AuthUser? get currentUser => _user;
@@ -105,7 +104,10 @@ void main() {
     await db.close();
   });
 
-  Widget buildDialogTestWidget({bool? isPasswordOverride}) {
+  Widget buildDialogTestWidget({
+    bool? isPasswordOverride,
+    Future<Map<String, dynamic>> Function()? onDeleteAccount,
+  }) {
     return MaterialApp(
       home: Scaffold(
         body: AccountDeletionDialog(
@@ -118,11 +120,11 @@ void main() {
           onReauthenticateWithGoogle: () async {
             fakeAuthService.reauthenticateCalled = true;
           },
-          onDeleteAccount: ({successorAdmins}) async {
-            fakeAuthService.deleteAccountCalled = true;
-            fakeAuthService.lastSuccessors = successorAdmins;
-            return {'success': true};
-          },
+          onDeleteAccount: onDeleteAccount ??
+              () async {
+                fakeAuthService.deleteAccountCalled = true;
+                return {'success': true};
+              },
         ),
       ),
     );
@@ -160,8 +162,7 @@ void main() {
       expect(find.text('Delete Account'), findsOneWidget);
       expect(find.text('This action is irreversible. Upon confirmation:'), findsOneWidget);
       expect(find.textContaining('Your authentication credentials and user profile will be permanently deleted.'), findsOneWidget);
-      expect(find.textContaining('Sole-member project sites and their cloud-stored photos'), findsOneWidget);
-      expect(find.textContaining('Evidence contributed to shared sites is retained for audit integrity'), findsOneWidget);
+      expect(find.textContaining('All sites you own, together with their cloud-stored originals'), findsOneWidget);
       expect(find.text('Confirm your password to proceed:'), findsOneWidget);
       expect(find.text('Cancel'), findsOneWidget);
       expect(find.text('DELETE'), findsOneWidget);
@@ -228,74 +229,42 @@ void main() {
       expect(find.text('This action is irreversible. Upon confirmation:'), findsOneWidget);
     });
 
-    testWidgets('5. Prompts for successor admin when backend throws failed-precondition requiresSuccessor', (tester) async {
-      tester.view.physicalSize = const Size(800, 1400);
+    testWidgets('5. R23: a failed remote deletion never purges local evidence', (tester) async {
+      tester.view.physicalSize = const Size(800, 1200);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(() {
         tester.view.resetPhysicalSize();
         tester.view.resetDevicePixelRatio();
       });
 
-      fakeAuthService.isPassword = true;
-      bool firstCall = true;
+      // Local evidence that must survive a failed remote deletion.
+      await db.into(db.sites).insert(
+            SitesCompanion.insert(
+              id: 'site-survives',
+              siteCode: const drift.Value('SL-SURV'),
+              name: const drift.Value('Surviving Site'),
+              address: const drift.Value('Nowhere'),
+              creatorId: const drift.Value('test-deletion-uid-12345'),
+            ),
+          );
 
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: AccountDeletionDialog(
-            authService: fakeAuthService,
-            appDatabase: db,
-            isPasswordProvider: true,
-            onReauthenticateWithPassword: (pw) async {},
-            onDeleteAccount: ({successorAdmins}) async {
-              if (firstCall) {
-                firstCall = false;
-                throw FirebaseFunctionsException(
-                  code: 'failed-precondition',
-                  message: 'Successor required',
-                  details: {
-                    'requiresSuccessor': true,
-                    'sitesNeedingSuccessor': [
-                      {
-                        'siteId': 'site_bridge_01',
-                        'siteName': 'Metro Bridge Construction',
-                        'eligibleMembers': [
-                          {'userId': 'eng_alice', 'role': 'member', 'status': 'active'},
-                          {'userId': 'eng_charlie', 'role': 'member', 'status': 'active'},
-                        ],
-                      },
-                    ],
-                  },
-                );
-              }
-              fakeAuthService.deleteAccountCalled = true;
-              fakeAuthService.lastSuccessors = successorAdmins;
-              return {'success': true};
-            },
-          ),
-        ),
-        onGenerateRoute: (settings) => MaterialPageRoute(
-          builder: (_) => const Scaffold(body: Text('RootScreen')),
-        ),
+      fakeAuthService.isPassword = true;
+
+      await tester.pumpWidget(buildDialogTestWidget(
+        onDeleteAccount: () async {
+          throw Exception('Account deletion incomplete: required remote cleanup failed.');
+        },
       ));
       await tester.pumpAndSettle();
 
-      // Enter password
-      await tester.enterText(find.byType(TextFormField), 'valid-password');
+      await tester.enterText(find.byType(TextFormField), 'secret-password');
       await tester.tap(find.text('DELETE'));
       await tester.pumpAndSettle();
 
-      // Verify successor selection screen is displayed
-      expect(find.text('Admin Succession Required'), findsOneWidget);
-      expect(find.text('Metro Bridge Construction'), findsOneWidget);
-      expect(find.text('CONFIRM DELETION'), findsOneWidget);
-
-      // Tap CONFIRM DELETION
-      await tester.tap(find.text('CONFIRM DELETION'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 500));
-
-      expect(fakeAuthService.deleteAccountCalled, isTrue);
-      expect(fakeAuthService.lastSuccessors?['site_bridge_01'], equals('eng_alice'));
+      // The remote deletion reported failure: no successful local purge may
+      // follow, and the failure must be surfaced to the user.
+      expect(await db.select(db.sites).get(), isNotEmpty);
+      expect(find.textContaining('Account deletion failed'), findsOneWidget);
     });
   });
 }
@@ -311,7 +280,7 @@ class MockSiteRepository implements SiteRepository {
   Future<List<SiteModel>> getAllSites({String? creatorId}) async => [site];
 
   @override
-  Future<SiteModel?> getSiteById(String id) async => site;
+  Future<SiteModel?> getSiteById(String id, {String? creatorId}) async => site;
 
   @override
   Future<void> saveSite(SiteModel s) async {}

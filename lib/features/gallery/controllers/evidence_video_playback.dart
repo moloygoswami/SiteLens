@@ -82,7 +82,10 @@ class EvidenceVideoPlayback extends ChangeNotifier {
         return;
       }
 
-      await created.setLooping(true);
+      // Saved evidence videos play once and stop on the final frame. Looping is
+      // explicitly disabled so a replay can only ever be an explicit user
+      // action (R13).
+      await created.setLooping(false);
       if (_disposed || _disposeStarted) {
         await _disposeOwnedController();
         return;
@@ -113,6 +116,12 @@ class EvidenceVideoPlayback extends ChangeNotifier {
       if (current.value.isPlaying) {
         await current.pause();
       } else {
+        // A completed video is parked on its final frame. Replaying is an
+        // explicit user action, so an explicit tap restarts it from the start
+        // rather than resuming a finished playback (R13).
+        if (current.value.isCompleted) {
+          await current.seekTo(Duration.zero);
+        }
         await current.play();
       }
     } catch (_) {

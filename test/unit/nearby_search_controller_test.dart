@@ -589,6 +589,7 @@ void main() {
         centerLon: centerLon,
         siteId: testSiteA,
         activityTag: 'Excavation',
+        capturedBefore: DateTime.utc(2026, 8, 15, 23, 59, 59),
         radiusMeters: 10.0,
         currentMediaId: sourceItem.id, // Exclude sourceItem itself
         creatorId: 'user-A',

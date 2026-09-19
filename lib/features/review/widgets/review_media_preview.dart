@@ -1,16 +1,24 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../../app/theme.dart';
+import '../../gallery/controllers/evidence_video_playback.dart';
+import '../../gallery/widgets/local_video_player_widget.dart';
 import '../models/pending_capture_payload.dart';
 
 class ReviewMediaPreview extends StatelessWidget {
   final PendingCapturePayload payload;
   final String? absoluteEvidencePath;
 
+  /// The single-owner playback for a just-captured video, borrowed for the
+  /// duration of Review & Tag. Review renders the SAME owner the gallery later
+  /// uses, so there is never a second decoder for one recording (R13).
+  final EvidenceVideoPlayback? videoPlayback;
+
   const ReviewMediaPreview({
     super.key,
     required this.payload,
     this.absoluteEvidencePath,
+    this.videoPlayback,
   });
 
   Widget _buildFallback() {
@@ -72,7 +80,24 @@ class ReviewMediaPreview extends StatelessWidget {
       return _buildFallback();
     }
 
-    // Video evidence
+    // Video evidence — play the shared owner once it is ready; otherwise show
+    // the captured first-frame thumbnail (never a fabricated frame).
+    final playback = videoPlayback;
+    if (playback != null) {
+      return ListenableBuilder(
+        listenable: playback,
+        builder: (context, _) {
+          if (playback.isReady) {
+            return LocalVideoPlayerWidget(playback: playback);
+          }
+          return _buildVideoThumbnail();
+        },
+      );
+    }
+    return _buildVideoThumbnail();
+  }
+
+  Widget _buildVideoThumbnail() {
     if (payload.previewBytes != null) {
       return Image.memory(
         payload.previewBytes!,
@@ -192,8 +217,9 @@ class ReviewMediaPreview extends StatelessWidget {
                   ),
                 ),
 
-              // 4. Center Play Indicator for Video
-              if (payload.isVideo)
+              // 4. Center Play Indicator for Video (only while the shared
+              // playback owner is not yet rendering the real surface)
+              if (payload.isVideo && !(videoPlayback?.isReady ?? false))
                 Center(
                   child: Container(
                     padding: const EdgeInsets.all(12),

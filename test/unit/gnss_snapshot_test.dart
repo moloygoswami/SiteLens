@@ -121,6 +121,37 @@ void main() {
       expect(defaultUnsupported.isSupported, isFalse);
       expect(defaultUnsupported.isAvailable, isFalse);
     });
+
+    test('R10: absent satellite-count fields stay unknown (null), never fabricated 0', () {
+      final dataAvailableWithoutCounts = {
+        'isSupported': true,
+        'isAvailable': true,
+        'timestampMillis': 1755255600000,
+        'constellations': <String, dynamic>{},
+      };
+
+      final snapshot = GnssSnapshot.fromMap(dataAvailableWithoutCounts);
+
+      expect(snapshot.isAvailable, isTrue);
+      expect(snapshot.satelliteCount, isNull);
+      expect(snapshot.satellitesUsedInFix, isNull);
+    });
+
+    test('R10: an explicitly reported 0 remains an established 0', () {
+      final dataReportedZero = {
+        'isSupported': true,
+        'isAvailable': true,
+        'satelliteCount': 0,
+        'satellitesUsedInFix': 0,
+        'timestampMillis': 1755255600000,
+        'constellations': <String, dynamic>{},
+      };
+
+      final snapshot = GnssSnapshot.fromMap(dataReportedZero);
+
+      expect(snapshot.satelliteCount, 0);
+      expect(snapshot.satellitesUsedInFix, 0);
+    });
   });
 
   group('GnssQualityAssessment Unit Tests', () {

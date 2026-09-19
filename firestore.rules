@@ -12,20 +12,6 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    function getMemberDoc(siteId) {
-      return get(/databases/$(database)/documents/sites/$(siteId)/members/$(request.auth.uid));
-    }
-
-    function isSiteMember(siteId) {
-      return isAuthenticated() &&
-        exists(/databases/$(database)/documents/sites/$(siteId)/members/$(request.auth.uid)) &&
-        getMemberDoc(siteId).data.status == 'active';
-    }
-
-    function isSiteAdmin(siteId) {
-      return isSiteMember(siteId) && getMemberDoc(siteId).data.role == 'admin';
-    }
-
     function isValidSiteId(siteId) {
       // Must be a standard 20-character base62 unpredictable Firestore auto-ID
       return siteId.matches('^[a-zA-Z0-9]{20}$');
@@ -39,64 +25,49 @@ service cloud.firestore {
 
     // --- Sites & Subcollections ---
     match /sites/{siteId} {
-      allow read: if isSiteMember(siteId);
+      // Read Site: Scoped strictly to site creator
+      allow read: if isAuthenticated() && resource != null && resource.data.creator_id == request.auth.uid;
+
+      // Create Site: Authenticated user is creator_id with valid 20-char auto-ID
       allow create: if isAuthenticated()
                    && isValidSiteId(siteId)
                    && request.resource.data.creator_id == request.auth.uid
                    && (!('id' in request.resource.data) || request.resource.data.id == siteId)
-                   && !exists(/databases/$(database)/documents/sites/$(siteId))
-                   && existsAfter(/databases/$(database)/documents/sites/$(siteId)/members/$(request.auth.uid))
-                   && getAfter(/databases/$(database)/documents/sites/$(siteId)/members/$(request.auth.uid)).data.role == 'admin'
-                   && getAfter(/databases/$(database)/documents/sites/$(siteId)/members/$(request.auth.uid)).data.status == 'active'
-                   && getAfter(/databases/$(database)/documents/sites/$(siteId)/members/$(request.auth.uid)).data.user_id == request.auth.uid;
-      allow update: if isSiteAdmin(siteId);
+                   && !exists(/databases/$(database)/documents/sites/$(siteId));
+
+      // Update Site: Scoped strictly to creator; creator_id is immutable
+      allow update: if isAuthenticated()
+                   && resource.data.creator_id == request.auth.uid
+                   && request.resource.data.creator_id == request.auth.uid;
+
+      // Delete Site: Physical deletion prohibited
       allow delete: if false;
-
-      // Site Members Roster
-      match /members/{memberId} {
-        allow read: if isSiteMember(siteId) || isOwner(memberId);
-
-        // Bootstrap creation strictly during atomic site creation OR invitation by existing site admin
-        allow create: if isAuthenticated() && (
-          (isOwner(memberId) &&
-           request.resource.data.role == 'admin' &&
-           request.resource.data.status == 'active' &&
-           request.resource.data.user_id == memberId &&
-           !exists(/databases/$(database)/documents/sites/$(siteId)) &&
-           existsAfter(/databases/$(database)/documents/sites/$(siteId)) &&
-           getAfter(/databases/$(database)/documents/sites/$(siteId)).data.creator_id == request.auth.uid)
-          ||
-          (isSiteAdmin(siteId) && request.resource.data.user_id == memberId)
-        );
-
-        allow update: if isSiteAdmin(siteId) && (
-          memberId != request.auth.uid ||
-          (request.resource.data.role == 'admin' && request.resource.data.status == 'active')
-        );
-        allow delete: if isSiteAdmin(siteId) && memberId != request.auth.uid;
-      }
 
       // Evidence Media Metadata Collection (SiteLens Forensic Evidence)
       match /media/{mediaId} {
-        // Read Evidence: Scoped strictly to site admin OR original document creator (vuln-0004)
-        allow read: if isSiteAdmin(siteId)
-                     || (isSiteMember(siteId) && (resource == null || resource.data.creator_id == request.auth.uid));
+        // Read Evidence: Scoped strictly to original document creator
+        allow read: if isAuthenticated()
+                     && resource != null
+                     && resource.data.creator_id == request.auth.uid;
 
-        // Create Evidence: Active site member, caller is creator_id, strict forensic validation & canonical schema allowlist (vuln-0002)
-        allow create: if isSiteMember(siteId)
+        // Create Evidence: Caller is creator_id, parent site is owned by caller, strict forensic schema validation
+        allow create: if isAuthenticated()
+                     && exists(/databases/$(database)/documents/sites/$(siteId))
+                     && get(/databases/$(database)/documents/sites/$(siteId)).data.creator_id == request.auth.uid
+                     && request.resource.data.creator_id == request.auth.uid
                      && request.resource.data.keys().hasOnly([
                           'id', 'site_id', 'creator_id',
-                          'storage_original_path', 'storage_thumbnail_path',
+                          'storage_original_path', 'storage_thumbnail_path', 'storage_evidence_path',
                           'type', 'lat', 'lon', 'accuracy_m', 'low_accuracy',
                           'altitude', 'is_altitude_msl', 'verification_status',
                           'gnss_satellite_count', 'gnss_satellites_used_in_fix', 'gnss_fix_timestamp',
+                          'has_audio_track', 'heading_degrees',
                           'activity_tag', 'observation_type', 'linked_media_id',
                           'note', 'captured_at', 'sha256_hash', 'evidence_sha256_hash',
                           'captured_address', 'is_deleted', 'created_at', 'updated_at', 'originalUri'
                         ])
                      && request.resource.data.id == mediaId
                      && request.resource.data.site_id == siteId
-                     && request.resource.data.creator_id == request.auth.uid
                      && request.resource.data.sha256_hash is string
                      && request.resource.data.sha256_hash.matches('^[a-fA-F0-9]{64}$')
                      && request.resource.data.evidence_sha256_hash is string
@@ -113,6 +84,8 @@ service cloud.firestore {
                      && (!('gnss_satellite_count' in request.resource.data) || request.resource.data.gnss_satellite_count == null || (request.resource.data.gnss_satellite_count is number && request.resource.data.gnss_satellite_count >= 0.0 && request.resource.data.gnss_satellite_count <= 200.0))
                      && (!('gnss_satellites_used_in_fix' in request.resource.data) || request.resource.data.gnss_satellites_used_in_fix == null || (request.resource.data.gnss_satellites_used_in_fix is number && request.resource.data.gnss_satellites_used_in_fix >= 0.0 && request.resource.data.gnss_satellites_used_in_fix <= 200.0))
                      && (!('gnss_fix_timestamp' in request.resource.data) || request.resource.data.gnss_fix_timestamp == null || (request.resource.data.gnss_fix_timestamp is string && request.resource.data.gnss_fix_timestamp.size() <= 40))
+                     && (!('has_audio_track' in request.resource.data) || request.resource.data.has_audio_track == null || request.resource.data.has_audio_track is bool)
+                     && (!('heading_degrees' in request.resource.data) || request.resource.data.heading_degrees == null || (request.resource.data.heading_degrees is number && request.resource.data.heading_degrees >= 0.0 && request.resource.data.heading_degrees <= 360.0))
                      && (!('captured_at' in request.resource.data) || (request.resource.data.captured_at is string && request.resource.data.captured_at.matches('^20[2-9][0-9]-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?(Z|[+-][0-9]{2}:[0-9]{2})?$') && request.resource.data.captured_at.size() <= 40))
                      && (!('captured_address' in request.resource.data) || request.resource.data.captured_address == null || (request.resource.data.captured_address is string && request.resource.data.captured_address.size() <= 500))
                      && (!('note' in request.resource.data) || request.resource.data.note == null || (request.resource.data.note is string && request.resource.data.note.size() <= 2000))
@@ -125,12 +98,13 @@ service cloud.firestore {
                      && request.resource.data.storage_original_path == 'sites/' + siteId + '/media/' + mediaId + '/original'
                      && request.resource.data.storage_thumbnail_path is string
                      && request.resource.data.storage_thumbnail_path == 'sites/' + siteId + '/media/' + mediaId + '/thumbnail'
+                     && (!('storage_evidence_path' in request.resource.data) || request.resource.data.storage_evidence_path == 'sites/' + siteId + '/media/' + mediaId + '/evidence')
                      && (!('originalUri' in request.resource.data) || (request.resource.data.originalUri is string && request.resource.data.originalUri.matches('media/orig_[a-zA-Z0-9_-]+\\.(jpg|mp4)')));
 
-        // Update Evidence: Only allowed mutable workflow fields via explicit diff()
-        // Gated strictly by site admin OR original document creator (fixes vuln-0007 BOLA)
-        // Validates observation_type against client ObservationType enum (vuln-0001)
-        allow update: if isSiteMember(siteId)
+        // Update Evidence: Scoped strictly to creator, immutable creator_id, only allowed workflow fields via diff()
+        allow update: if isAuthenticated()
+                     && resource.data.creator_id == request.auth.uid
+                     && request.resource.data.creator_id == request.auth.uid
                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
                           ['note', 'activity_tag', 'observation_type', 'linked_media_id', 'is_deleted', 'updated_at']
                         )
@@ -138,12 +112,7 @@ service cloud.firestore {
                      && (!('note' in request.resource.data) || request.resource.data.note == null || (request.resource.data.note is string && request.resource.data.note.size() <= 2000))
                      && (!('activity_tag' in request.resource.data) || request.resource.data.activity_tag == null || (request.resource.data.activity_tag is string && request.resource.data.activity_tag.size() <= 100))
                      && (!('linked_media_id' in request.resource.data) || request.resource.data.linked_media_id == null || (request.resource.data.linked_media_id is string && request.resource.data.linked_media_id.matches('^[a-zA-Z0-9_-]{1,64}$')))
-                     && (
-                          isSiteAdmin(siteId)
-                          || (resource.data.creator_id == request.auth.uid &&
-                              (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['is_deleted'])
-                               || resource.data.is_deleted == false))
-                        );
+                     && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['is_deleted']) || resource.data.is_deleted == false);
 
         // Physical Deletion Prohibited (Forensic Immutability)
         allow delete: if false;

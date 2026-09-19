@@ -76,11 +76,20 @@ class FakeMediaRepository implements MediaRepository {
     _emitCount();
   }
 
-  @override
-  Stream<int> watchUnsyncedCount({String? creatorId}) => _countController.stream;
+  final List<String?> unsyncedCountCreatorIds = [];
+  final List<String?> tombstoneCountCreatorIds = [];
 
   @override
-  Stream<int> watchTombstoneCandidateCount() => _tombstoneCountController.stream;
+  Stream<int> watchUnsyncedCount({String? creatorId}) {
+    unsyncedCountCreatorIds.add(creatorId);
+    return _countController.stream;
+  }
+
+  @override
+  Stream<int> watchTombstoneCandidateCount({String? creatorId}) {
+    tombstoneCountCreatorIds.add(creatorId);
+    return _tombstoneCountController.stream;
+  }
 
   @override
   Future<List<MediaItem>> getPendingOrFailedMedia({String? creatorId}) async {
@@ -953,7 +962,7 @@ void main() {
   });
 
   group('F1 Foreground Resume Sync Tests', () {
-    test('Authenticated resume with pending work triggers the existing sync path', () async {
+    test('Authenticated resume triggers the existing sync path (R25: persisted failures are not re-attempted)', () async {
       mockRepo.setItems([]);
       final coordinator = SyncCoordinator(
         mediaRepo: mockRepo,
@@ -963,10 +972,12 @@ void main() {
         connectivity: fakeConnectivity,
       );
       await Future<void>.delayed(const Duration(milliseconds: 50));
-      expect(mockCloudSync.syncCallCount, equals(0));
+      final beforeResume = coordinator.state.lastSyncTime;
+      expect(beforeResume, isNotNull);
 
-      // Seed a failed (non-suppressed) item: the pending-count edge trigger does
-      // not fire for failed items, so only a resume event can drive this sync.
+      // A persisted permanent failure (status `failed`). The pending-count edge
+      // trigger does not fire for failed items, so only a resume event can drive
+      // a cycle here.
       final failedItem = MediaItem(
         id: 'm-resume-pending',
         siteId: 'site-1',
@@ -983,13 +994,15 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 50));
       expect(mockCloudSync.syncCallCount, equals(0));
 
-      // Foreground resume drives the existing triggerSync pipeline
+      // Foreground resume drives the existing triggerSync pipeline...
+      await Future<void>.delayed(const Duration(milliseconds: 20));
       coordinator.didChangeAppLifecycleState(AppLifecycleState.resumed);
       await Future<void>.delayed(const Duration(milliseconds: 100));
 
-      expect(mockCloudSync.syncCallCount, equals(1));
-      expect(mockCloudSync.syncedMediaIds, equals(['m-resume-pending']));
-      expect(mockRepo._items.first.syncStatus, equals(SyncStatusType.synced));
+      expect(coordinator.state.lastSyncTime!.isAfter(beforeResume!), isTrue);
+      // ...but R25 keeps the permanently-failed item suppressed from automatic cycles.
+      expect(mockCloudSync.syncCallCount, equals(0));
+      expect(mockRepo._items.first.syncStatus, equals(SyncStatusType.failed));
 
       coordinator.dispose();
     });
@@ -1148,7 +1161,7 @@ void main() {
   });
 
   group('F2 Unexpected Exception Suppression Tests', () {
-    test('Unexpected exception is suppressed from automatic cycles; manual retry re-evaluates', () async {
+    test('R25: an unknown/unhandled exception remains retryable and is never silently permanent', () async {
       final item = MediaItem(
         id: 'm-unexpected',
         siteId: 'site-1',
@@ -1173,16 +1186,17 @@ void main() {
       );
       await Future<void>.delayed(const Duration(milliseconds: 50));
 
-      // First automatic cycle processes once, fails, and marks failed honestly
+      // R25: an unclassified exception has no evidence of permanence. It stays
+      // retryable (`pending` + bounded backoff) and is never marked `failed`.
       expect(mockCloudSync.syncCallCount, equals(1));
-      expect(mockRepo._items.first.syncStatus, equals(SyncStatusType.failed));
+      expect(mockRepo._items.first.syncStatus, equals(SyncStatusType.pending));
 
-      // Subsequent automatic cycles must NOT repeatedly process the item
+      // Subsequent automatic cycles respect the bounded backoff.
       await coordinator.triggerSync(isManual: false);
       await coordinator.triggerSync(isManual: false);
       expect(mockCloudSync.syncCallCount, equals(1));
 
-      // Manual retry explicitly re-evaluates the suppressed item
+      // Manual retry explicitly re-evaluates the item
       mockCloudSync.exceptionToThrow = null;
       await coordinator.triggerSync(isManual: true);
       expect(mockCloudSync.syncCallCount, equals(2));
@@ -1524,6 +1538,184 @@ void main() {
       expect(mockRepo._items.single.tombstoneReconciled, isTrue);
 
       coordinator.dispose();
+    });
+  });
+
+  group('R04: count-stream subscription isolation', () {
+    test('binds the count streams to the authenticated UID', () async {
+      final coordinator = SyncCoordinator(
+        mediaRepo: mockRepo,
+        cloudSyncService: mockCloudSync,
+        storageService: mockStorage,
+        authService: fakeAuth,
+        connectivity: fakeConnectivity,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(mockRepo.unsyncedCountCreatorIds, isNotEmpty);
+      expect(mockRepo.unsyncedCountCreatorIds.last, equals('user-123'));
+      expect(mockRepo.tombstoneCountCreatorIds.last, equals('user-123'));
+
+      coordinator.dispose();
+    });
+
+    test('A -> sign out -> B rebinds: null while signed out, then B only', () async {
+      final coordinator = SyncCoordinator(
+        mediaRepo: mockRepo,
+        cloudSyncService: mockCloudSync,
+        storageService: mockStorage,
+        authService: fakeAuth,
+        connectivity: fakeConnectivity,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(mockRepo.unsyncedCountCreatorIds.last, equals('user-123'));
+
+      // A signs out: the count streams rebind fail-closed (null UID).
+      fakeAuth.setUser(null);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(mockRepo.unsyncedCountCreatorIds.last, isNull);
+      expect(mockRepo.tombstoneCountCreatorIds.last, isNull);
+
+      // B signs in: only B's UID is bound.
+      fakeAuth.setUser(const AuthUser(uid: 'user-456', email: 'b@sitelens.local'));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(mockRepo.unsyncedCountCreatorIds.last, equals('user-456'));
+      expect(mockRepo.tombstoneCountCreatorIds.last, equals('user-456'));
+
+      // Rebinding order proves A's stream was replaced (disposed), not left active.
+      final idxA = mockRepo.unsyncedCountCreatorIds.indexOf('user-123');
+      final idxNull = mockRepo.unsyncedCountCreatorIds.indexOf(null);
+      final idxB = mockRepo.unsyncedCountCreatorIds.indexOf('user-456');
+      expect(idxA, lessThan(idxNull));
+      expect(idxNull, lessThan(idxB));
+
+      coordinator.dispose();
+    });
+  });
+
+  group('R25: Error Classification & Durable Permanent-Failure Suppression', () {
+    SyncCoordinator buildCoordinator({AuthService? auth}) => SyncCoordinator(
+          mediaRepo: mockRepo,
+          cloudSyncService: mockCloudSync,
+          storageService: mockStorage,
+          authService: auth ?? fakeAuth,
+          connectivity: fakeConnectivity,
+        );
+
+    MediaItem r25Item({
+      String id = 'm-r25',
+      String creatorId = 'user-123',
+      SyncStatusType status = SyncStatusType.pending,
+    }) =>
+        MediaItem(
+          id: id,
+          siteId: 'site-1',
+          originalUri: 'media/orig_$id.jpg',
+          uri: 'media/evid_$id.jpg',
+          type: MediaItemType.photo,
+          lat: 22.5,
+          lon: 88.3,
+          capturedAt: DateTime.now(),
+          creatorId: creatorId,
+          syncStatus: status,
+        );
+
+    test('1. a permanent failure is persisted using the sync-status field', () async {
+      mockRepo.setItems([r25Item()]);
+      mockCloudSync.exceptionToThrow = PermanentSyncException('Creator mismatch');
+      final coordinator = buildCoordinator();
+      await coordinator.triggerSync();
+
+      expect(mockRepo._items.single.syncStatus, equals(SyncStatusType.failed));
+      coordinator.dispose();
+    });
+
+    test('2. automatic sync skips a persisted permanent failure in a fresh session (survives restart)', () async {
+      // Status persisted by a previous process: the in-memory suppression set is
+      // empty in this new coordinator, yet the item must still be skipped.
+      mockRepo.setItems([r25Item(status: SyncStatusType.failed)]);
+      final coordinator = buildCoordinator();
+
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await coordinator.triggerSync(isManual: false);
+
+      expect(mockCloudSync.syncCallCount, equals(0));
+      expect(mockRepo._items.single.syncStatus, equals(SyncStatusType.failed));
+      coordinator.dispose();
+    });
+
+    test('3. manual retry explicitly re-evaluates a persisted permanent failure', () async {
+      mockRepo.setItems([r25Item(status: SyncStatusType.failed)]);
+      final coordinator = buildCoordinator();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      await coordinator.triggerSync(isManual: true);
+
+      expect(mockCloudSync.syncCallCount, equals(1));
+      expect(mockRepo._items.single.syncStatus, equals(SyncStatusType.synced));
+      coordinator.dispose();
+    });
+
+    test('4. a transient failure retains the existing bounded backoff', () async {
+      mockRepo.setItems([r25Item()]);
+      mockCloudSync.exceptionToThrow = RetryableSyncException('Transient network failure');
+      final coordinator = buildCoordinator();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      // Failed once, returned to pending with backoff scheduled.
+      expect(mockCloudSync.syncCallCount, equals(1));
+      expect(mockRepo._items.single.syncStatus, equals(SyncStatusType.pending));
+
+      // An immediate automatic cycle respects the backoff.
+      await coordinator.triggerSync(isManual: false);
+      expect(mockCloudSync.syncCallCount, equals(1));
+
+      // Manual retry clears the backoff and re-evaluates.
+      mockCloudSync.exceptionToThrow = null;
+      await coordinator.triggerSync(isManual: true);
+      expect(mockCloudSync.syncCallCount, equals(2));
+      expect(mockRepo._items.single.syncStatus, equals(SyncStatusType.synced));
+      coordinator.dispose();
+    });
+
+    test('5. an unknown/unhandled exception remains retryable', () async {
+      mockRepo.setItems([r25Item()]);
+      mockCloudSync.exceptionToThrow = Exception('Unexpected internal failure');
+      final coordinator = buildCoordinator();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      // Retryable: honest status is `pending` with backoff — never `failed`.
+      expect(mockCloudSync.syncCallCount, equals(1));
+      expect(mockRepo._items.single.syncStatus, equals(SyncStatusType.pending));
+
+      // Not suppressed forever: manual retry re-evaluates it.
+      mockCloudSync.exceptionToThrow = null;
+      await coordinator.triggerSync(isManual: true);
+      expect(mockCloudSync.syncCallCount, equals(2));
+      expect(mockRepo._items.single.syncStatus, equals(SyncStatusType.synced));
+      coordinator.dispose();
+    });
+
+    test('6. creator isolation remains fail-closed', () async {
+      mockRepo.setItems([
+        r25Item(id: 'm-r25-foreign', creatorId: 'other-user', status: SyncStatusType.failed),
+      ]);
+      final coordinator = buildCoordinator();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      // The widest (manual) cycle still never touches another creator's item.
+      await coordinator.triggerSync(isManual: true);
+      expect(mockCloudSync.syncCallCount, equals(0));
+      expect(mockRepo._items.single.syncStatus, equals(SyncStatusType.failed));
+
+      // Unauthenticated sessions never sync.
+      final loggedOut = buildCoordinator(auth: FakeAuthService(null));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await loggedOut.triggerSync(isManual: true);
+      expect(mockCloudSync.syncCallCount, equals(0));
+
+      coordinator.dispose();
+      loggedOut.dispose();
     });
   });
 }

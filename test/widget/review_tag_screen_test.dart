@@ -59,6 +59,35 @@ class FakeNearbySettingsNotifier extends NearbySettingsNotifier {
   }
 }
 
+/// Holds the review state in an in-flight save so the back/dismiss guard can be
+/// exercised (R14).
+class _SavingReviewTagNotifier extends ReviewTagNotifier {
+  // ignore: use_super_parameters
+  _SavingReviewTagNotifier(
+    AppDatabase db,
+    MediaRepository repo,
+    EvidenceStorageService storage,
+  ) : super(db, repo, storage) {
+    state = state.copyWith(isSaving: true);
+  }
+}
+
+/// Counts destructive cleanup so a blocked discard can be proven non-destructive.
+class _CountingWidgetReviewStorageService extends MockWidgetReviewStorageService {
+  int cleanupPartialCalls = 0;
+  int deleteOriginalCalls = 0;
+
+  @override
+  Future<void> cleanupPartialArtifacts(String mediaId) async {
+    cleanupPartialCalls++;
+  }
+
+  @override
+  Future<void> deleteOriginalMedia(String relativePath) async {
+    deleteOriginalCalls++;
+  }
+}
+
 void main() {
   late AppDatabase db;
 
@@ -170,6 +199,52 @@ void main() {
       expect(find.byType(ObservationSelector), findsOneWidget);
       expect(find.text('Save Evidence'), findsOneWidget);
       expect(find.text('Retake'), findsOneWidget);
+    });
+
+    testWidgets(
+        'R14: back/dismiss while a save is in flight never discards the uncommitted capture',
+        (tester) async {
+      final storage = _CountingWidgetReviewStorageService();
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            mediaRepositoryProvider
+                .overrideWithValue(LocalMediaRepository(db)),
+            evidenceStorageServiceProvider.overrideWithValue(storage),
+            nearbySettingsProvider
+                .overrideWith((ref) => FakeNearbySettingsNotifier(25.0)),
+            authStateProvider.overrideWith(
+                (ref) => Stream.value(const AuthUser(uid: 'user-test'))),
+            reviewTagControllerProvider.overrideWith(
+              (ref) => _SavingReviewTagNotifier(
+                db,
+                LocalMediaRepository(db),
+                storage,
+              ),
+            ),
+          ],
+          child: MaterialApp(
+            home: ReviewTagScreen(payload: payload),
+          ),
+        ),
+      );
+      // The saving state renders a progress spinner, so the tree never settles:
+      // pump discrete frames instead.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Attempt to leave via the app-bar dismiss while the save is in flight.
+      await tester.tap(find.byIcon(Icons.close_rounded).first);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // No discard confirmation is raised and nothing destructive ran.
+      expect(find.text('Discard Capture?'), findsNothing);
+      expect(storage.cleanupPartialCalls, 0);
+      expect(storage.deleteOriginalCalls, 0);
+      expect(find.byType(ReviewTagScreen), findsOneWidget);
     });
 
     testWidgets(

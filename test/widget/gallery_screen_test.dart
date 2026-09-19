@@ -20,6 +20,7 @@ import 'package:sitelens/features/sites/site_controller.dart';
 import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:sitelens/core/services/auth_service.dart';
+import 'package:sitelens/core/services/session_service.dart';
 import 'package:sitelens/features/camera/services/evidence_storage_service.dart';
 import 'package:sitelens/features/sync/services/cloud_sync_service.dart';
 import 'package:sitelens/features/sync/services/sync_coordinator.dart';
@@ -59,6 +60,13 @@ class TestAuthService implements AuthService {
   @override
   Stream<AuthUser?> get authStateChanges => Stream.value(
       const AuthUser(uid: 'test-user', email: 'test@sitelens.local'));
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class MockSessionService extends StateNotifier<UserSessionState> implements SessionService {
+  MockSessionService(super.state);
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -124,6 +132,12 @@ void main() {
         siteControllerProvider.overrideWith(
           (ref) => SiteController(MockSiteRepository(testSite)),
         ),
+        sessionServiceProvider.overrideWith((ref) => MockSessionService(
+              const UserSessionState(
+                status: SessionStatus.authenticatedReady,
+                user: AuthUser(uid: 'test-user', email: 'test@sitelens.local'),
+              ),
+            )),
         syncCoordinatorProvider.overrideWith(
           (ref) => SyncCoordinator(
             mediaRepo: mediaRepo,
@@ -162,6 +176,7 @@ void main() {
             MediaCompanion.insert(
               id: 'm1',
               siteId: const drift.Value('site-alpha'),
+              creatorId: const drift.Value('test-user'),
               type: const drift.Value('photo'),
               uri: 'media/evid_m1.jpg',
               originalUri: const drift.Value('media/orig_m1.jpg'),
@@ -177,6 +192,7 @@ void main() {
             MediaCompanion.insert(
               id: 'm2',
               siteId: const drift.Value('site-alpha'),
+              creatorId: const drift.Value('test-user'),
               type: const drift.Value('video'),
               uri: 'media/evid_m2.jpg',
               originalUri: const drift.Value('media/orig_m2.mp4'),
@@ -207,6 +223,7 @@ void main() {
             MediaCompanion.insert(
               id: 'm1',
               siteId: const drift.Value('site-alpha'),
+              creatorId: const drift.Value('test-user'),
               type: const drift.Value('photo'),
               uri: 'media/evid_m1.jpg',
               originalUri: const drift.Value('media/orig_m1.jpg'),
@@ -222,6 +239,7 @@ void main() {
             MediaCompanion.insert(
               id: 'm2',
               siteId: const drift.Value('site-alpha'),
+              creatorId: const drift.Value('test-user'),
               type: const drift.Value('video'),
               uri: 'media/evid_m2.jpg',
               originalUri: const drift.Value('media/orig_m2.mp4'),
@@ -257,6 +275,7 @@ void main() {
             MediaCompanion.insert(
               id: 'm1',
               siteId: const drift.Value('site-alpha'),
+              creatorId: const drift.Value('test-user'),
               type: const drift.Value('photo'),
               uri: 'media/evid_m1.jpg',
               originalUri: const drift.Value('media/orig_m1.jpg'),
@@ -289,6 +308,7 @@ void main() {
             MediaCompanion.insert(
               id: 'm1',
               siteId: const drift.Value('site-alpha'),
+              creatorId: const drift.Value('test-user'),
               type: const drift.Value('photo'),
               uri: 'media/evid_m1.jpg',
               originalUri: const drift.Value('media/orig_m1.jpg'),
@@ -303,6 +323,7 @@ void main() {
             MediaCompanion.insert(
               id: 'm2',
               siteId: const drift.Value('site-alpha'),
+              creatorId: const drift.Value('test-user'),
               type: const drift.Value('photo'),
               uri: 'media/evid_m2.jpg',
               originalUri: const drift.Value('media/orig_m2.jpg'),
@@ -360,6 +381,7 @@ void main() {
             MediaCompanion.insert(
               id: 'm1',
               siteId: const drift.Value('site-alpha'),
+              creatorId: const drift.Value('test-user'),
               type: const drift.Value('photo'),
               uri: 'media/evid_m1.jpg',
               originalUri: const drift.Value('media/orig_m1.jpg'),
@@ -404,6 +426,7 @@ void main() {
             MediaCompanion.insert(
               id: 'del_m1',
               siteId: const drift.Value('site-alpha'),
+              creatorId: const drift.Value('test-user'),
               type: const drift.Value('photo'),
               uri: 'media/evid_del_m1.jpg',
               originalUri: const drift.Value('media/orig_del_m1.jpg'),
@@ -418,6 +441,7 @@ void main() {
             MediaCompanion.insert(
               id: 'del_m2',
               siteId: const drift.Value('site-alpha'),
+              creatorId: const drift.Value('test-user'),
               type: const drift.Value('photo'),
               uri: 'media/evid_del_m2.jpg',
               originalUri: const drift.Value('media/orig_del_m2.jpg'),
@@ -499,6 +523,7 @@ void main() {
             MediaCompanion.insert(
               id: 'm1',
               siteId: const drift.Value('site-alpha'),
+              creatorId: const drift.Value('test-user'),
               type: const drift.Value('photo'),
               uri: 'media/evid_m1.jpg',
               originalUri: const drift.Value('media/orig_m1.jpg'),
@@ -536,7 +561,7 @@ class MockSiteRepository implements SiteRepository {
   Future<List<SiteModel>> getAllSites({String? creatorId}) async => [site];
 
   @override
-  Future<SiteModel?> getSiteById(String id) async =>
+  Future<SiteModel?> getSiteById(String id, {String? creatorId}) async =>
       site.id == id ? site : null;
 
   @override
@@ -546,8 +571,11 @@ class MockSiteRepository implements SiteRepository {
   Future<void> deleteSite(String id, {String? creatorId}) async {}
 
   @override
-  Future<bool> hasMediaForSite(String siteId) async => false;
+  Future<bool> hasMediaForSite(String siteId, {String? creatorId}) async => false;
 
   @override
   Future<void> seedDefaultSitesIfEmpty() async {}
+
+  @override
+  Future<List<SiteModel>> hydrateRemoteSites(String userId) async => [];
 }

@@ -96,6 +96,7 @@ class ReviewTagNotifier extends StateNotifier<ReviewTagState> {
         centerLon: snapshot.longitude,
         siteId: snapshot.siteId,
         activityTag: state.activityTag,
+        capturedBefore: snapshot.capturedAtUtc,
         radiusMeters: 10.0,
         currentMediaId: payload.mediaId,
         creatorId: snapshot.creatorId,

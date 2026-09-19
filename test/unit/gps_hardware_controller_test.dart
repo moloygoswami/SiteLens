@@ -149,6 +149,7 @@ Position createFakePosition({
   required double longitude,
   required double accuracy,
   double? altitude,
+  double heading = 0.0,
   DateTime? timestamp,
 }) {
   return Position(
@@ -158,7 +159,7 @@ Position createFakePosition({
     accuracy: accuracy,
     altitude: altitude ?? 20.0,
     altitudeAccuracy: 1.0,
-    heading: 0.0,
+    heading: heading,
     headingAccuracy: 1.0,
     speed: 0.0,
     speedAccuracy: 1.0,
@@ -968,12 +969,17 @@ void main() {
         accuracyMeters: 8.0,
         timestampUtc: DateTime.utc(2026, 9, 10, 5, 0, 0),
       );
-      final best = createFakePosition(
-        latitude: 22.57250,
-        longitude: 88.36350,
-        accuracy: 3.5,
-        altitude: 12.5,
-        timestamp: DateTime.utc(2026, 9, 10, 5, 0, 5),
+      final best = BufferedGpsPosition(
+        position: createFakePosition(
+          latitude: 22.57250,
+          longitude: 88.36350,
+          accuracy: 3.5,
+          altitude: 12.5,
+          timestamp: DateTime.utc(2026, 9, 10, 5, 0, 5),
+        ),
+        isLive: true,
+        resolvedAltitudeMeters: 12.5,
+        resolvedIsMsl: false,
       );
 
       final result = GpsHardwareNotifier.applyBestRecentPosition(state, best);
@@ -982,13 +988,13 @@ void main() {
       expect(result.longitude, 88.36350);
       expect(result.accuracyMeters, 3.5);
       expect(result.timestampUtc, DateTime.utc(2026, 9, 10, 5, 0, 5));
-      // Established MSL altitude is the altitude authority; the raw WGS84
-      // altitude must not silently replace it (nor change the datum claim).
+      // Established MSL altitude is the altitude authority; the selected
+      // position's altitude must not silently replace it (nor change the datum).
       expect(result.isAltitudeMsl, isTrue);
       expect(result.altitudeMeters, 18.4);
     });
 
-    test('F-A2: applyBestRecentPosition falls back to the raw WGS84 altitude when MSL is unestablished', () {
+    test('F-A2: applyBestRecentPosition falls back to the selected WGS84 altitude when MSL is unestablished', () {
       const state = GpsHardwareState(
         hasValidFix: true,
         latitude: 22.57200,
@@ -997,11 +1003,16 @@ void main() {
         isAltitudeMsl: false,
         accuracyMeters: 8.0,
       );
-      final best = createFakePosition(
-        latitude: 22.57250,
-        longitude: 88.36350,
-        accuracy: 3.5,
-        altitude: 12.5,
+      final best = BufferedGpsPosition(
+        position: createFakePosition(
+          latitude: 22.57250,
+          longitude: 88.36350,
+          accuracy: 3.5,
+          altitude: 12.5,
+        ),
+        isLive: true,
+        resolvedAltitudeMeters: 12.5,
+        resolvedIsMsl: false,
       );
 
       final result = GpsHardwareNotifier.applyBestRecentPosition(state, best);
@@ -1011,12 +1022,43 @@ void main() {
       expect(result.accuracyMeters, 3.5);
     });
 
+    test('R10: applyBestRecentPosition never substitutes an unestablished altitude (stays null, never 0.0)', () {
+      const state = GpsHardwareState(
+        hasValidFix: true,
+        latitude: 22.57200,
+        longitude: 88.36300,
+        // altitude unknown
+        accuracyMeters: 8.0,
+      );
+      final best = BufferedGpsPosition(
+        position: createFakePosition(
+          latitude: 22.57250,
+          longitude: 88.36350,
+          accuracy: 3.5,
+          altitude: 0.0, // raw sentinel: device reported no altitude
+        ),
+        isLive: true,
+        resolvedAltitudeMeters: null, // never established
+        resolvedIsMsl: false,
+      );
+
+      final result = GpsHardwareNotifier.applyBestRecentPosition(state, best);
+
+      expect(result.latitude, 22.57250);
+      expect(result.altitudeMeters, isNull);
+    });
+
     test('F-A2: applyBestRecentPosition does not attach raw coordinates without a valid fix', () {
       const state = GpsHardwareState();
-      final best = createFakePosition(
-        latitude: 22.57250,
-        longitude: 88.36350,
-        accuracy: 3.5,
+      final best = BufferedGpsPosition(
+        position: createFakePosition(
+          latitude: 22.57250,
+          longitude: 88.36350,
+          accuracy: 3.5,
+        ),
+        isLive: true,
+        resolvedAltitudeMeters: 12.5,
+        resolvedIsMsl: false,
       );
 
       final result = GpsHardwareNotifier.applyBestRecentPosition(state, best);
@@ -1560,6 +1602,173 @@ void main() {
 
         notifier.dispose();
       });
+    });
+  });
+
+  group('R06: position-buffer provenance (cached seeds never become evidence)', () {
+    late MockLocationService mockService;
+
+    setUp(() {
+      mockService = MockLocationService();
+    });
+
+    test('a cached last-known seed latches a display fix but is never selectable for capture', () async {
+      mockService.lastKnown = createFakePosition(
+        latitude: 22.10000,
+        longitude: 88.10000,
+        accuracy: 2.0,
+        timestamp: DateTime.now().toUtc(),
+      );
+
+      final notifier = GpsHardwareNotifier(mockService);
+      await Future<void>.delayed(Duration.zero);
+
+      // Display fix latched with cached provenance.
+      expect(notifier.state.hasValidFix, isTrue);
+      expect(notifier.state.isLastKnownSeed, isTrue);
+      expect(notifier.state.hasLiveFix, isFalse);
+
+      // The seed never enters the live-fix selection path.
+      expect(notifier.getBestRecentPosition(), isNull);
+
+      notifier.dispose();
+    });
+
+    test('a live emission supersedes the seed even when the seed was more accurate', () async {
+      mockService.lastKnown = createFakePosition(
+        latitude: 22.10000,
+        longitude: 88.10000,
+        accuracy: 2.0,
+        timestamp: DateTime.now().toUtc(),
+      );
+
+      final notifier = GpsHardwareNotifier(mockService);
+      await Future<void>.delayed(Duration.zero);
+      expect(notifier.getBestRecentPosition(), isNull);
+
+      // Pass the 1s state-emission throttle, then deliver a live GNSS position.
+      await Future<void>.delayed(const Duration(milliseconds: 1100));
+
+      // Deliberately worse accuracy: the cached 2.0m seed must not win.
+      mockService.emitPosition(createFakePosition(
+        latitude: 22.57264,
+        longitude: 88.36391,
+        accuracy: 8.0,
+        timestamp: DateTime.now().toUtc(),
+      ));
+      await Future<void>.delayed(Duration.zero);
+
+      final best = notifier.getBestRecentPosition();
+      expect(best, isNotNull);
+      expect(best!.latitude, 22.57264);
+      expect(best.accuracy, 8.0);
+      expect(notifier.state.hasLiveFix, isTrue);
+
+      notifier.dispose();
+    });
+
+    test('the shared selection authority cannot reintroduce cached coordinates', () async {
+      mockService.lastKnown = createFakePosition(
+        latitude: 22.10000,
+        longitude: 88.10000,
+        accuracy: 2.0,
+        timestamp: DateTime.now().toUtc(),
+      );
+
+      final notifier = GpsHardwareNotifier(mockService);
+      await Future<void>.delayed(Duration.zero);
+
+      final applied = GpsHardwareNotifier.applyBestRecentPosition(
+        notifier.state,
+        notifier.getBestRecentPosition(),
+      );
+
+      // No live position -> state unchanged, provenance preserved, no capture.
+      expect(applied.isLastKnownSeed, isTrue);
+      expect(applied.hasLiveFix, isFalse);
+      expect(applied.latitude, 22.10000);
+      expect(applied.longitude, 88.10000);
+
+      notifier.dispose();
+    });
+  });
+
+  group('R10 heading provenance (plugin 0.0 unavailable sentinel)', () {
+    late MockLocationService mockService;
+
+    setUp(() {
+      mockService = MockLocationService();
+    });
+
+    tearDown(() {
+      mockService.close();
+    });
+
+    test('R10: a 0.0 bearing is the plugin sentinel and stays unknown', () async {
+      final notifier = GpsHardwareNotifier(mockService);
+      await Future<void>.delayed(Duration.zero);
+
+      mockService.emitPosition(createFakePosition(
+        latitude: 22.57264,
+        longitude: 88.36391,
+        accuracy: 3.2,
+        heading: 0.0,
+      ));
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(notifier.state.hasValidFix, isTrue);
+      expect(notifier.state.headingDegrees, isNull);
+
+      notifier.dispose();
+    });
+
+    test('R10: an established non-zero bearing is preserved', () async {
+      final notifier = GpsHardwareNotifier(mockService);
+      await Future<void>.delayed(Duration.zero);
+
+      mockService.emitPosition(createFakePosition(
+        latitude: 22.57264,
+        longitude: 88.36391,
+        accuracy: 3.2,
+        heading: 187.5,
+      ));
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(notifier.state.headingDegrees, 187.5);
+
+      notifier.dispose();
+    });
+
+    test('R10: a later 0.0 bearing clears an established heading', () async {
+      final notifier = GpsHardwareNotifier(mockService);
+      await Future<void>.delayed(Duration.zero);
+
+      mockService.emitPosition(createFakePosition(
+        latitude: 22.57264,
+        longitude: 88.36391,
+        accuracy: 3.2,
+        heading: 145.0,
+      ));
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      expect(notifier.state.headingDegrees, 145.0);
+
+      await Future<void>.delayed(const Duration(milliseconds: 1100)); // pass the 1s throttle
+      mockService.emitPosition(createFakePosition(
+        latitude: 22.57264,
+        longitude: 88.36391,
+        accuracy: 3.2,
+        heading: 0.0,
+        timestamp: DateTime.utc(2026, 8, 15, 12, 0, 1),
+      ));
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(notifier.state.headingDegrees, isNull);
+
+      notifier.dispose();
     });
   });
 }

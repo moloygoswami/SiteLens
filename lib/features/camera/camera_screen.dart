@@ -181,9 +181,9 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       if (!mounted || videoFile == null) return;
 
       final activeSite = ref.read(siteControllerProvider).activeSite;
+      final currentUserId = ref.read(authServiceProvider).currentUser?.uid;
       final gpsHardware = ref.read(gpsHardwareProvider);
       final gpsSettings = ref.read(gpsSettingsProvider);
-      final currentUserId = ref.read(authServiceProvider).currentUser?.uid;
       final storageService = ref.read(evidenceStorageServiceProvider);
 
       final recordingGps = (cameraState.recordingGpsState != null && cameraState.recordingGpsState!.hasValidFix)
@@ -201,6 +201,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
         creatorId: currentUserId,
         lowAccuracyThresholdMeters: gpsSettings.lowAccuracyThresholdMeters,
         customCaptureTimeUtc: cameraState.recordingStartedAtUtc ?? recordingGps.timestampUtc ?? DateTime.now().toUtc(),
+        hasAudioTrack: cameraState.recordingHasAudioTrack,
       );
 
       final videoBytes = await videoFile.readAsBytes();
@@ -382,18 +383,24 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
   }
 
   void _handleCycleAspectRatio() {
+    // R08: aspect-ratio toggles are locked during active video recording.
+    if (ref.read(cameraHardwareProvider).isRecordingVideo) return;
     setState(() {
       _uiState = _uiState.copyWith(aspectRatio: _uiState.aspectRatio.next);
     });
   }
 
   void _handleCycleTimer() {
+    // R08: capture-timer toggles are locked during active video recording.
+    if (ref.read(cameraHardwareProvider).isRecordingVideo) return;
     setState(() {
       _uiState = _uiState.copyWith(captureTimer: _uiState.captureTimer.next);
     });
   }
 
   void _handleCycleLens() {
+    // R08: optical lens switching is locked during active video recording.
+    if (ref.read(cameraHardwareProvider).isRecordingVideo) return;
     final cameraHardware = ref.read(cameraHardwareProvider);
     final available = cameraHardware.availableZoomPresets;
     if (available.isEmpty) return;
@@ -437,7 +444,6 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
   }
 
   Future<void> _handleShutterPressed({
-    required GpsUiFixture currentGps,
     required GpsHardwareState gpsHardware,
     required String siteId,
     required String siteCode,
@@ -478,25 +484,16 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
           final storageService = ref.read(evidenceStorageServiceProvider);
           final currentUserId = ref.read(authServiceProvider).currentUser?.uid;
           final gpsSettings = ref.read(gpsSettingsProvider);
-          final bestPos = ref.read(gpsHardwareProvider.notifier).getBestRecentPosition();
-          final GpsHardwareState candidateGps;
-          if (bestPos != null && gpsHardware.hasValidFix) {
-            candidateGps = gpsHardware.copyWith(
-              latitude: bestPos.latitude,
-              longitude: bestPos.longitude,
-              altitudeMeters: (gpsHardware.isAltitudeMsl && gpsHardware.altitudeMeters != null)
-                  ? gpsHardware.altitudeMeters
-                  : bestPos.altitude,
-              accuracyMeters: bestPos.accuracy,
-              timestampUtc: bestPos.timestamp.toUtc(),
-            );
-          } else if (gpsHardware.hasValidFix) {
-            candidateGps = gpsHardware;
-          } else if (cameraState.recordingGpsState != null && cameraState.recordingGpsState!.hasValidFix) {
-            candidateGps = cameraState.recordingGpsState!;
-          } else {
-            candidateGps = gpsHardware;
-          }
+
+          // R07: T0 is the immutable spatial/telemetry authority for video
+          // evidence. The GPS snapshot frozen at recording start governs the
+          // persisted coordinates, altitude and GNSS telemetry; a stop-time fix
+          // must never usurp it and imply capture-time authority it lacks.
+          final recordingT0Gps = cameraState.recordingGpsState;
+          final GpsHardwareState candidateGps =
+              (recordingT0Gps != null && recordingT0Gps.hasValidFix)
+                  ? recordingT0Gps
+                  : gpsHardware;
 
           final snapshot = EvidenceMetadataSnapshot.capture(
             gpsState: candidateGps,
@@ -507,6 +504,8 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
             creatorId: currentUserId,
             lowAccuracyThresholdMeters: gpsSettings.lowAccuracyThresholdMeters,
             customCaptureTimeUtc: cameraState.recordingStartedAtUtc ?? candidateGps.timestampUtc ?? DateTime.now().toUtc(),
+            // R09: audio-track presence frozen at T0 — never assumed.
+            hasAudioTrack: cameraState.recordingHasAudioTrack,
           );
 
           if (candidateGps.isLastKnownSeed || !snapshot.hasValidCoordinates) {
@@ -631,9 +630,18 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
           );
           return;
         }
-        await ref.read(cameraHardwareProvider.notifier).startVideoRecording(
-          recordingGpsState: gpsHardware,
-        );
+        // R12: recording start uses the same authoritative capture mutex as the
+        // photo/stop paths, so a rapid double-tap cannot dispatch two starts.
+        _isExecutingCapture = true;
+        if (mounted) setState(() {});
+        try {
+          await ref.read(cameraHardwareProvider.notifier).startVideoRecording(
+            recordingGpsState: gpsHardware,
+          );
+        } finally {
+          _isExecutingCapture = false;
+          if (mounted) setState(() {});
+        }
         return;
       }
     }
@@ -701,6 +709,36 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       });
 
       _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (!mounted) {
+          timer.cancel();
+          _countdownTimer = null;
+          return;
+        }
+
+        // R03: the countdown is re-gated on a LIVE fix at every tick. If the fix
+        // is lost mid-countdown the countdown aborts and reverts to
+        // "Waiting for GPS lock" instead of sealing a stale press-time fix.
+        if (!ref.read(gpsHardwareProvider).hasLiveFix) {
+          timer.cancel();
+          _countdownTimer = null;
+          setState(() {
+            _uiState = _uiState.copyWith(isCountingDown: false, countdownRemaining: 0);
+          });
+          ScaffoldMessenger.of(context).removeCurrentSnackBar();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Countdown cancelled — waiting for GPS lock',
+                style: TextStyle(fontFamily: 'monospace', fontSize: 11),
+              ),
+              backgroundColor: AppColors.statusAmber,
+              duration: Duration(seconds: 3),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+          return;
+        }
+
         remaining--;
         if (remaining <= 0) {
           timer.cancel();
@@ -709,9 +747,8 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
             setState(() {
               _uiState = _uiState.copyWith(isCountingDown: false, countdownRemaining: 0);
             });
+            // Capture against the CURRENT GPS authority at the fire instant.
             _executePhotoCapture(
-              currentGps: currentGps,
-              gpsHardware: gpsHardware,
               siteId: siteId,
               siteCode: siteCode,
               siteName: siteName,
@@ -730,17 +767,31 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
 
     // Immediate photo capture
     await _executePhotoCapture(
-      currentGps: currentGps,
-      gpsHardware: gpsHardware,
       siteId: siteId,
       siteCode: siteCode,
       siteName: siteName,
     );
   }
 
+  /// Truthful feedback when a capture is refused because no LIVE fix exists
+  /// (a cached/last-known seed is display-only and never unlocks capture).
+  void _showGpsCaptureBlocked() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Photo Capture Error: Valid GPS fix required to record evidence.',
+          style: TextStyle(fontFamily: 'monospace', fontSize: 11),
+        ),
+        backgroundColor: AppColors.statusAmber,
+        duration: Duration(seconds: 3),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
   Future<void> _executePhotoCapture({
-    required GpsUiFixture currentGps,
-    required GpsHardwareState gpsHardware,
     required String siteId,
     required String siteCode,
     required String siteName,
@@ -752,30 +803,35 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     }
 
     try {
+      // Read the CURRENT GPS authority at the capture instant — never a
+      // press-time snapshot. A fix lost during a countdown must not be sealed
+      // (R02/R03).
+      final gpsNow = ref.read(gpsHardwareProvider);
+      if (!gpsNow.hasLiveFix) {
+        _showGpsCaptureBlocked();
+        return;
+      }
+
       // 0. Physical capture instant authority at exact shutter actuation
       final shutterInstantUtc = DateTime.now().toUtc();
 
-      // 1. Synchronously snapshot metadata at exact shutter-accept time
+      // 1. Synchronously snapshot metadata at exact shutter-accept time.
+      // The single production selection authority applies the best recent LIVE
+      // position: cached seeds are excluded from selection by provenance and an
+      // unestablished altitude is never substituted (R06/R10).
       final currentUserId = ref.read(authServiceProvider).currentUser?.uid;
       final gpsSettings = ref.read(gpsSettingsProvider);
-      final bestPos = ref.read(gpsHardwareProvider.notifier).getBestRecentPosition();
-      final effectiveGps = (bestPos != null && gpsHardware.hasValidFix)
-          ? gpsHardware.copyWith(
-              latitude: bestPos.latitude,
-              longitude: bestPos.longitude,
-              altitudeMeters: (gpsHardware.isAltitudeMsl && gpsHardware.altitudeMeters != null)
-                  ? gpsHardware.altitudeMeters
-                  : bestPos.altitude,
-              accuracyMeters: bestPos.accuracy,
-              timestampUtc: bestPos.timestamp.toUtc(),
-            )
-          : gpsHardware;
+      final gpsNotifier = ref.read(gpsHardwareProvider.notifier);
+      final effectiveGps = GpsHardwareNotifier.applyBestRecentPosition(
+        gpsNow,
+        gpsNotifier.getBestRecentPosition(),
+      );
       final snapshot = EvidenceMetadataSnapshot.capture(
         gpsState: effectiveGps,
         siteId: siteId,
         siteCode: siteCode,
         siteName: siteName,
-        resolvedAddress: gpsHardware.resolvedLocationName,
+        resolvedAddress: effectiveGps.resolvedLocationName,
         creatorId: currentUserId,
         lowAccuracyThresholdMeters: gpsSettings.lowAccuracyThresholdMeters,
         customCaptureTimeUtc: shutterInstantUtc,
@@ -785,18 +841,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       // must never reach evidence — the photo shutter requires
       // live-provenance coordinates, mirroring the video path gate.
       if (!effectiveGps.hasLiveFix || !snapshot.hasValidCoordinates) {
-        ScaffoldMessenger.of(context).removeCurrentSnackBar();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Photo Capture Error: Valid GPS fix required to record evidence.',
-              style: TextStyle(fontFamily: 'monospace', fontSize: 11),
-            ),
-            backgroundColor: AppColors.statusAmber,
-            duration: Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+        _showGpsCaptureBlocked();
         return;
       }
 
@@ -861,12 +906,12 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
                 final isAgeFresh = age <= const Duration(minutes: 5);
 
                 bool isDistanceFresh = true;
-                if (gpsHardware.latitude != null && gpsHardware.longitude != null) {
+                if (effectiveGps.latitude != null && effectiveGps.longitude != null) {
                   final distance = MapThumbnailService.haversineDistanceMeters(
                     mapThumbnailState.lat,
                     mapThumbnailState.lon,
-                    gpsHardware.latitude!,
-                    gpsHardware.longitude!,
+                    effectiveGps.latitude!,
+                    effectiveGps.longitude!,
                   );
                   isDistanceFresh = distance <= MapThumbnailPolicy.movementThresholdMeters;
                 }
@@ -876,14 +921,14 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
               if (isCacheFresh) {
                 mapTileBytes = await mapThumbnailState.cachedTile!.readAsBytes();
               } else if (!isTransitioning &&
-                  gpsHardware.latitude != null &&
-                  gpsHardware.longitude != null) {
+                  effectiveGps.latitude != null &&
+                  effectiveGps.longitude != null) {
                 // Check local disk cache for existing imagery strictly matching the canonical state
                 try {
                   final service = ref.read(mapThumbnailServiceProvider);
                   final cachedFile = await service.getCachedImage(
-                    lat: gpsHardware.latitude!,
-                    lon: gpsHardware.longitude!,
+                    lat: effectiveGps.latitude!,
+                    lon: effectiveGps.longitude!,
                     mapType: currentMapType.staticMapParam,
                   );
                   if (cachedFile != null && cachedFile.existsSync()) {
@@ -904,7 +949,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
             originalBytes: rawBytes,
             snapshot: snapshot,
             mapTileBytes: mapTileBytes,
-            isGpsLocked: gpsHardware.hasValidFix,
+            isGpsLocked: effectiveGps.hasValidFix,
             showAddress: watermarkSettings.showAddress,
             showMapTile: watermarkSettings.showMapTile,
             targetAspectRatio: _uiState.aspectRatio,
@@ -972,6 +1017,8 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
   }
 
   void _handlePinchZoom(double targetZoom) {
+    // R08: digital zoom gestures are locked during active video recording.
+    if (ref.read(cameraHardwareProvider).isRecordingVideo) return;
     ref.read(cameraHardwareProvider.notifier).setPinchZoom(targetZoom);
   }
 
@@ -1016,9 +1063,12 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       status: gpsHardware.fixStatus,
       blockReason: gpsHardware.blockReason,
       accuracyMeters: gpsHardware.hasValidFix ? gpsHardware.accuracyMeters : null,
+      // Coordinates keep the established 0.0 "no fix" sentinel (rejected as a
+      // fix by the HUD card); an unestablished altitude stays null so the HUD
+      // renders "—" rather than a fabricated 0 m (R10).
       latitude: gpsHardware.hasValidFix ? (gpsHardware.latitude ?? 0.0) : 0.0,
       longitude: gpsHardware.hasValidFix ? (gpsHardware.longitude ?? 0.0) : 0.0,
-      altitudeMeters: gpsHardware.hasValidFix ? (gpsHardware.altitudeMeters ?? 0.0) : 0.0,
+      altitudeMeters: gpsHardware.hasValidFix ? gpsHardware.altitudeMeters : null,
       isAltitudeMsl: gpsHardware.isAltitudeMsl,
       headingDegrees: gpsHardware.hasValidFix ? gpsHardware.headingDegrees : null,
       timestampUtc: gpsHardware.timestampUtcDisplay,
@@ -1082,6 +1132,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
                 showMinimap: watermarkSettings.showMapTile,
                 cameraController: cameraNotifier.controller,
                 cameraStatus: cameraHardware.status,
+                isRecordingVideo: cameraHardware.isRecordingVideo,
                 currentZoomLevel: cameraHardware.currentZoomLevel,
                 zoomDisplayLabel: cameraHardware.zoomDisplayLabel,
                 onTapFocus: _handleTapFocus,
@@ -1113,7 +1164,6 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
               recordingDurationFormatted: cameraHardware.recordingDurationFormatted,
               isExecutingCapture: _isExecutingCapture,
               onShutterPressed: () => _handleShutterPressed(
-                currentGps: currentGps,
                 gpsHardware: gpsHardware,
                 siteId: siteId,
                 siteCode: siteCode,

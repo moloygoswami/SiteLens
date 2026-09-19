@@ -70,6 +70,7 @@ class ControllableSearchRepository extends LocalMediaRepository {
     required double centerLon,
     required String siteId,
     required String activityTag,
+    required DateTime capturedBefore,
     double radiusMeters = 10.0,
     String? currentMediaId,
     String? creatorId,
@@ -276,10 +277,10 @@ void main() {
       expect(find.byType(SmartLinkCard), findsOneWidget);
 
       // Verify distance is NOT hardcoded 0.0m
-      expect(find.textContaining('0.0m away'), findsNothing);
+      expect(find.textContaining('0.0m'), findsNothing);
 
       // Verify distance string matches calculated ~5.4m
-      expect(find.textContaining('5.4m away'), findsOneWidget);
+      expect(find.textContaining('5.4m (±'), findsOneWidget);
     });
 
     testWidgets(
@@ -334,15 +335,15 @@ void main() {
       expect(find.byType(SmartLinkCard), findsOneWidget);
 
       // Verify distance is NOT hardcoded 0.0m
-      expect(find.textContaining('0.0m away'), findsNothing);
-      expect(find.textContaining('5.4m away'), findsOneWidget);
+      expect(find.textContaining('0.0m'), findsNothing);
+      expect(find.textContaining('5.4m (±'), findsOneWidget);
 
       // Verify unlinking resets distance and candidate
       await tester.tap(find.text('Not now'));
       await tester.pumpAndSettle();
 
       expect(find.byType(SmartLinkCard), findsNothing);
-      expect(find.textContaining('5.4m away'), findsNothing);
+      expect(find.textContaining('5.4m (±'), findsNothing);
     });
   });
 

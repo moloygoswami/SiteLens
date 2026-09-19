@@ -11,7 +11,7 @@ class FakeSiteRepository implements SiteRepository {
   Future<List<SiteModel>> getAllSites({String? creatorId}) async => List.unmodifiable(_sites);
 
   @override
-  Future<SiteModel?> getSiteById(String id) async {
+  Future<SiteModel?> getSiteById(String id, {String? creatorId}) async {
     return _sites.where((s) => s.id == id).firstOrNull;
   }
 
@@ -31,7 +31,7 @@ class FakeSiteRepository implements SiteRepository {
   }
 
   @override
-  Future<bool> hasMediaForSite(String siteId) async => false;
+  Future<bool> hasMediaForSite(String siteId, {String? creatorId}) async => false;
 
   @override
   Future<void> seedDefaultSitesIfEmpty() async {
@@ -46,4 +46,7 @@ class FakeSiteRepository implements SiteRepository {
       );
     }
   }
+
+  @override
+  Future<List<SiteModel>> hydrateRemoteSites(String userId) async => [];
 }

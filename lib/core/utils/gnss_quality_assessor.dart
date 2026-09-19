@@ -59,8 +59,12 @@ class GnssQualityAssessment {
     final fixStatus = GPSUtils.evaluateAccuracy(accuracyMeters, hasFix: true);
     final gnss = gnssSnapshot ?? GnssSnapshot.unavailable;
     final isAvailable = gnss.isAvailable;
-    final used = isAvailable ? gnss.satellitesUsedInFix : 0;
-    final tracked = isAvailable ? gnss.satelliteCount : 0;
+    // A count the producer never reported stays unknown, and an unknown count
+    // can never establish multi-satellite verification: it collapses to the
+    // conservative 0 for this confidence heuristic only — the disclosed
+    // evidence telemetry preserves null (R10).
+    final used = isAvailable ? (gnss.satellitesUsedInFix ?? 0) : 0;
+    final tracked = isAvailable ? (gnss.satelliteCount ?? 0) : 0;
 
     final GnssFixConfidence confidence;
     if (isAvailable && used >= 4) {

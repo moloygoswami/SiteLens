@@ -74,12 +74,6 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
         creator_id: 'user-a',
         created_at: new Date(),
       });
-      await db.doc('sites/site-1/members/user-a').set({
-        user_id: 'user-a',
-        role: 'admin',
-        status: 'active',
-        joined_at: new Date(),
-      });
     });
 
     const hackerDb = testEnv.authenticatedContext('user-hacker', { email_verified: true }).firestore();
@@ -98,46 +92,32 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
   // ---------------------------------------------------------------------------
   // 3. Site Bootstrap Flow
   // ---------------------------------------------------------------------------
-  test('3. Site creator can bootstrap a new site and initialize their admin membership in a batch', async () => {
+  test('3. Site creator can bootstrap a new site directly (creator-owned v1)', async () => {
     const creatorDb = testEnv.authenticatedContext('user-creator', { email_verified: true }).firestore();
-    const batch = creatorDb.batch();
 
     const siteId = 'siteNewAutoId1234567';
     const siteRef = creatorDb.doc(`sites/${siteId}`);
-    const memberRef = creatorDb.doc(`sites/${siteId}/members/user-creator`);
 
     const now = new Date();
-    batch.set(siteRef, {
-      id: siteId,
-      creator_id: 'user-creator',
-      created_at: now,
-    });
-    batch.set(memberRef, {
-      user_id: 'user-creator',
-      role: 'admin',
-      status: 'active',
-      joined_at: now,
-    });
-
-    await assertSucceeds(batch.commit());
+    await assertSucceeds(
+      siteRef.set({
+        id: siteId,
+        creator_id: 'user-creator',
+        created_at: now,
+      })
+    );
   });
 
   // ---------------------------------------------------------------------------
   // 4. Active Membership Semantics
   // ---------------------------------------------------------------------------
-  test('4. Suspended member cannot read site media or access storage', async () => {
+  test('4. Non-creator cannot read site media or access storage', async () => {
     await testEnv.withSecurityRulesDisabled(async (context) => {
       const db = context.firestore();
       await db.doc('sites/site-1').set({
         id: 'site-1',
         creator_id: 'user-a',
         created_at: new Date(),
-      });
-      await db.doc('sites/site-1/members/user-suspended').set({
-        user_id: 'user-suspended',
-        role: 'inspector',
-        status: 'suspended', // Inactive
-        joined_at: new Date(),
       });
       await db.doc('sites/site-1/media/m1').set({
         id: 'm1',
@@ -154,26 +134,20 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
       });
     });
 
-    const suspendedDb = testEnv.authenticatedContext('user-suspended', { email_verified: true }).firestore();
-    await assertFails(suspendedDb.doc('sites/site-1/media/m1').get());
+    const otherDb = testEnv.authenticatedContext('user-other', { email_verified: true }).firestore();
+    await assertFails(otherDb.doc('sites/site-1/media/m1').get());
   });
 
   // ---------------------------------------------------------------------------
   // 5. Cross-Tenant Isolation
   // ---------------------------------------------------------------------------
-  test('5. Active member of Site A cannot read or write to Site B', async () => {
+  test('5. User A cannot read or write to User B site or media', async () => {
     await testEnv.withSecurityRulesDisabled(async (context) => {
       const db = context.firestore();
       await db.doc('sites/site-b').set({
         id: 'site-b',
         creator_id: 'user-b',
         created_at: new Date(),
-      });
-      await db.doc('sites/site-b/members/user-b').set({
-        user_id: 'user-b',
-        role: 'admin',
-        status: 'active',
-        joined_at: new Date(),
       });
       await db.doc('sites/site-b/media/mb1').set({
         id: 'mb1',
@@ -197,16 +171,10 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
   // ---------------------------------------------------------------------------
   // 6. Creator Spoofing Prevention
   // ---------------------------------------------------------------------------
-  test('6. Member cannot create media with a spoofed creator_id', async () => {
+  test('6. Non-creator cannot create media with a spoofed creator_id', async () => {
     await testEnv.withSecurityRulesDisabled(async (context) => {
       const db = context.firestore();
       await db.doc('sites/site-1').set({ id: 'site-1', creator_id: 'user-a', created_at: new Date() });
-      await db.doc('sites/site-1/members/user-inspector').set({
-        user_id: 'user-inspector',
-        role: 'inspector',
-        status: 'active',
-        joined_at: new Date(),
-      });
     });
 
     const inspectorDb = testEnv.authenticatedContext('user-inspector', { email_verified: true }).firestore();
@@ -233,17 +201,11 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
   // ---------------------------------------------------------------------------
   // 7. Forensic Field Tampering Prevention
   // ---------------------------------------------------------------------------
-  test('7. Immutable forensic fields (SHA-256, GPS, captured_at) cannot be modified', async () => {
+  test('7. Forensic fields are strictly IMMUTABLE: sha256_hash, lat, lon cannot be changed', async () => {
     const now = new Date();
     await testEnv.withSecurityRulesDisabled(async (context) => {
       const db = context.firestore();
-      await db.doc('sites/site-1').set({ id: 'site-1', creator_id: 'user-a', created_at: now });
-      await db.doc('sites/site-1/members/user-inspector').set({
-        user_id: 'user-inspector',
-        role: 'inspector',
-        status: 'active',
-        joined_at: now,
-      });
+      await db.doc('sites/site-1').set({ id: 'site-1', creator_id: 'user-inspector', created_at: now });
       await db.doc('sites/site-1/media/m1').set({
         id: 'm1',
         site_id: 'site-1',
@@ -282,17 +244,11 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
   // ---------------------------------------------------------------------------
   // 8. Mutable Workflow Fields Allowed
   // ---------------------------------------------------------------------------
-  test('8. Member can update mutable workflow fields (note, observation_type, activity_tag)', async () => {
+  test('8. Creator can update mutable workflow fields (note, observation_type, activity_tag)', async () => {
     const now = new Date();
     await testEnv.withSecurityRulesDisabled(async (context) => {
       const db = context.firestore();
-      await db.doc('sites/site-1').set({ id: 'site-1', creator_id: 'user-a', created_at: now });
-      await db.doc('sites/site-1/members/user-inspector').set({
-        user_id: 'user-inspector',
-        role: 'inspector',
-        status: 'active',
-        joined_at: now,
-      });
+      await db.doc('sites/site-1').set({ id: 'site-1', creator_id: 'user-inspector', created_at: now });
       await db.doc('sites/site-1/media/m1').set({
         id: 'm1',
         site_id: 'site-1',
@@ -325,29 +281,11 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
   // ---------------------------------------------------------------------------
   // 9. Soft-Delete Authorization
   // ---------------------------------------------------------------------------
-  test('9. Soft-delete is allowed by creator and admin, but denied for other inspectors', async () => {
+  test('9. Soft-delete is allowed by creator, but denied for other users', async () => {
     const now = new Date();
     await testEnv.withSecurityRulesDisabled(async (context) => {
       const db = context.firestore();
-      await db.doc('sites/site-1').set({ id: 'site-1', creator_id: 'user-admin', created_at: now });
-      await db.doc('sites/site-1/members/user-admin').set({
-        user_id: 'user-admin',
-        role: 'admin',
-        status: 'active',
-        joined_at: now,
-      });
-      await db.doc('sites/site-1/members/user-creator').set({
-        user_id: 'user-creator',
-        role: 'inspector',
-        status: 'active',
-        joined_at: now,
-      });
-      await db.doc('sites/site-1/members/user-other').set({
-        user_id: 'user-other',
-        role: 'inspector',
-        status: 'active',
-        joined_at: now,
-      });
+      await db.doc('sites/site-1').set({ id: 'site-1', creator_id: 'user-creator', created_at: now });
       await db.doc('sites/site-1/media/m1').set({
         id: 'm1',
         site_id: 'site-1',
@@ -365,9 +303,8 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
 
     const otherDb = testEnv.authenticatedContext('user-other', { email_verified: true }).firestore();
     const creatorDb = testEnv.authenticatedContext('user-creator', { email_verified: true }).firestore();
-    const adminDb = testEnv.authenticatedContext('user-admin', { email_verified: true }).firestore();
 
-    // 1. Other inspector cannot soft delete
+    // 1. Other user cannot soft delete
     await assertFails(
       otherDb.doc('sites/site-1/media/m1').update({
         is_deleted: true,
@@ -383,9 +320,9 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
       })
     );
 
-    // 3. Admin CAN un-delete or soft delete
-    await assertSucceeds(
-      adminDb.doc('sites/site-1/media/m1').update({
+    // 3. Other user CANNOT undelete
+    await assertFails(
+      otherDb.doc('sites/site-1/media/m1').update({
         is_deleted: false,
         updated_at: new Date(),
       })
@@ -399,17 +336,11 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
     const now = new Date();
     await testEnv.withSecurityRulesDisabled(async (context) => {
       const db = context.firestore();
-      await db.doc('sites/site-1').set({ id: 'site-1', creator_id: 'user-admin', created_at: now });
-      await db.doc('sites/site-1/members/user-admin').set({
-        user_id: 'user-admin',
-        role: 'admin',
-        status: 'active',
-        joined_at: now,
-      });
+      await db.doc('sites/site-1').set({ id: 'site-1', creator_id: 'user-creator', created_at: now });
       await db.doc('sites/site-1/media/m1').set({
         id: 'm1',
         site_id: 'site-1',
-        creator_id: 'user-admin',
+        creator_id: 'user-creator',
         sha256_hash: '1'.repeat(64),
         evidence_sha256_hash: '2'.repeat(64),
         lat: 22.56298,
@@ -421,8 +352,8 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
       });
     });
 
-    const adminDb = testEnv.authenticatedContext('user-admin', { email_verified: true }).firestore();
-    await assertFails(adminDb.doc('sites/site-1/media/m1').delete());
+    const creatorDb = testEnv.authenticatedContext('user-creator', { email_verified: true }).firestore();
+    await assertFails(creatorDb.doc('sites/site-1/media/m1').delete());
   });
 
   // ---------------------------------------------------------------------------
@@ -464,12 +395,6 @@ describe('SiteLens M6-A Firebase Security Hardening Test Suite', () => {
     await testEnv.withSecurityRulesDisabled(async (context) => {
       const db = context.firestore();
       await db.doc('sites/site-1').set({ id: 'site-1', creator_id: 'user-a', created_at: now });
-      await db.doc('sites/site-1/members/user-a').set({
-        user_id: 'user-a',
-        role: 'admin',
-        status: 'active',
-        joined_at: now,
-      });
     });
 
     const userADb = testEnv.authenticatedContext('user-a', { email_verified: true }).firestore();

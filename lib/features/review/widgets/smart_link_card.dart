@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 import '../../../app/theme.dart';
+import '../../../core/utils/gps_utils.dart';
 import '../../../domain/models/media_item.dart';
 
 class SmartLinkCard extends StatelessWidget {
   final MediaItem candidate;
-  final double distanceMeters;
+
+  /// Live distance from the current observation, or null when it has not been
+  /// established. An unknown distance is never substituted with 0 (R18).
+  final double? distanceMeters;
   final bool isLinked;
   final VoidCallback onLink;
   final VoidCallback onDismiss;
@@ -33,7 +37,14 @@ class SmartLinkCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final distanceStr = '${distanceMeters.toStringAsFixed(1)}m';
+    // R19: disclose the GNSS uncertainty alongside the live distance; an
+    // unestablished distance is stated as unknown rather than implied exact.
+    final distanceStr = GPSUtils.formatDistanceWithUncertainty(
+      distanceMeters,
+      accuracyMeters: candidate.accuracyM,
+    );
+    final distanceLabel =
+        distanceStr != null ? '$distanceStr away' : 'distance unknown';
     final timeStr = _formatTimeAgo(candidate.capturedAt);
     final activityStr = candidate.activityTag != null && candidate.activityTag!.isNotEmpty
         ? ' • ${candidate.activityTag}'
@@ -68,7 +79,7 @@ class SmartLinkCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    'Matched Non-Conformity ($distanceStr away, $timeStr$activityStr)',
+                    'Matched Non-Conformity ($distanceLabel, $timeStr$activityStr)',
                     style: const TextStyle(
                       fontFamily: 'monospace',
                       fontSize: 11,
@@ -126,7 +137,7 @@ class SmartLinkCard extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              'Nearby Non-Conformity photo, $distanceStr away, taken $timeStr$activityStr — select as BEFORE reference?',
+              'Nearby Non-Conformity photo, $distanceLabel, taken $timeStr$activityStr — select as BEFORE reference?',
               style: const TextStyle(
                 fontSize: 12,
                 color: AppColors.textPrimary,

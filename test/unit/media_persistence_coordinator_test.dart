@@ -324,7 +324,7 @@ void main() {
     test('Keep for later media is discoverable through the gallery stream', () async {
       await coordinator.keepForLater(interruptedPayload);
 
-      final watch = await mediaRepo.watchAllMedia(siteId: 'SITE_001').first;
+      final watch = await mediaRepo.watchAllMedia(siteId: 'SITE_001', creatorId: 'user-42').first;
       expect(watch.any((m) => m.id == 'interrupted-video-1'), isTrue);
       final inGallery = watch.firstWhere((m) => m.id == 'interrupted-video-1');
       expect(inGallery.type, MediaItemType.video);
@@ -626,7 +626,7 @@ void main() {
       ));
     }
 
-    test('Discovers deleted rows that are not mid-sync and scopes them to the creator', () async {
+    test('Discovers deleted rows that are not mid-sync and scopes them strictly to the creator', () async {
       await seedRow(id: 'm-synced-del', status: SyncStatusType.synced, deleted: true);
       await seedRow(id: 'm-failed-del', status: SyncStatusType.failed, deleted: true);
       await seedRow(id: 'm-pending-del', status: SyncStatusType.pending, deleted: true);
@@ -634,24 +634,27 @@ void main() {
       await seedRow(id: 'm-synced-live', status: SyncStatusType.synced, deleted: false);
       await seedRow(id: 'm-other-creator', status: SyncStatusType.synced, deleted: true, creatorId: 'user-2');
 
-      // Unfiltered: every deleted row except one currently mid-sync.
-      final all = await mediaRepo.getTombstoneSyncCandidates();
-      expect(all.map((i) => i.id), containsAll([
-        'm-synced-del',
-        'm-failed-del',
-        'm-pending-del',
-      ]));
-      expect(all.map((i) => i.id), isNot(contains('m-syncing-del')));
-      expect(all.map((i) => i.id), isNot(contains('m-synced-live')));
-      expect(all.length, 4); // includes m-other-creator
+      // Fail closed: an unauthenticated session (null/empty creatorId) must never
+      // surface another user's tombstones (R04).
+      expect(await mediaRepo.getTombstoneSyncCandidates(), isEmpty);
+      expect(await mediaRepo.getTombstoneSyncCandidates(creatorId: ''), isEmpty);
 
       // Creator scoping: the active session only sees its own tombstones.
       final scoped = await mediaRepo.getTombstoneSyncCandidates(creatorId: 'user-1');
       expect(scoped.length, 3);
+      expect(scoped.map((i) => i.id), containsAll([
+        'm-synced-del',
+        'm-failed-del',
+        'm-pending-del',
+      ]));
+      expect(scoped.map((i) => i.id), isNot(contains('m-syncing-del')));
+      expect(scoped.map((i) => i.id), isNot(contains('m-synced-live')));
       expect(scoped.map((i) => i.id), isNot(contains('m-other-creator')));
 
-      // The count stream reports the same candidate set size.
-      expect(await mediaRepo.watchTombstoneCandidateCount().first, 4);
+      // The count stream is creator-scoped and fails closed without a UID.
+      expect(await mediaRepo.watchTombstoneCandidateCount(creatorId: 'user-1').first, 3);
+      expect(await mediaRepo.watchTombstoneCandidateCount(creatorId: null).first, 0);
+      expect(await mediaRepo.watchTombstoneCandidateCount(creatorId: '').first, 0);
     });
 
     test('C-2: deletePermanently keeps a hidden tombstone row instead of destroying it (deferred cloud propagation)', () async {

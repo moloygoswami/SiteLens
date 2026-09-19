@@ -167,6 +167,7 @@ void main() {
     MediaItem? source, {
     bool isPicker = false,
     String? initialSiteId,
+    String? initialSiteCode,
     double? initialLat,
     double? initialLon,
     void Function(MediaItem)? onSelectCandidate,
@@ -184,6 +185,7 @@ void main() {
           sourceMedia: source,
           isPicker: isPicker,
           initialSiteId: initialSiteId,
+          initialSiteCode: initialSiteCode,
           initialLat: initialLat,
           initialLon: initialLon,
           onSelectCandidate: onSelectCandidate,
@@ -194,13 +196,17 @@ void main() {
 
   group('NearbySearchScreen Widget Tests', () {
     testWidgets('Renders NearbySearchScreen with source anchor, radius strip, and grouped results', (tester) async {
-      await tester.pumpWidget(createWidgetUnderTest(sourceItem));
+      // The caller supplies the canonical site code; the internal site id must
+      // never be rendered (R20).
+      await tester.pumpWidget(createWidgetUnderTest(sourceItem, initialSiteCode: '101'));
       await tester.pumpAndSettle();
 
       // Verify Header and Anchor
       expect(find.text('NEARBY EVIDENCE SEARCH'), findsOneWidget);
       expect(find.text('SOURCE ANCHOR'), findsOneWidget);
-      expect(find.text('• site-101'), findsOneWidget);
+      expect(find.text('• 101'), findsOneWidget);
+      expect(find.textContaining(testSiteId), findsNothing,
+          reason: 'R20: the internal site id is never user-facing');
 
       // Verify Radius presets
       expect(find.text('2m'), findsOneWidget);
@@ -217,17 +223,17 @@ void main() {
       expect(find.text('AFTER / RESOLUTION'), findsOneWidget);
       expect(find.text('PROGRESS DOCUMENTATION'), findsOneWidget);
 
-      // Verify Distance pills
-      expect(find.text('4.0m away'), findsOneWidget);
-      expect(find.text('8.0m away'), findsOneWidget);
-      expect(find.text('18.0m away'), findsOneWidget);
+      // Verify Distance pills disclose the GNSS uncertainty margin (R19)
+      expect(find.text('4.0m (±1.5m) away'), findsOneWidget);
+      expect(find.text('8.0m (±2.0m) away'), findsOneWidget);
+      expect(find.text('18.0m (±2.0m) away'), findsOneWidget);
 
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
     });
 
     testWidgets('Tapping a smaller radius chip (5m) contracts search boundary and updates results', (tester) async {
-      await tester.pumpWidget(createWidgetUnderTest(sourceItem));
+      await tester.pumpWidget(createWidgetUnderTest(sourceItem, initialSiteCode: '101'));
       await tester.pumpAndSettle();
 
       expect(find.text('3 ITEMS'), findsOneWidget);
@@ -238,9 +244,9 @@ void main() {
 
       // Only candidate-before-4m should remain
       expect(find.text('1 ITEMS'), findsOneWidget);
-      expect(find.text('4.0m away'), findsOneWidget);
-      expect(find.text('8.0m away'), findsNothing);
-      expect(find.text('18.0m away'), findsNothing);
+      expect(find.text('4.0m (±1.5m) away'), findsOneWidget);
+      expect(find.text('8.0m (±2.0m) away'), findsNothing);
+      expect(find.text('18.0m (±2.0m) away'), findsNothing);
 
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();

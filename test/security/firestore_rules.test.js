@@ -52,19 +52,14 @@ describe('SiteLens Security Rules Test Suite', () => {
         email_verified: false,
       });
       const db = unverifiedCtx.firestore();
-      const batch = db.batch();
       const siteId = 'siteUnverifiedId1234';
-      batch.set(db.doc(`sites/${siteId}`), {
-        creator_id: 'unverified_user',
-        name: 'Unauthorized Site',
-      });
-      batch.set(db.doc(`sites/${siteId}/members/unverified_user`), {
-        role: 'admin',
-        status: 'active',
-        user_id: 'unverified_user',
-      });
-
-      await assertFails(batch.commit());
+      await assertFails(
+        db.doc(`sites/${siteId}`).set({
+          id: siteId,
+          creator_id: 'unverified_user',
+          name: 'Unauthorized Site',
+        })
+      );
     });
 
     test('allows site creation when email_verified is true', async () => {
@@ -73,39 +68,27 @@ describe('SiteLens Security Rules Test Suite', () => {
         email_verified: true,
       });
       const db = verifiedCtx.firestore();
-      const batch = db.batch();
       const siteId = 'siteVerifiedId123456';
-      batch.set(db.doc(`sites/${siteId}`), {
-        creator_id: 'verified_user',
-        name: 'Authorized Site',
-      });
-      batch.set(db.doc(`sites/${siteId}/members/verified_user`), {
-        role: 'admin',
-        status: 'active',
-        user_id: 'verified_user',
-      });
-
-      await assertSucceeds(batch.commit());
+      await assertSucceeds(
+        db.doc(`sites/${siteId}`).set({
+          id: siteId,
+          creator_id: 'verified_user',
+          name: 'Authorized Site',
+        })
+      );
     });
 
-    test('rejects member bootstrap when email_verified is false', async () => {
-      // Seed site as admin
-      await testEnv.withSecurityRulesDisabled(async (context) => {
-        await context.firestore().doc('sites/siteTestSeed12345678').set({
-          creator_id: 'unverified_creator',
-        });
+    test('rejects member collection creation (no membership in v1 creator model)', async () => {
+      const verifiedCtx = testEnv.authenticatedContext('verified_user', {
+        email: 'verified@example.com',
+        email_verified: true,
       });
-
-      const unverifiedCtx = testEnv.authenticatedContext('unverified_creator', {
-        email_verified: false,
-      });
-      const db = unverifiedCtx.firestore();
-
+      const db = verifiedCtx.firestore();
       await assertFails(
-        db.doc('sites/siteTestSeed12345678/members/unverified_creator').set({
+        db.doc('sites/siteTestSeed12345678/members/verified_user').set({
           role: 'admin',
           status: 'active',
-          user_id: 'unverified_creator',
+          user_id: 'verified_user',
         })
       );
     });
@@ -117,41 +100,33 @@ describe('SiteLens Security Rules Test Suite', () => {
       const db = attackerCtx.firestore();
 
       // Attempt 1: Custom human-readable slug
-      const batch1 = db.batch();
-      batch1.set(db.doc('sites/target-enterprise-site'), {
-        creator_id: 'attacker_123',
-        name: 'Squatted Site',
-      });
-      batch1.set(db.doc('sites/target-enterprise-site/members/attacker_123'), {
-        role: 'admin',
-        status: 'active',
-        user_id: 'attacker_123',
-      });
-      await assertFails(batch1.commit());
+      await assertFails(
+        db.doc('sites/target-enterprise-site').set({
+          id: 'target-enterprise-site',
+          creator_id: 'attacker_123',
+          name: 'Squatted Site',
+        })
+      );
 
       // Attempt 2: Predictable short ID
-      const batch2 = db.batch();
-      batch2.set(db.doc('sites/site-1'), {
-        creator_id: 'attacker_123',
-        name: 'Squatted Site 1',
-      });
-      batch2.set(db.doc('sites/site-1/members/attacker_123'), {
-        role: 'admin',
-        status: 'active',
-        user_id: 'attacker_123',
-      });
-      await assertFails(batch2.commit());
+      await assertFails(
+        db.doc('sites/site-1').set({
+          id: 'site-1',
+          creator_id: 'attacker_123',
+          name: 'Squatted Site 1',
+        })
+      );
     });
 
-    test('NEGATIVE 2: Attacker cannot create a standalone site without atomic member bootstrap', async () => {
+    test('NEGATIVE 2: Attacker cannot create a site claiming another user as creator_id', async () => {
       const attackerCtx = testEnv.authenticatedContext('attacker_123', { email_verified: true });
       const db = attackerCtx.firestore();
       const validRandomSiteId = 'aB3dE5gH7jK9mN1pQ3rT';
 
-      // Standalone set() without creating member in batch
       await assertFails(
         db.doc(`sites/${validRandomSiteId}`).set({
-          creator_id: 'attacker_123',
+          id: validRandomSiteId,
+          creator_id: 'victim_456', // Spoofed creator_id!
           name: 'Standalone Site',
         })
       );
@@ -163,20 +138,16 @@ describe('SiteLens Security Rules Test Suite', () => {
       await testEnv.withSecurityRulesDisabled(async (context) => {
         const adminDb = context.firestore();
         await adminDb.doc(`sites/${validSiteId}`).set({
+          id: validSiteId,
           creator_id: 'victim_456',
           name: 'Legitimate Site',
-        });
-        await adminDb.doc(`sites/${validSiteId}/members/victim_456`).set({
-          role: 'admin',
-          status: 'active',
-          user_id: 'victim_456',
         });
       });
 
       const attackerCtx = testEnv.authenticatedContext('attacker_123', { email_verified: true });
       const db = attackerCtx.firestore();
 
-      // Attacker attempts to add self as admin to existing site
+      // Attacker attempts to add self as member to existing site
       await assertFails(
         db.doc(`sites/${validSiteId}/members/attacker_123`).set({
           role: 'admin',
@@ -191,31 +162,23 @@ describe('SiteLens Security Rules Test Suite', () => {
       await testEnv.withSecurityRulesDisabled(async (context) => {
         const adminDb = context.firestore();
         await adminDb.doc(`sites/${validSiteId}`).set({
+          id: validSiteId,
           creator_id: 'victim_456',
           name: 'Legitimate Site',
-        });
-        await adminDb.doc(`sites/${validSiteId}/members/victim_456`).set({
-          role: 'admin',
-          status: 'active',
-          user_id: 'victim_456',
         });
       });
 
       const attackerCtx = testEnv.authenticatedContext('attacker_123', { email_verified: true });
       const db = attackerCtx.firestore();
 
-      // Attempt overwrite with batch
-      const batch = db.batch();
-      batch.set(db.doc(`sites/${validSiteId}`), {
-        creator_id: 'attacker_123',
-        name: 'Overwritten Site',
-      });
-      batch.set(db.doc(`sites/${validSiteId}/members/attacker_123`), {
-        role: 'admin',
-        status: 'active',
-        user_id: 'attacker_123',
-      });
-      await assertFails(batch.commit());
+      // Attempt overwrite
+      await assertFails(
+        db.doc(`sites/${validSiteId}`).set({
+          id: validSiteId,
+          creator_id: 'attacker_123',
+          name: 'Overwritten Site',
+        })
+      );
 
       // Attempt direct update
       await assertFails(
@@ -249,29 +212,22 @@ describe('SiteLens Security Rules Test Suite', () => {
       );
     });
 
-    test('POSITIVE 6: Legitimate user can create site + admin membership via atomic batch with 20-char auto-ID', async () => {
+    test('POSITIVE 6: Legitimate user can create creator-owned site with 20-char auto-ID', async () => {
       const ownerCtx = testEnv.authenticatedContext('legit_owner', { email_verified: true });
       const db = ownerCtx.firestore();
       const validAutoId = 'xK9mN2pQ4rT6vX8zY0wB';
 
-      const batch = db.batch();
-      batch.set(db.doc(`sites/${validAutoId}`), {
-        id: validAutoId,
-        creator_id: 'legit_owner',
-        name: 'Metro Pier Expansion',
-        created_at: new Date(),
-      });
-      batch.set(db.doc(`sites/${validAutoId}/members/legit_owner`), {
-        user_id: 'legit_owner',
-        role: 'admin',
-        status: 'active',
-        joined_at: new Date(),
-      });
-
-      await assertSucceeds(batch.commit());
+      await assertSucceeds(
+        db.doc(`sites/${validAutoId}`).set({
+          id: validAutoId,
+          creator_id: 'legit_owner',
+          name: 'Metro Pier Expansion',
+          created_at: new Date(),
+        })
+      );
     });
 
-    test('POSITIVE 7: Legitimate site admin can invite and provision new active members', async () => {
+    test('POSITIVE 7: Site invitations and member subcollections are completely rejected in v1', async () => {
       const siteId = 'validSiteAdminTest12';
       await testEnv.withSecurityRulesDisabled(async (context) => {
         const adminDb = context.firestore();
@@ -280,18 +236,13 @@ describe('SiteLens Security Rules Test Suite', () => {
           creator_id: 'legit_admin',
           name: 'Admin Test Site',
         });
-        await adminDb.doc(`sites/${siteId}/members/legit_admin`).set({
-          user_id: 'legit_admin',
-          role: 'admin',
-          status: 'active',
-        });
       });
 
       const adminCtx = testEnv.authenticatedContext('legit_admin', { email_verified: true });
       const db = adminCtx.firestore();
 
-      // Admin invites inspector_1
-      await assertSucceeds(
+      // Admin attempts to invite inspector_1 -> FAILS (no members subcollection)
+      await assertFails(
         db.doc(`sites/${siteId}/members/inspector_1`).set({
           user_id: 'inspector_1',
           role: 'member',
@@ -300,7 +251,7 @@ describe('SiteLens Security Rules Test Suite', () => {
       );
     });
 
-    test('POSITIVE 8: Non-admin member cannot invite new members', async () => {
+    test('POSITIVE 8: Non-creator user cannot read another users site', async () => {
       const siteId = 'validSiteMemberTest1';
       await testEnv.withSecurityRulesDisabled(async (context) => {
         const adminDb = context.firestore();
@@ -309,32 +260,16 @@ describe('SiteLens Security Rules Test Suite', () => {
           creator_id: 'site_admin_user',
           name: 'Member Test Site',
         });
-        await adminDb.doc(`sites/${siteId}/members/site_admin_user`).set({
-          user_id: 'site_admin_user',
-          role: 'admin',
-          status: 'active',
-        });
-        await adminDb.doc(`sites/${siteId}/members/standard_member`).set({
-          user_id: 'standard_member',
-          role: 'member',
-          status: 'active',
-        });
       });
 
       const memberCtx = testEnv.authenticatedContext('standard_member', { email_verified: true });
       const db = memberCtx.firestore();
 
-      // Standard member tries to invite outsider
-      await assertFails(
-        db.doc(`sites/${siteId}/members/outsider_user`).set({
-          user_id: 'outsider_user',
-          role: 'member',
-          status: 'active',
-        })
-      );
+      // Non-creator tries to read site -> FAILS
+      await assertFails(db.doc(`sites/${siteId}`).get());
     });
 
-    test('POSITIVE 9: Offline-created site can be provisioned atomically and subsequently accept media document synchronization', async () => {
+    test('POSITIVE 9: Offline-created site can be provisioned by creator and subsequently accept media document synchronization', async () => {
       const creatorCtx = testEnv.authenticatedContext('inspector_alice', { email_verified: true });
       const db = creatorCtx.firestore();
       const siteId = 'offlineSiteProv12345';
@@ -360,21 +295,16 @@ describe('SiteLens Security Rules Test Suite', () => {
         })
       );
 
-      // 2. CloudSyncService provisions site + admin membership in an atomic batch
-      const batch = db.batch();
-      batch.set(db.doc(`sites/${siteId}`), {
-        id: siteId,
-        creator_id: 'inspector_alice',
-        name: 'Salt Lake Elevated Viaduct',
-        site_code: 'SL-501',
-        address: 'Sector 5, Kolkata',
-      });
-      batch.set(db.doc(`sites/${siteId}/members/inspector_alice`), {
-        user_id: 'inspector_alice',
-        role: 'admin',
-        status: 'active',
-      });
-      await assertSucceeds(batch.commit());
+      // 2. Creator provisions site directly
+      await assertSucceeds(
+        db.doc(`sites/${siteId}`).set({
+          id: siteId,
+          creator_id: 'inspector_alice',
+          name: 'Salt Lake Elevated Viaduct',
+          site_code: 'SL-501',
+          address: 'Sector 5, Kolkata',
+        })
+      );
 
       // 3. Subsequent media synchronization now SUCCEEDS under the legitimately provisioned site
       await assertSucceeds(
@@ -398,109 +328,130 @@ describe('SiteLens Security Rules Test Suite', () => {
     });
   });
 
-  describe('vuln-0009: Adminless Site Lifecycle & Last-Admin Protection', () => {
-    const siteId = 'siteAdminProtection12';
+  describe('WAVE A: Creator-Owned Model & Cross-User Security Regressions (R01, R04, R05)', () => {
+    const siteIdA = 'siteUserACollsn12345';
+    const siteIdB = 'siteUserBCollsn67890';
+    const mediaIdA = 'mediaUserARegress123';
+    const mediaHash = 'a'.repeat(64);
+    const evidenceHash = 'b'.repeat(64);
+
     beforeEach(async () => {
       await testEnv.withSecurityRulesDisabled(async (context) => {
         const db = context.firestore();
-        await db.doc(`sites/${siteId}`).set({ id: siteId, creator_id: 'admin_alice', name: 'Protection Test Site' });
-        await db.doc(`sites/${siteId}/members/admin_alice`).set({
-          user_id: 'admin_alice',
-          role: 'admin',
-          status: 'active',
-          display_name: 'Alice Admin',
+        // User A creates site and evidence
+        await db.doc(`sites/${siteIdA}`).set({
+          id: siteIdA,
+          creator_id: 'user_a',
+          name: 'Metro Sector 5 Pier 12',
+          site_code: 'SEC-05-P12',
+          address: 'Sector 5, Salt Lake, Kolkata',
+          created_at: new Date(),
         });
-        await db.doc(`sites/${siteId}/members/member_bob`).set({
-          user_id: 'member_bob',
-          role: 'member',
-          status: 'active',
-          display_name: 'Bob Member',
+        await db.doc(`sites/${siteIdA}/media/${mediaIdA}`).set({
+          id: mediaIdA,
+          site_id: siteIdA,
+          creator_id: 'user_a',
+          type: 'photo',
+          lat: 22.5726,
+          lon: 88.3639,
+          accuracy_m: 3.5,
+          low_accuracy: false,
+          activity_tag: 'Pillar Reinforcement',
+          observation_type: 'progress',
+          note: 'Foundations check',
+          captured_at: '2026-08-31T12:00:00.000Z',
+          sha256_hash: mediaHash,
+          evidence_sha256_hash: evidenceHash,
+          captured_address: 'Sector 5, Salt Lake, Kolkata',
+          is_deleted: false,
+          storage_original_path: `sites/${siteIdA}/media/${mediaIdA}/original`,
+          storage_thumbnail_path: `sites/${siteIdA}/media/${mediaIdA}/thumbnail`,
         });
       });
     });
 
-    test('MUST DENY: Sole admin self-delete (prevents adminless site)', async () => {
-      const aliceDb = testEnv.authenticatedContext('admin_alice', { email_verified: true }).firestore();
-      await assertFails(
-        aliceDb.doc(`sites/${siteId}/members/admin_alice`).delete()
-      );
+    test('REGRESSION 1: USER B cannot read USER A site despite matching site attributes', async () => {
+      const userBDb = testEnv.authenticatedContext('user_b', { email_verified: true }).firestore();
+      await assertFails(userBDb.doc(`sites/${siteIdA}`).get());
     });
 
-    test('MUST DENY: Sole admin self-demotion to standard member', async () => {
-      const aliceDb = testEnv.authenticatedContext('admin_alice', { email_verified: true }).firestore();
-      await assertFails(
-        aliceDb.doc(`sites/${siteId}/members/admin_alice`).update({
-          role: 'member',
-        })
-      );
+    test('REGRESSION 2: USER B cannot read USER A evidence metadata', async () => {
+      const userBDb = testEnv.authenticatedContext('user_b', { email_verified: true }).firestore();
+      await assertFails(userBDb.doc(`sites/${siteIdA}/media/${mediaIdA}`).get());
     });
 
-    test('MUST DENY: Sole admin self-deactivation / suspension', async () => {
-      const aliceDb = testEnv.authenticatedContext('admin_alice', { email_verified: true }).firestore();
-      await assertFails(
-        aliceDb.doc(`sites/${siteId}/members/admin_alice`).update({
-          status: 'suspended',
-        })
-      );
+    test('REGRESSION 3: USER B cannot modify USER A site', async () => {
+      const userBDb = testEnv.authenticatedContext('user_b', { email_verified: true }).firestore();
+      await assertFails(userBDb.doc(`sites/${siteIdA}`).update({ name: 'Tampered Site Name' }));
     });
 
-    test('MUST DENY: Non-admin member attempting admin deletion', async () => {
-      const bobDb = testEnv.authenticatedContext('member_bob', { email_verified: true }).firestore();
-      await assertFails(
-        bobDb.doc(`sites/${siteId}/members/admin_alice`).delete()
-      );
+    test('REGRESSION 4: USER B cannot modify USER A evidence metadata', async () => {
+      const userBDb = testEnv.authenticatedContext('user_b', { email_verified: true }).firestore();
+      await assertFails(userBDb.doc(`sites/${siteIdA}/media/${mediaIdA}`).update({ note: 'Tampered note' }));
     });
 
-    test('MUST ALLOW: Admin promotes another member to admin', async () => {
-      const aliceDb = testEnv.authenticatedContext('admin_alice', { email_verified: true }).firestore();
+    test('REGRESSION 5: USER B cannot delete USER A site', async () => {
+      const userBDb = testEnv.authenticatedContext('user_b', { email_verified: true }).firestore();
+      await assertFails(userBDb.doc(`sites/${siteIdA}`).delete());
+    });
+
+    test('REGRESSION 6: USER B cannot delete USER A evidence', async () => {
+      const userBDb = testEnv.authenticatedContext('user_b', { email_verified: true }).firestore();
+      await assertFails(userBDb.doc(`sites/${siteIdA}/media/${mediaIdA}`).delete());
+    });
+
+    test('REGRESSION 7: USER B cannot access USER A Storage artifacts (read/write/delete)', async () => {
+      const userBStorage = testEnv.authenticatedContext('user_b', { email_verified: true }).storage();
+      const origRef = userBStorage.ref(`sites/${siteIdA}/media/${mediaIdA}/original`);
+      await assertFails(origRef.getDownloadURL());
+      await assertFails(origRef.put(Buffer.from('tampered'), { contentType: 'image/jpeg' }));
+      await assertFails(origRef.delete());
+    });
+
+    test('REGRESSION 8: USER A cannot mutate creator_id on site document', async () => {
+      const userADb = testEnv.authenticatedContext('user_a', { email_verified: true }).firestore();
+      await assertFails(userADb.doc(`sites/${siteIdA}`).update({ creator_id: 'user_b' }));
+    });
+
+    test('REGRESSION 9: USER A cannot mutate creator_id on media document', async () => {
+      const userADb = testEnv.authenticatedContext('user_a', { email_verified: true }).firestore();
+      await assertFails(userADb.doc(`sites/${siteIdA}/media/${mediaIdA}`).update({ creator_id: 'user_b' }));
+    });
+
+    test('REGRESSION 10: Physical deletion of sites is forbidden even for creator', async () => {
+      const userADb = testEnv.authenticatedContext('user_a', { email_verified: true }).firestore();
+      await assertFails(userADb.doc(`sites/${siteIdA}`).delete());
+    });
+
+    test('REGRESSION 11: Physical deletion of media is forbidden even for creator', async () => {
+      const userADb = testEnv.authenticatedContext('user_a', { email_verified: true }).firestore();
+      await assertFails(userADb.doc(`sites/${siteIdA}/media/${mediaIdA}`).delete());
+    });
+
+    test('REGRESSION 12: USER B can independently create own site with identical site code, name, and address', async () => {
+      const userBDb = testEnv.authenticatedContext('user_b', { email_verified: true }).firestore();
+      // User B creates site with identical site code and address
       await assertSucceeds(
-        aliceDb.doc(`sites/${siteId}/members/member_bob`).update({
-          role: 'admin',
+        userBDb.doc(`sites/${siteIdB}`).set({
+          id: siteIdB,
+          creator_id: 'user_b',
+          name: 'Metro Sector 5 Pier 12',
+          site_code: 'SEC-05-P12',
+          address: 'Sector 5, Salt Lake, Kolkata',
+          created_at: new Date(),
         })
       );
-    });
-
-    test('MUST ALLOW: Successor admin removes predecessor during authorized handoff', async () => {
-      // Bob is now admin
-      await testEnv.withSecurityRulesDisabled(async (context) => {
-        const db = context.firestore();
-        await db.doc(`sites/${siteId}/members/member_bob`).update({ role: 'admin' });
-      });
-
-      const bobDb = testEnv.authenticatedContext('member_bob', { email_verified: true }).firestore();
-      await assertSucceeds(
-        bobDb.doc(`sites/${siteId}/members/admin_alice`).delete()
-      );
-    });
-
-    test('MUST ALLOW: Admin updates non-privilege metadata while remaining active admin', async () => {
-      const aliceDb = testEnv.authenticatedContext('admin_alice', { email_verified: true }).firestore();
-      await assertSucceeds(
-        aliceDb.doc(`sites/${siteId}/members/admin_alice`).update({
-          role: 'admin',
-          status: 'active',
-          display_name: 'Alice Principal Inspector',
-        })
-      );
+      // User A cannot read User B's site
+      const userADb = testEnv.authenticatedContext('user_a', { email_verified: true }).firestore();
+      await assertFails(userADb.doc(`sites/${siteIdB}`).get());
     });
   });
 
   describe('vuln-0007: Media Broken Object-Level Authorization (BOLA)', () => {
     beforeEach(async () => {
-      // Seed site with admin U1 and standard member U2, plus media M1 owned by U1
       await testEnv.withSecurityRulesDisabled(async (context) => {
         const db = context.firestore();
-        await db.doc('sites/site_s1').set({ creator_id: 'U1' });
-        await db.doc('sites/site_s1/members/U1').set({
-          role: 'admin',
-          status: 'active',
-          user_id: 'U1',
-        });
-        await db.doc('sites/site_s1/members/U2').set({
-          role: 'member',
-          status: 'active',
-          user_id: 'U2',
-        });
+        await db.doc('sites/site_s1').set({ id: 'site_s1', creator_id: 'U1' });
         await db.doc('sites/site_s1/media/M1').set({
           id: 'M1',
           site_id: 'site_s1',
@@ -522,7 +473,7 @@ describe('SiteLens Security Rules Test Suite', () => {
       });
     });
 
-    test('DENIES non-creator non-admin member U2 from modifying U1 note or activity tag', async () => {
+    test('DENIES non-creator user U2 from modifying U1 note or activity tag', async () => {
       const u2Ctx = testEnv.authenticatedContext('U2', { email_verified: true });
       const db = u2Ctx.firestore();
 
@@ -575,7 +526,7 @@ describe('SiteLens Security Rules Test Suite', () => {
       );
     });
 
-    test('ALLOWS site admin to update metadata and perform soft-deletion', async () => {
+    test('ALLOWS creator U1 to update metadata and perform soft-deletion', async () => {
       const u1Ctx = testEnv.authenticatedContext('U1', { email_verified: true });
       const db = u1Ctx.firestore();
 
@@ -602,12 +553,7 @@ describe('SiteLens Security Rules Test Suite', () => {
     beforeEach(async () => {
       await testEnv.withSecurityRulesDisabled(async (context) => {
         const db = context.firestore();
-        await db.doc('sites/site_s1').set({ creator_id: 'U1' });
-        await db.doc('sites/site_s1/members/U1').set({
-          role: 'admin',
-          status: 'active',
-          user_id: 'U1',
-        });
+        await db.doc('sites/site_s1').set({ id: 'site_s1', creator_id: 'U1' });
       });
     });
 
@@ -616,26 +562,33 @@ describe('SiteLens Security Rules Test Suite', () => {
       const db = u1Ctx.firestore();
 
       const validTypes = ['progress', 'nonConformity', 'closed', 'material', 'general'];
-      for (const obsType of validTypes) {
-        await assertSucceeds(
-          db.doc(`sites/site_s1/media/M_valid_${obsType}`).set({
-            id: `M_valid_${obsType}`,
-            site_id: 'site_s1',
-            creator_id: 'U1',
-            type: 'photo',
-            sha256_hash: 'c'.repeat(64),
-            evidence_sha256_hash: 'd'.repeat(64),
-            lat: 37.7749,
-            lon: -122.4194,
-            accuracy_m: 4.2,
-            low_accuracy: false,
-            observation_type: obsType,
-            is_deleted: false,
-            storage_original_path: `sites/site_s1/media/M_valid_${obsType}/original`,
-            storage_thumbnail_path: `sites/site_s1/media/M_valid_${obsType}/thumbnail`,
-            originalUri: `media/orig_M_valid_${obsType}.jpg`,
-          })
-        );
+
+      for (let i = 0; i < validTypes.length; i++) {
+        const type = validTypes[i];
+        const docId = `media_enum_${i}`;
+
+        const payload = {
+          id: docId,
+          site_id: 'site_s1',
+          creator_id: 'U1',
+          type: 'photo',
+          lat: 22.5726,
+          lon: 88.3639,
+          accuracy_m: 5.0,
+          low_accuracy: false,
+          activity_tag: 'Inspection',
+          observation_type: type,
+          note: `Testing observation type: ${type}`,
+          captured_at: '2026-08-31T12:00:00.000Z',
+          sha256_hash: 'a'.repeat(64),
+          evidence_sha256_hash: 'b'.repeat(64),
+          captured_address: 'Sector 5, Salt Lake, Kolkata',
+          is_deleted: false,
+          storage_original_path: `sites/site_s1/media/${docId}/original`,
+          storage_thumbnail_path: `sites/site_s1/media/${docId}/thumbnail`,
+        };
+
+        await assertSucceeds(db.doc(`sites/site_s1/media/${docId}`).set(payload));
       }
     });
 
@@ -643,26 +596,34 @@ describe('SiteLens Security Rules Test Suite', () => {
       const u1Ctx = testEnv.authenticatedContext('U1', { email_verified: true });
       const db = u1Ctx.firestore();
 
-      const invalidTypes = ['open', 'resolved', 'issue', 'before_after', 'random_invalid', ''];
-      for (const badType of invalidTypes) {
-        await assertFails(
-          db.doc(`sites/site_s1/media/M_bad_${badType || 'empty'}`).set({
-            id: `M_bad_${badType || 'empty'}`,
-            site_id: 'site_s1',
-            creator_id: 'U1',
-            type: 'photo',
-            sha256_hash: 'c'.repeat(64),
-            evidence_sha256_hash: 'd'.repeat(64),
-            lat: 37.7749,
-            lon: -122.4194,
-            accuracy_m: 5.0,
-            low_accuracy: false,
-            observation_type: badType,
-            is_deleted: false,
-            storage_original_path: `sites/site_s1/media/M_bad_${badType || 'empty'}/original`,
-            storage_thumbnail_path: `sites/site_s1/media/M_bad_${badType || 'empty'}/thumbnail`,
-          })
-        );
+      const invalidTypes = ['open', 'resolved', 'pending', 'inspection', 'hazard'];
+
+      for (let i = 0; i < invalidTypes.length; i++) {
+        const type = invalidTypes[i];
+        const docId = `media_invalid_${i}`;
+
+        const payload = {
+          id: docId,
+          site_id: 'site_s1',
+          creator_id: 'U1',
+          type: 'photo',
+          lat: 22.5726,
+          lon: 88.3639,
+          accuracy_m: 5.0,
+          low_accuracy: false,
+          activity_tag: 'Inspection',
+          observation_type: type,
+          note: `Testing invalid observation type: ${type}`,
+          captured_at: '2026-08-31T12:00:00.000Z',
+          sha256_hash: 'a'.repeat(64),
+          evidence_sha256_hash: 'b'.repeat(64),
+          captured_address: 'Sector 5, Salt Lake, Kolkata',
+          is_deleted: false,
+          storage_original_path: `sites/site_s1/media/${docId}/original`,
+          storage_thumbnail_path: `sites/site_s1/media/${docId}/thumbnail`,
+        };
+
+        await assertFails(db.doc(`sites/site_s1/media/${docId}`).set(payload));
       }
     });
 
@@ -670,46 +631,58 @@ describe('SiteLens Security Rules Test Suite', () => {
       const u1Ctx = testEnv.authenticatedContext('U1', { email_verified: true });
       const db = u1Ctx.firestore();
 
-      await assertFails(
-        db.doc('sites/site_s1/media/M_bad_acc').set({
-          id: 'M_bad_acc',
-          site_id: 'site_s1',
-          creator_id: 'U1',
-          type: 'photo',
-          sha256_hash: 'c'.repeat(64),
-          evidence_sha256_hash: 'd'.repeat(64),
-          lat: 37.7749,
-          lon: -122.4194,
-          accuracy_m: 9999.0, // Exceeds 500m bound
-          low_accuracy: true,
-          is_deleted: false,
-          storage_original_path: 'sites/site_s1/media/M_bad_acc/original',
-          storage_thumbnail_path: 'sites/site_s1/media/M_bad_acc/thumbnail',
-        })
-      );
+      const docId = 'media_high_accuracy';
+      const payload = {
+        id: docId,
+        site_id: 'site_s1',
+        creator_id: 'U1',
+        type: 'photo',
+        lat: 22.5726,
+        lon: 88.3639,
+        accuracy_m: 501.0,
+        low_accuracy: true,
+        activity_tag: 'Inspection',
+        observation_type: 'progress',
+        note: 'High accuracy test',
+        captured_at: '2026-08-31T12:00:00.000Z',
+        sha256_hash: 'a'.repeat(64),
+        evidence_sha256_hash: 'b'.repeat(64),
+        captured_address: 'Sector 5, Salt Lake, Kolkata',
+        is_deleted: false,
+        storage_original_path: `sites/site_s1/media/${docId}/original`,
+        storage_thumbnail_path: `sites/site_s1/media/${docId}/thumbnail`,
+      };
+
+      await assertFails(db.doc(`sites/site_s1/media/${docId}`).set(payload));
     });
 
     test('REJECTS evidence creation with invalid SHA-256 length', async () => {
       const u1Ctx = testEnv.authenticatedContext('U1', { email_verified: true });
       const db = u1Ctx.firestore();
 
-      await assertFails(
-        db.doc('sites/site_s1/media/M_bad_sha').set({
-          id: 'M_bad_sha',
-          site_id: 'site_s1',
-          creator_id: 'U1',
-          type: 'photo',
-          sha256_hash: 'short_hash', // Invalid length
-          evidence_sha256_hash: 'd'.repeat(64),
-          lat: 37.7749,
-          lon: -122.4194,
-          accuracy_m: 5.0,
-          low_accuracy: false,
-          is_deleted: false,
-          storage_original_path: 'sites/site_s1/media/M_bad_sha/original',
-          storage_thumbnail_path: 'sites/site_s1/media/M_bad_sha/thumbnail',
-        })
-      );
+      const docId = 'media_bad_sha';
+      const payload = {
+        id: docId,
+        site_id: 'site_s1',
+        creator_id: 'U1',
+        type: 'photo',
+        lat: 22.5726,
+        lon: 88.3639,
+        accuracy_m: 5.0,
+        low_accuracy: false,
+        activity_tag: 'Inspection',
+        observation_type: 'progress',
+        note: 'Bad SHA test',
+        captured_at: '2026-08-31T12:00:00.000Z',
+        sha256_hash: 'a'.repeat(63),
+        evidence_sha256_hash: 'b'.repeat(64),
+        captured_address: 'Sector 5, Salt Lake, Kolkata',
+        is_deleted: false,
+        storage_original_path: `sites/site_s1/media/${docId}/original`,
+        storage_thumbnail_path: `sites/site_s1/media/${docId}/thumbnail`,
+      };
+
+      await assertFails(db.doc(`sites/site_s1/media/${docId}`).set(payload));
     });
   });
 
@@ -719,15 +692,13 @@ describe('SiteLens Security Rules Test Suite', () => {
       await testEnv.withSecurityRulesDisabled(async (context) => {
         const db = context.firestore();
         await db.doc(`sites/${siteId}`).set({ id: siteId, creator_id: 'U_creator', name: 'Media Test Site' });
-        await db.doc(`sites/${siteId}/members/U_creator`).set({ role: 'admin', status: 'active', user_id: 'U_creator' });
-        await db.doc(`sites/${siteId}/members/U_member`).set({ role: 'member', status: 'active', user_id: 'U_member' });
       });
     });
 
     const validPayload = (id) => ({
       id,
       site_id: siteId,
-      creator_id: 'U_member',
+      creator_id: 'U_creator',
       type: 'photo',
       lat: 22.5726,
       lon: 88.3639,
@@ -747,183 +718,124 @@ describe('SiteLens Security Rules Test Suite', () => {
     });
 
     test('NEGATIVE 1 & 2: REJECTS non-hex SHA-256 hashes (PoC "x" * 64)', async () => {
-      const db = testEnv.authenticatedContext('U_member', { email_verified: true }).firestore();
+      const db = testEnv.authenticatedContext('U_creator', { email_verified: true }).firestore();
 
-      // sha256_hash with non-hex 'x'
       await assertFails(
-        db.doc(`sites/${siteId}/media/M_bad_hex1`).set({
-          ...validPayload('M_bad_hex1'),
+        db.doc(`sites/${siteId}/media/M_bad_sha`).set({
+          ...validPayload('M_bad_sha'),
           sha256_hash: 'x'.repeat(64),
         })
       );
 
-      // evidence_sha256_hash with non-hex 'x'
       await assertFails(
-        db.doc(`sites/${siteId}/media/M_bad_hex2`).set({
-          ...validPayload('M_bad_hex2'),
-          evidence_sha256_hash: 'x'.repeat(64),
+        db.doc(`sites/${siteId}/media/M_bad_evid_sha`).set({
+          ...validPayload('M_bad_evid_sha'),
+          evidence_sha256_hash: 'g'.repeat(64),
         })
       );
     });
 
     test('NEGATIVE 3: REJECTS malformed timestamp and semantically impossible calendar components', async () => {
-      const db = testEnv.authenticatedContext('U_member', { email_verified: true }).firestore();
+      const db = testEnv.authenticatedContext('U_creator', { email_verified: true }).firestore();
 
-      // Arbitrary non-ISO string
-      await assertFails(
-        db.doc(`sites/${siteId}/media/M_bad_time1`).set({
-          ...validPayload('M_bad_time1'),
-          captured_at: 'invalid-timestamp-string',
-        })
-      );
+      const impossibleDates = [
+        'invalid-timestamp-string',
+        '3000-99-99T99:99:99',
+        '2026-13-15T10:00:00Z',
+        '2026-00-15T10:00:00Z',
+        '2026-08-32T10:00:00Z',
+        '2026-08-00T10:00:00Z',
+        '2026-08-15T24:00:00Z',
+        '2026-08-15T10:60:00Z',
+        '2026-08-15T10:00:60Z',
+      ];
 
-      // Strix PoC: 3000-99-99T99:99:99
-      await assertFails(
-        db.doc(`sites/${siteId}/media/M_bad_time2`).set({
-          ...validPayload('M_bad_time2'),
-          captured_at: '3000-99-99T99:99:99',
-        })
-      );
-
-      // Invalid month 13
-      await assertFails(
-        db.doc(`sites/${siteId}/media/M_bad_time3`).set({
-          ...validPayload('M_bad_time3'),
-          captured_at: '2026-13-15T10:00:00Z',
-        })
-      );
-
-      // Invalid month 00
-      await assertFails(
-        db.doc(`sites/${siteId}/media/M_bad_time4`).set({
-          ...validPayload('M_bad_time4'),
-          captured_at: '2026-00-15T10:00:00Z',
-        })
-      );
-
-      // Invalid day 32
-      await assertFails(
-        db.doc(`sites/${siteId}/media/M_bad_time5`).set({
-          ...validPayload('M_bad_time5'),
-          captured_at: '2026-08-32T10:00:00Z',
-        })
-      );
-
-      // Invalid day 00
-      await assertFails(
-        db.doc(`sites/${siteId}/media/M_bad_time6`).set({
-          ...validPayload('M_bad_time6'),
-          captured_at: '2026-08-00T10:00:00Z',
-        })
-      );
-
-      // Invalid hour 24
-      await assertFails(
-        db.doc(`sites/${siteId}/media/M_bad_time7`).set({
-          ...validPayload('M_bad_time7'),
-          captured_at: '2026-08-15T24:00:00Z',
-        })
-      );
-
-      // Invalid minute 60
-      await assertFails(
-        db.doc(`sites/${siteId}/media/M_bad_time8`).set({
-          ...validPayload('M_bad_time8'),
-          captured_at: '2026-08-15T10:60:00Z',
-        })
-      );
-
-      // Invalid second 60
-      await assertFails(
-        db.doc(`sites/${siteId}/media/M_bad_time9`).set({
-          ...validPayload('M_bad_time9'),
-          captured_at: '2026-08-15T10:00:60Z',
-        })
-      );
+      for (let i = 0; i < impossibleDates.length; i++) {
+        const badDate = impossibleDates[i];
+        await assertFails(
+          db.doc(`sites/${siteId}/media/M_bad_date_${i}`).set({
+            ...validPayload(`M_bad_date_${i}`),
+            captured_at: badDate,
+          })
+        );
+      }
     });
 
     test('NEGATIVE 4: REJECTS absurd/unrealistic altitude (e.g. 99999m)', async () => {
-      const db = testEnv.authenticatedContext('U_member', { email_verified: true }).firestore();
+      const db = testEnv.authenticatedContext('U_creator', { email_verified: true }).firestore();
 
       await assertFails(
         db.doc(`sites/${siteId}/media/M_bad_alt`).set({
           ...validPayload('M_bad_alt'),
-          altitude: 99999,
+          altitude: 99999.0,
         })
       );
     });
 
     test('NEGATIVE 5: REJECTS oversized captured address (> 500 chars)', async () => {
-      const db = testEnv.authenticatedContext('U_member', { email_verified: true }).firestore();
+      const db = testEnv.authenticatedContext('U_creator', { email_verified: true }).firestore();
 
       await assertFails(
-        db.doc(`sites/${siteId}/media/M_bad_addr`).set({
-          ...validPayload('M_bad_addr'),
+        db.doc(`sites/${siteId}/media/M_big_addr`).set({
+          ...validPayload('M_big_addr'),
           captured_address: 'A'.repeat(501),
         })
       );
     });
 
     test('NEGATIVE 6: REJECTS oversized note (> 2000 chars)', async () => {
-      const db = testEnv.authenticatedContext('U_member', { email_verified: true }).firestore();
+      const db = testEnv.authenticatedContext('U_creator', { email_verified: true }).firestore();
 
       await assertFails(
-        db.doc(`sites/${siteId}/media/M_bad_note`).set({
-          ...validPayload('M_bad_note'),
+        db.doc(`sites/${siteId}/media/M_big_note`).set({
+          ...validPayload('M_big_note'),
           note: 'N'.repeat(2001),
         })
       );
     });
 
     test('NEGATIVE 7: REJECTS oversized activity tag (> 100 chars)', async () => {
-      const db = testEnv.authenticatedContext('U_member', { email_verified: true }).firestore();
+      const db = testEnv.authenticatedContext('U_creator', { email_verified: true }).firestore();
 
       await assertFails(
-        db.doc(`sites/${siteId}/media/M_bad_tag`).set({
-          ...validPayload('M_bad_tag'),
+        db.doc(`sites/${siteId}/media/M_big_tag`).set({
+          ...validPayload('M_big_tag'),
           activity_tag: 'T'.repeat(101),
         })
       );
     });
 
     test('NEGATIVE 8: REJECTS invalid linked_media_id (cross-site path / path traversal)', async () => {
-      const db = testEnv.authenticatedContext('U_member', { email_verified: true }).firestore();
+      const db = testEnv.authenticatedContext('U_creator', { email_verified: true }).firestore();
 
       await assertFails(
         db.doc(`sites/${siteId}/media/M_bad_link`).set({
           ...validPayload('M_bad_link'),
-          linked_media_id: 'otherSite12345/media/doc999',
+          linked_media_id: '../other_site/media/victim_doc',
         })
       );
     });
 
     test('NEGATIVE 9 & 10: REJECTS unexpected extra fields (device_model, is_admin, secret_injection)', async () => {
-      const db = testEnv.authenticatedContext('U_member', { email_verified: true }).firestore();
+      const db = testEnv.authenticatedContext('U_creator', { email_verified: true }).firestore();
 
       await assertFails(
-        db.doc(`sites/${siteId}/media/M_bad_extra1`).set({
-          ...validPayload('M_bad_extra1'),
-          device_model: 'SuperPhone Pro',
+        db.doc(`sites/${siteId}/media/M_extra_f1`).set({
+          ...validPayload('M_extra_f1'),
+          device_model: 'Pixel 9 Pro',
         })
       );
 
       await assertFails(
-        db.doc(`sites/${siteId}/media/M_bad_extra2`).set({
-          ...validPayload('M_bad_extra2'),
-          is_admin: true,
-        })
-      );
-
-      await assertFails(
-        db.doc(`sites/${siteId}/media/M_bad_extra3`).set({
-          ...validPayload('M_bad_extra3'),
+        db.doc(`sites/${siteId}/media/M_extra_f2`).set({
+          ...validPayload('M_extra_f2'),
           secret_injection: 'DROP TABLE',
         })
       );
     });
 
     test('POSITIVE 11: ALLOWS legitimate media document creation with canonical schema and valid ISO-8601 formats', async () => {
-      const db = testEnv.authenticatedContext('U_member', { email_verified: true }).firestore();
+      const db = testEnv.authenticatedContext('U_creator', { email_verified: true }).firestore();
 
       // Fractional seconds UTC (Dart DateTime.toUtc().toIso8601String())
       await assertSucceeds(
@@ -951,19 +863,19 @@ describe('SiteLens Security Rules Test Suite', () => {
     });
 
     test('POSITIVE 12: ALLOWS legitimate same-site linked_media_id and negative elevation (e.g. underground mining/tunnels)', async () => {
-      const db = testEnv.authenticatedContext('U_member', { email_verified: true }).firestore();
+      const db = testEnv.authenticatedContext('U_creator', { email_verified: true }).firestore();
 
       await assertSucceeds(
         db.doc(`sites/${siteId}/media/M_legit_2`).set({
           ...validPayload('M_legit_2'),
           linked_media_id: 'M_legit_1',
-          altitude: -45.5, // 45.5m below sea level (underground metro/tunnel)
+          altitude: -45.5,
         })
       );
     });
 
     test('POSITIVE 13: ALLOWS legitimate note and observation_type updates while PROTECTING immutable forensic fields', async () => {
-      const db = testEnv.authenticatedContext('U_member', { email_verified: true }).firestore();
+      const db = testEnv.authenticatedContext('U_creator', { email_verified: true }).firestore();
 
       // Create base document first
       await assertSucceeds(
@@ -978,17 +890,47 @@ describe('SiteLens Security Rules Test Suite', () => {
         })
       );
 
-      // Attempted tampering of immutable forensic field (sha256_hash)
+      // Illegitimate update of immutable forensic field (GPS) -> FAILS
+      await assertFails(
+        db.doc(`sites/${siteId}/media/M_update_target`).update({
+          lat: 0.0,
+        })
+      );
+
+      // Illegitimate update of immutable SHA-256 -> FAILS
       await assertFails(
         db.doc(`sites/${siteId}/media/M_update_target`).update({
           sha256_hash: 'c'.repeat(64),
         })
       );
+    });
 
-      // Attempted tampering of immutable location (lat)
+    test('NEGATIVE 14: Non-creator U_other cannot create media on U_creator site', async () => {
+      const db = testEnv.authenticatedContext('U_other', { email_verified: true }).firestore();
       await assertFails(
-        db.doc(`sites/${siteId}/media/M_update_target`).update({
-          lat: 0.0,
+        db.doc(`sites/${siteId}/media/M_other`).set({
+          ...validPayload('M_other'),
+          creator_id: 'U_other',
+        })
+      );
+    });
+
+    test('R16 POSITIVE: creator may record the canonical evidence artifact path', async () => {
+      const db = testEnv.authenticatedContext('U_creator', { email_verified: true }).firestore();
+      await assertSucceeds(
+        db.doc(`sites/${siteId}/media/M_evid_path`).set({
+          ...validPayload('M_evid_path'),
+          storage_evidence_path: `sites/${siteId}/media/M_evid_path/evidence`,
+        })
+      );
+    });
+
+    test('R16 NEGATIVE: a mismatched evidence artifact path is rejected', async () => {
+      const db = testEnv.authenticatedContext('U_creator', { email_verified: true }).firestore();
+      await assertFails(
+        db.doc(`sites/${siteId}/media/M_evid_bad`).set({
+          ...validPayload('M_evid_bad'),
+          storage_evidence_path: `sites/${siteId}/media/SOMEONE_ELSE/evidence`,
         })
       );
     });
@@ -998,12 +940,8 @@ describe('SiteLens Security Rules Test Suite', () => {
     beforeEach(async () => {
       await testEnv.withSecurityRulesDisabled(async (context) => {
         const adminDb = context.firestore();
-        // Setup site s1
-        await adminDb.doc('sites/site_s1').set({ name: 'Alpha Site', creator_id: 'U1' });
-        // Setup members: U1 (active admin), U2 (active member), U_suspended (suspended member)
-        await adminDb.doc('sites/site_s1/members/U1').set({ role: 'admin', email: 'u1@example.com', status: 'active' });
-        await adminDb.doc('sites/site_s1/members/U2').set({ role: 'member', email: 'u2@example.com', status: 'active' });
-        await adminDb.doc('sites/site_s1/members/U_suspended').set({ role: 'member', email: 'suspended@example.com', status: 'suspended' });
+        // Setup site s1 owned by U1
+        await adminDb.doc('sites/site_s1').set({ id: 'site_s1', name: 'Alpha Site', creator_id: 'U1' });
         // Setup media document authored by U1
         await adminDb.doc('sites/site_s1/media/M1').set({
           id: 'M1',
@@ -1012,10 +950,12 @@ describe('SiteLens Security Rules Test Suite', () => {
           type: 'photo',
           is_deleted: false,
         });
-        // Setup media document authored by U_suspended
-        await adminDb.doc('sites/site_s1/media/M_susp').set({
+
+        // Setup site s2 owned by U_suspended
+        await adminDb.doc('sites/site_s2').set({ id: 'site_s2', name: 'Suspended Site', creator_id: 'U_suspended' });
+        await adminDb.doc('sites/site_s2/media/M_susp').set({
           id: 'M_susp',
-          site_id: 'site_s1',
+          site_id: 'site_s2',
           creator_id: 'U_suspended',
           type: 'photo',
           is_deleted: false,
@@ -1028,7 +968,6 @@ describe('SiteLens Security Rules Test Suite', () => {
       const storage = u1Ctx.storage();
       const fileRef = storage.ref('sites/site_s1/media/M1/original');
 
-      // Attempt read metadata / download URL check
       await assertSucceeds(fileRef.getDownloadURL().catch(() => 'url_ok'));
     });
 
@@ -1040,15 +979,15 @@ describe('SiteLens Security Rules Test Suite', () => {
       await assertFails(fileRef.getDownloadURL());
     });
 
-    test('DENIES suspended member from reading Storage evidence (vuln-0002)', async () => {
-      const suspCtx = testEnv.authenticatedContext('U_suspended', { email_verified: true });
+    test('DENIES non-creator user U_other from reading Storage evidence on site_s1', async () => {
+      const suspCtx = testEnv.authenticatedContext('U_other', { email_verified: true });
       const storage = suspCtx.storage();
       const fileRef = storage.ref('sites/site_s1/media/M1/original');
 
       await assertFails(fileRef.getDownloadURL());
     });
 
-    test('DENIES suspended member from writing Storage evidence (vuln-0002)', async () => {
+    test('DENIES non-creator user U_suspended from writing Storage evidence on U1 site (site_s1)', async () => {
       const suspCtx = testEnv.authenticatedContext('U_suspended', { email_verified: true });
       const storage = suspCtx.storage();
       const fileRef = storage.ref('sites/site_s1/media/M_susp/original');
@@ -1070,7 +1009,7 @@ describe('SiteLens Security Rules Test Suite', () => {
       const u2Ctx = testEnv.authenticatedContext('U2', { email_verified: true });
       const storage = u2Ctx.storage();
       const fileRef = storage.ref('sites/site_s1/media/M1/original');
-      const dummyData = Buffer.from('attacker-injected-data');
+      const dummyData = Buffer.from('test-image-binary-data');
 
       await assertFails(fileRef.put(dummyData, { contentType: 'image/jpeg' }));
     });
@@ -1079,7 +1018,7 @@ describe('SiteLens Security Rules Test Suite', () => {
       const u3Ctx = testEnv.authenticatedContext('U3', { email_verified: true });
       const storage = u3Ctx.storage();
       const fileRef = storage.ref('sites/site_s1/media/M1/original');
-      const dummyData = Buffer.from('outsider-data');
+      const dummyData = Buffer.from('test-image-binary-data');
 
       await assertFails(fileRef.put(dummyData, { contentType: 'image/jpeg' }));
     });
@@ -1087,13 +1026,40 @@ describe('SiteLens Security Rules Test Suite', () => {
     test('DENIES upload if media document does not exist yet (strictly enforces Firestore pre-creation)', async () => {
       const u1Ctx = testEnv.authenticatedContext('U1', { email_verified: true });
       const storage = u1Ctx.storage();
-      const fileRef = storage.ref('sites/site_s1/media/M_nonexistent/original');
+      const fileRef = storage.ref('sites/site_s1/media/M_NON_EXISTENT/original');
       const dummyData = Buffer.from('test-image-binary-data');
 
       await assertFails(fileRef.put(dummyData, { contentType: 'image/jpeg' }));
     });
 
-    test('DENIES non-admin member from deleting storage objects (immutability)', async () => {
+    test('R16: ALLOWS creator U1 to create the cloud-authoritative evidence artifact', async () => {
+      const u1Ctx = testEnv.authenticatedContext('U1', { email_verified: true });
+      const fileRef = u1Ctx.storage().ref('sites/site_s1/media/M1/evidence');
+
+      await assertSucceeds(
+        fileRef.put(Buffer.from('evidence-bytes'), { contentType: 'image/jpeg' })
+      );
+    });
+
+    test('R16: DENIES a non-JPEG evidence artifact', async () => {
+      const u1Ctx = testEnv.authenticatedContext('U1', { email_verified: true });
+      const fileRef = u1Ctx.storage().ref('sites/site_s1/media/M1/evidence');
+
+      await assertFails(
+        fileRef.put(Buffer.from('evidence-bytes'), { contentType: 'video/mp4' })
+      );
+    });
+
+    test('R16: DENIES a non-creator writing the evidence artifact', async () => {
+      const u2Ctx = testEnv.authenticatedContext('U2', { email_verified: true });
+      const fileRef = u2Ctx.storage().ref('sites/site_s1/media/M1/evidence');
+
+      await assertFails(
+        fileRef.put(Buffer.from('evidence-bytes'), { contentType: 'image/jpeg' })
+      );
+    });
+
+    test('DENIES user from deleting storage objects (immutability)', async () => {
       const u1Ctx = testEnv.authenticatedContext('U1', { email_verified: true });
       const storage = u1Ctx.storage();
       const fileRef = storage.ref('sites/site_s1/media/M1/original');
@@ -1106,12 +1072,8 @@ describe('SiteLens Security Rules Test Suite', () => {
     beforeEach(async () => {
       await testEnv.withSecurityRulesDisabled(async (context) => {
         const adminDb = context.firestore();
-        // Setup site s_read
-        await adminDb.doc('sites/s_read').set({ name: 'Read Auth Site', creator_id: 'admin_user' });
-        // Setup members: admin_user (admin), inspector_a (creator of doc A), inspector_b (standard member)
-        await adminDb.doc('sites/s_read/members/admin_user').set({ role: 'admin', email: 'admin@example.com', status: 'active' });
-        await adminDb.doc('sites/s_read/members/inspector_a').set({ role: 'member', email: 'a@example.com', status: 'active' });
-        await adminDb.doc('sites/s_read/members/inspector_b').set({ role: 'member', email: 'b@example.com', status: 'active' });
+        // Setup site s_read owned by inspector_a
+        await adminDb.doc('sites/s_read').set({ id: 's_read', name: 'Read Auth Site', creator_id: 'inspector_a' });
 
         // Setup media document created by inspector_a
         await adminDb.doc('sites/s_read/media/doc_a').set({
@@ -1140,18 +1102,18 @@ describe('SiteLens Security Rules Test Suite', () => {
       await assertSucceeds(db.doc('sites/s_read/media/doc_a').get());
     });
 
-    test('2. Non-creator active member cannot read another users Firestore media metadata', async () => {
+    test('2. Non-creator cannot read another users Firestore media metadata', async () => {
       const bCtx = testEnv.authenticatedContext('inspector_b', { email_verified: true });
       const db = bCtx.firestore();
 
       await assertFails(db.doc('sites/s_read/media/doc_a').get());
     });
 
-    test('3. Site Admin can read any Firestore media metadata in site', async () => {
+    test('3. Non-creator cannot read another users Firestore media metadata even if claiming admin', async () => {
       const adminCtx = testEnv.authenticatedContext('admin_user', { email_verified: true });
       const db = adminCtx.firestore();
 
-      await assertSucceeds(db.doc('sites/s_read/media/doc_a').get());
+      await assertFails(db.doc('sites/s_read/media/doc_a').get());
     });
 
     test('4. Non-member cannot read Firestore media metadata', async () => {
@@ -1177,12 +1139,12 @@ describe('SiteLens Security Rules Test Suite', () => {
       await assertFails(fileRef.getDownloadURL());
     });
 
-    test('7. Admin can read Storage objects', async () => {
+    test('7. Other user cannot read Storage objects even if claiming admin', async () => {
       const adminCtx = testEnv.authenticatedContext('admin_user', { email_verified: true });
       const storage = adminCtx.storage();
       const fileRef = storage.ref('sites/s_read/media/doc_a/original');
 
-      await assertSucceeds(fileRef.getDownloadURL().catch(() => 'url_ok'));
+      await assertFails(fileRef.getDownloadURL());
     });
 
     test('8. Missing media document fails closed on Storage read', async () => {
@@ -1200,6 +1162,108 @@ describe('SiteLens Security Rules Test Suite', () => {
       // Scoped query mirroring gallery_controller / sync query
       const query = db.collection('sites/s_read/media').where('creator_id', '==', 'inspector_a');
       await assertSucceeds(query.get());
+    });
+
+    test('10. Creator query scoped by creator_id succeeds against sites collection', async () => {
+      const aCtx = testEnv.authenticatedContext('inspector_a', { email_verified: true });
+      const db = aCtx.firestore();
+
+      const query = db.collection('sites').where('creator_id', '==', 'inspector_a');
+      const snap = await assertSucceeds(query.get());
+      assert.strictEqual(snap.docs.length, 1);
+      assert.strictEqual(snap.docs[0].id, 's_read');
+    });
+
+    test('11. CollectionGroup members query is rejected in v1 (no membership collection)', async () => {
+      const aCtx = testEnv.authenticatedContext('inspector_a', { email_verified: true });
+      const db = aCtx.firestore();
+
+      const query = db.collectionGroup('members').where('user_id', '==', 'inspector_a');
+      await assertFails(query.get());
+    });
+
+    test('12. Outsider collectionGroup query for another user is rejected', async () => {
+      const outsiderCtx = testEnv.authenticatedContext('outsider_user', { email_verified: true });
+      const db = outsiderCtx.firestore();
+
+      const query = db.collectionGroup('members').where('user_id', '==', 'inspector_a');
+      await assertFails(query.get());
+    });
+  });
+
+  describe('WAVE B: audio-track disclosure (R09) & compass heading (R10) schema', () => {
+    const siteId = 'siteWaveBFixture1234';
+
+    const baseMedia = (mediaId) => ({
+      id: mediaId,
+      site_id: siteId,
+      creator_id: 'user_wave_b',
+      type: 'video',
+      lat: 22.5726,
+      lon: 88.3639,
+      accuracy_m: 3.5,
+      low_accuracy: false,
+      captured_at: '2026-08-31T12:00:00.000Z',
+      sha256_hash: 'a'.repeat(64),
+      evidence_sha256_hash: 'b'.repeat(64),
+      is_deleted: false,
+      storage_original_path: `sites/${siteId}/media/${mediaId}/original`,
+      storage_thumbnail_path: `sites/${siteId}/media/${mediaId}/thumbnail`,
+    });
+
+    beforeEach(async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await context.firestore().doc(`sites/${siteId}`).set({
+          id: siteId,
+          creator_id: 'user_wave_b',
+          name: 'Wave B Site',
+          site_code: 'WVB-01',
+          address: 'Wave B Road',
+          created_at: new Date(),
+        });
+      });
+    });
+
+    test('R09/R10 POSITIVE: creator may persist has_audio_track and heading_degrees', async () => {
+      const db = testEnv.authenticatedContext('user_wave_b', { email_verified: true }).firestore();
+      await assertSucceeds(
+        db.doc(`sites/${siteId}/media/m_waveb_ok`).set({
+          ...baseMedia('m_waveb_ok'),
+          has_audio_track: true,
+          heading_degrees: 187.5,
+        })
+      );
+    });
+
+    test('R09/R10 POSITIVE: the new fields are optional and may be null (unknown)', async () => {
+      const db = testEnv.authenticatedContext('user_wave_b', { email_verified: true }).firestore();
+      await assertSucceeds(
+        db.doc(`sites/${siteId}/media/m_waveb_null`).set({
+          ...baseMedia('m_waveb_null'),
+          has_audio_track: null,
+          heading_degrees: null,
+        })
+      );
+    });
+
+    test('R10 NEGATIVE: an out-of-range heading is rejected', async () => {
+      const db = testEnv.authenticatedContext('user_wave_b', { email_verified: true }).firestore();
+      await assertFails(
+        db.doc(`sites/${siteId}/media/m_waveb_bad_heading`).set({
+          ...baseMedia('m_waveb_bad_heading'),
+          heading_degrees: 400.0,
+        })
+      );
+    });
+
+    test('R09 NEGATIVE: a non-boolean has_audio_track is rejected', async () => {
+      const db = testEnv.authenticatedContext('user_wave_b', { email_verified: true }).firestore();
+      await assertFails(
+        db.doc(`sites/${siteId}/media/m_waveb_bad_audio`).set({
+          ...baseMedia('m_waveb_bad_audio'),
+          has_audio_track: 'yes',
+        })
+      );
     });
   });
 });

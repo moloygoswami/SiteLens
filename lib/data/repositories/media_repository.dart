@@ -46,6 +46,7 @@ abstract class MediaRepository {
     required double centerLon,
     required String siteId,
     required String activityTag,
+    required DateTime capturedBefore,
     double radiusMeters = 10.0,
     String? currentMediaId,
     String? creatorId,
@@ -80,7 +81,8 @@ abstract class MediaRepository {
 
   /// Counts [getTombstoneSyncCandidates] rows so the sync coordinator can
   /// edge-trigger a cycle when a previously-synced item is soft-deleted.
-  Stream<int> watchTombstoneCandidateCount();
+  /// Scoped strictly to the authenticated creator (R04); null/empty UID → 0.
+  Stream<int> watchTombstoneCandidateCount({String? creatorId});
 
   Future<void> removeFromGallery(String mediaId);
   Future<void> deletePermanently(String mediaId);
@@ -102,6 +104,14 @@ class LocalMediaRepository implements MediaRepository {
 
   LocalMediaRepository(this._db, {EvidenceStorageService? storageService})
       : _storageService = storageService ?? EvidenceStorageService();
+
+  /// Deterministic sentinel instant for a malformed/absent `captured_at`.
+  ///
+  /// R26: a corrupt timestamp must never resolve to `DateTime.now()` — that
+  /// would make ordering and filtering depend on wall-clock time. Epoch marks
+  /// the row as "timestamp unknown" as a fixed sentinel without fabricating a
+  /// real capture instant.
+  static final DateTime _unknownCapturedAt = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
 
   @override
   Future<void> insertMedia(MediaItem item) async {
@@ -178,6 +188,8 @@ class LocalMediaRepository implements MediaRepository {
             synced: drift.Value(item.syncStatus.toInt()),
             isDeleted: drift.Value(item.isDeleted ? 1 : 0),
             tombstoneReconciled: drift.Value(item.tombstoneReconciled ? 1 : 0),
+            hasAudioTrack: drift.Value(item.hasAudioTrack == null ? null : (item.hasAudioTrack! ? 1 : 0)),
+            headingDegrees: drift.Value(item.headingDegrees),
           ),
         );
   }
@@ -203,8 +215,13 @@ class LocalMediaRepository implements MediaRepository {
 
   @override
   Stream<List<MediaItem>> watchAllMedia({String? siteId, String? activity, ObservationType? observationType, bool? lowAccuracyOnly, String? creatorId}) {
+    if (creatorId == null || creatorId.isEmpty) {
+      // Fail closed: Never emit media across users or when unauthenticated
+      return Stream.value(const []);
+    }
     final query = _db.select(_db.media)
       ..where((tbl) => tbl.isDeleted.equals(0))
+      ..where((tbl) => tbl.creatorId.equals(creatorId))
       // Newest-first History semantics with a deterministic tiebreaker so records
       // sharing an identical captured_at always appear in a stable order.
       ..orderBy([
@@ -224,22 +241,28 @@ class LocalMediaRepository implements MediaRepository {
     if (lowAccuracyOnly == true) {
       query.where((tbl) => tbl.lowAccuracy.equals(1));
     }
-    if (creatorId != null && creatorId.isNotEmpty) {
-      query.where((tbl) => tbl.creatorId.equals(creatorId));
-    }
 
     return query.watch().map((list) => list.map(_entryToModel).toList());
   }
 
   @override
   Future<List<MediaItem>> searchMedia({required String query, String? siteId, String? creatorId}) async {
+    if (creatorId == null || creatorId.isEmpty) {
+      // Fail closed: Never return media across users or when unauthenticated
+      return const [];
+    }
     final cleanQuery = query.toLowerCase().trim();
-    final select = _db.select(_db.media)..where((tbl) => tbl.isDeleted.equals(0));
+    final select = _db.select(_db.media)
+      ..where((tbl) => tbl.isDeleted.equals(0))
+      ..where((tbl) => tbl.creatorId.equals(creatorId))
+      // R26: deterministic ordering — the authoritative captured_at DESC order
+      // with a stable id ASC tie-breaker, independent of database return order.
+      ..orderBy([
+        (tbl) => drift.OrderingTerm.desc(tbl.capturedAt),
+        (tbl) => drift.OrderingTerm.asc(tbl.id),
+      ]);
     if (siteId != null && siteId.isNotEmpty) {
       select.where((tbl) => tbl.siteId.equals(siteId));
-    }
-    if (creatorId != null && creatorId.isNotEmpty) {
-      select.where((tbl) => tbl.creatorId.equals(creatorId));
     }
 
     final entries = await select.get();
@@ -264,6 +287,7 @@ class LocalMediaRepository implements MediaRepository {
     String? excludeMediaId,
     String? creatorId,
     bool requireCreator = true,
+    DateTime? capturedBefore,
   }) async {
     // Defense-in-depth: Fail closed if creatorId is required but omitted
     if (requireCreator && (creatorId == null || creatorId.isEmpty)) {
@@ -285,10 +309,6 @@ class LocalMediaRepository implements MediaRepository {
       );
 
     if (creatorId != null && creatorId.isNotEmpty) {
-      // Ownership parity with the sync/ownership queries: legacy rows stamped
-      // before creator attribution existed carry NULL and must remain visible
-      // to their site's spatial searches (LAT-001), while rows of a different
-      // creator stay excluded (multi-user isolation).
       query.where((tbl) => tbl.creatorId.equals(creatorId) | tbl.creatorId.isNull());
     }
     if (siteId != null && siteId.isNotEmpty) {
@@ -309,8 +329,25 @@ class LocalMediaRepository implements MediaRepository {
     // Step 3: Exact Haversine distance refinement & radius filter
     final results = <NearbyMediaResult>[];
     for (final candidate in candidates) {
+      // R19: a synthetic (0,0) pair is never a valid captured location.
+      if (candidate.lat == 0.0 && candidate.lon == 0.0) continue;
+
+      // R17: a candidate may only precede an observation when its authoritative
+      // capture timestamp is strictly earlier. A missing/unparseable timestamp
+      // is not temporal authority, so it can never be classified as BEFORE.
+      if (capturedBefore != null) {
+        final candidateCapturedAt = DateTime.tryParse(candidate.capturedAt);
+        if (candidateCapturedAt == null) continue;
+        if (!candidateCapturedAt.toUtc().isBefore(capturedBefore.toUtc())) continue;
+      }
+
       final distance = SpatialMathUtils.haversineDistanceMeters(centerLat, centerLon, candidate.lat, candidate.lon);
-      if (distance <= radiusMeters) {
+
+      // R19: spatial uncertainty bounds. The candidate's own GNSS accuracy is
+      // part of the radius test, so a low-accuracy position is neither excluded
+      // nor presented as more precise than the receiver established.
+      final uncertainty = candidate.accuracyM ?? 0.0;
+      if (distance <= radiusMeters + uncertainty) {
         results.add(NearbyMediaResult(
           item: _entryToModel(candidate),
           distanceMeters: distance,
@@ -358,6 +395,7 @@ class LocalMediaRepository implements MediaRepository {
     required double centerLon,
     required String siteId,
     required String activityTag,
+    required DateTime capturedBefore,
     double radiusMeters = 10.0,
     String? currentMediaId,
     String? creatorId,
@@ -378,6 +416,7 @@ class LocalMediaRepository implements MediaRepository {
         excludeMediaId: currentMediaId,
         creatorId: creatorId,
         requireCreator: requireCreator,
+        capturedBefore: capturedBefore,
       );
 
       for (final match in exactActivityMatches) {
@@ -398,6 +437,7 @@ class LocalMediaRepository implements MediaRepository {
       excludeMediaId: currentMediaId,
       creatorId: creatorId,
       requireCreator: requireCreator,
+      capturedBefore: capturedBefore,
     );
 
     for (final match in fallbackMatches) {
@@ -440,6 +480,18 @@ class LocalMediaRepository implements MediaRepository {
           entry.siteId != linkedEntry.siteId) {
         throw MediaPersistenceException('Site isolation violation: Cannot link media belonging to different site');
       }
+
+      // R17: temporal precedence is authoritative at the persistence boundary.
+      // A candidate captured at or after the observation can never be its BEFORE.
+      final sourceCapturedAt = DateTime.tryParse(entry.capturedAt);
+      final candidateCapturedAt = DateTime.tryParse(linkedEntry.capturedAt);
+      if (sourceCapturedAt == null ||
+          candidateCapturedAt == null ||
+          !candidateCapturedAt.toUtc().isBefore(sourceCapturedAt.toUtc())) {
+        throw MediaPersistenceException(
+          'Temporal precedence violation: a BEFORE Non-Conformity must be captured strictly earlier than the observation it precedes.',
+        );
+      }
     }
 
     await (_db.update(_db.media)..where((tbl) => tbl.id.equals(mediaId))).write(
@@ -452,16 +504,17 @@ class LocalMediaRepository implements MediaRepository {
 
   @override
   Future<Set<String>> getResolvedMediaIds({required String siteId, String? creatorId}) async {
+    if (creatorId == null || creatorId.isEmpty) {
+      // Fail closed: never resolve another user's linked evidence
+      return const <String>{};
+    }
     final resolvedQuery = _db.selectOnly(_db.media)
       ..addColumns([_db.media.linkedMediaId])
       ..where(_db.media.siteId.equals(siteId) &
           _db.media.observationType.equals(ObservationType.closed.name) &
           _db.media.linkedMediaId.isNotNull() &
-          _db.media.isDeleted.equals(0));
-
-    if (creatorId != null && creatorId.isNotEmpty) {
-      resolvedQuery.where(_db.media.creatorId.equals(creatorId));
-    }
+          _db.media.isDeleted.equals(0) &
+          _db.media.creatorId.equals(creatorId));
 
     final resolvedRows = await resolvedQuery.get();
 
@@ -511,6 +564,16 @@ class LocalMediaRepository implements MediaRepository {
           existing.siteId != linkedEntry.siteId) {
         throw MediaPersistenceException('Site isolation violation: Cannot link media belonging to different site');
       }
+
+      // R17: temporal precedence at the persistence boundary.
+      final candidateCapturedAt = DateTime.tryParse(linkedEntry.capturedAt);
+      if (existing == null ||
+          candidateCapturedAt == null ||
+          !candidateCapturedAt.toUtc().isBefore(existing.capturedAt.toUtc())) {
+        throw MediaPersistenceException(
+          'Temporal precedence violation: a BEFORE Non-Conformity must be captured strictly earlier than the observation it precedes.',
+        );
+      }
     }
 
     await (_db.update(_db.media)..where((tbl) => tbl.id.equals(mediaId))).write(
@@ -533,38 +596,46 @@ class LocalMediaRepository implements MediaRepository {
 
   @override
   Stream<int> watchUnsyncedCount({String? creatorId}) {
-    final query = _db.selectOnly(_db.media)
-      ..addColumns([_db.media.id.count()]);
-
-    if (creatorId != null && creatorId.isNotEmpty) {
-      query.where(_db.media.isDeleted.equals(0) & _db.media.synced.equals(0) & (_db.media.creatorId.equals(creatorId) | _db.media.creatorId.isNull()));
-    } else {
-      query.where(_db.media.isDeleted.equals(0) & _db.media.synced.equals(0));
+    if (creatorId == null || creatorId.isEmpty) {
+      // Fail closed: No unauthenticated counting
+      return Stream.value(0);
     }
+    final query = _db.selectOnly(_db.media)
+      ..addColumns([_db.media.id.count()])
+      ..where(_db.media.isDeleted.equals(0) &
+          _db.media.synced.equals(0) &
+          _db.media.creatorId.equals(creatorId));
 
     return query.map((row) => row.read(_db.media.id.count()) ?? 0).watchSingle();
   }
 
   @override
   Future<List<MediaItem>> getUnsyncedMedia({String? creatorId}) async {
-    final query = _db.select(_db.media)..where((tbl) => tbl.isDeleted.equals(0) & tbl.synced.equals(0));
-    if (creatorId != null && creatorId.isNotEmpty) {
-      query.where((tbl) => tbl.creatorId.equals(creatorId) | tbl.creatorId.isNull());
+    if (creatorId == null || creatorId.isEmpty) {
+      // Fail closed: Never return unsynced media across users or when unauthenticated
+      return const [];
     }
+    final query = _db.select(_db.media)
+      ..where((tbl) =>
+          tbl.isDeleted.equals(0) &
+          tbl.synced.equals(0) &
+          tbl.creatorId.equals(creatorId));
+
     final entries = await query.get();
     return entries.map(_entryToModel).toList();
   }
 
   @override
   Future<List<MediaItem>> getPendingOrFailedMedia({String? creatorId}) async {
+    if (creatorId == null || creatorId.isEmpty) {
+      // Fail closed: Never return media across users or when unauthenticated
+      return const [];
+    }
     final query = _db.select(_db.media)
       ..where((tbl) =>
           tbl.isDeleted.equals(0) &
-          (tbl.synced.equals(0) | tbl.synced.equals(3)));
-
-    if (creatorId != null) {
-      query.where((tbl) => tbl.creatorId.equals(creatorId) | tbl.creatorId.isNull());
-    }
+          (tbl.synced.equals(0) | tbl.synced.equals(3)) &
+          tbl.creatorId.equals(creatorId));
 
     final entries = await query.get();
     return entries.map(_entryToModel).toList();
@@ -609,25 +680,31 @@ class LocalMediaRepository implements MediaRepository {
 
   @override
   Future<List<MediaItem>> getTombstoneSyncCandidates({String? creatorId}) async {
+    if (creatorId == null || creatorId.isEmpty) {
+      // Fail closed: never surface another user's tombstones when unauthenticated
+      return const [];
+    }
     final query = _db.select(_db.media)
       ..where((tbl) =>
           tbl.isDeleted.equals(1) &
-          tbl.synced.equals(SyncStatusType.syncing.toInt()).not());
-
-    if (creatorId != null && creatorId.isNotEmpty) {
-      query.where((tbl) => tbl.creatorId.equals(creatorId) | tbl.creatorId.isNull());
-    }
+          tbl.synced.equals(SyncStatusType.syncing.toInt()).not() &
+          tbl.creatorId.equals(creatorId));
 
     final entries = await query.get();
     return entries.map(_entryToModel).toList();
   }
 
   @override
-  Stream<int> watchTombstoneCandidateCount() {
+  Stream<int> watchTombstoneCandidateCount({String? creatorId}) {
+    if (creatorId == null || creatorId.isEmpty) {
+      // Fail closed: no unauthenticated tombstone counting
+      return Stream.value(0);
+    }
     final query = _db.selectOnly(_db.media)
       ..addColumns([_db.media.id.count()])
       ..where(_db.media.isDeleted.equals(1) &
-          _db.media.synced.equals(SyncStatusType.syncing.toInt()).not());
+          _db.media.synced.equals(SyncStatusType.syncing.toInt()).not() &
+          _db.media.creatorId.equals(creatorId));
 
     return query.map((row) => row.read(_db.media.id.count()) ?? 0).watchSingle();
   }
@@ -700,7 +777,7 @@ class LocalMediaRepository implements MediaRepository {
       observationType: ObservationType.fromString(e.observationType),
       linkedMediaId: e.linkedMediaId,
       note: e.note,
-      capturedAt: DateTime.tryParse(e.capturedAt)?.toLocal() ?? DateTime.now(),
+      capturedAt: DateTime.tryParse(e.capturedAt)?.toLocal() ?? _unknownCapturedAt,
       sha256Hash: e.sha256Hash,
       evidenceSha256Hash: e.evidenceSha256Hash, // audit: SHA-256 of watermarked evidence file
       capturedAddress: e.capturedAddress,       // audit: physical address at capture time
@@ -708,6 +785,8 @@ class LocalMediaRepository implements MediaRepository {
       syncStatus: SyncStatusType.fromInt(e.synced),
       isDeleted: e.isDeleted == 1,
       tombstoneReconciled: e.tombstoneReconciled == 1,
+      hasAudioTrack: e.hasAudioTrack == null ? null : e.hasAudioTrack == 1,
+      headingDegrees: e.headingDegrees,
     );
   }
 

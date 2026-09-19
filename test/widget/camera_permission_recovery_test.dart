@@ -160,15 +160,17 @@ class _MockSiteRepo implements SiteRepository {
   @override
   Future<List<SiteModel>> getAllSites({String? creatorId}) async => [];
   @override
-  Future<SiteModel?> getSiteById(String id) async => null;
+  Future<SiteModel?> getSiteById(String id, {String? creatorId}) async => null;
   @override
   Future<void> saveSite(SiteModel site) async {}
   @override
   Future<void> deleteSite(String id, {String? creatorId}) async {}
   @override
-  Future<bool> hasMediaForSite(String siteId) async => false;
+  Future<bool> hasMediaForSite(String siteId, {String? creatorId}) async => false;
   @override
   Future<void> seedDefaultSitesIfEmpty() async {}
+  @override
+  Future<List<SiteModel>> hydrateRemoteSites(String userId) async => [];
 }
 
 class _TestStorageService implements EvidenceStorageService {

@@ -73,16 +73,22 @@ class GnssConstellationSummary {
 class GnssSnapshot {
   final bool isSupported;
   final bool isAvailable;
-  final int satelliteCount;
-  final int satellitesUsedInFix;
+
+  /// Total tracked satellites. Null when the producer did not report the field
+  /// — an absent count is unknown, never an established 0 (R10).
+  final int? satelliteCount;
+
+  /// Satellites used in the position fix. Null when the producer did not
+  /// report the field (R10).
+  final int? satellitesUsedInFix;
   final Map<String, GnssConstellationSummary> constellations;
   final DateTime? timestampUtc;
 
   const GnssSnapshot({
     this.isSupported = true,
     this.isAvailable = false,
-    this.satelliteCount = 0,
-    this.satellitesUsedInFix = 0,
+    this.satelliteCount,
+    this.satellitesUsedInFix,
     this.constellations = const {},
     this.timestampUtc,
   });
@@ -90,17 +96,11 @@ class GnssSnapshot {
   static const GnssSnapshot unavailable = GnssSnapshot(
     isSupported: true,
     isAvailable: false,
-    satelliteCount: 0,
-    satellitesUsedInFix: 0,
-    constellations: {},
   );
 
   static const GnssSnapshot unsupported = GnssSnapshot(
     isSupported: false,
     isAvailable: false,
-    satelliteCount: 0,
-    satellitesUsedInFix: 0,
-    constellations: {},
   );
 
   /// True strictly if Android CONSTELLATION_IRNSS was reported by the device.
@@ -113,8 +113,10 @@ class GnssSnapshot {
 
     final isSupported = map['isSupported'] as bool? ?? false;
     final isAvailable = map['isAvailable'] as bool? ?? false;
-    final satelliteCount = (map['satelliteCount'] as num?)?.toInt() ?? 0;
-    final usedCount = (map['satellitesUsedInFix'] as num?)?.toInt() ?? 0;
+    // An absent count field is unknown — it must not be coerced to 0, which
+    // would disclose "0 satellites" the producer never reported (R10).
+    final satelliteCount = (map['satelliteCount'] as num?)?.toInt();
+    final usedCount = (map['satellitesUsedInFix'] as num?)?.toInt();
 
     DateTime? timestampUtc;
     final timestampMillis = (map['timestampMillis'] as num?)?.toInt();

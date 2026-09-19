@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../local/database/app_database.dart';
@@ -20,17 +21,19 @@ class DuplicateSiteCodeException implements Exception {
 
 abstract class SiteRepository {
   Future<List<SiteModel>> getAllSites({String? creatorId});
-  Future<SiteModel?> getSiteById(String id);
+  Future<SiteModel?> getSiteById(String id, {String? creatorId});
   Future<void> saveSite(SiteModel site);
   Future<void> deleteSite(String id, {String? creatorId});
-  Future<bool> hasMediaForSite(String siteId);
+  Future<bool> hasMediaForSite(String siteId, {String? creatorId});
   Future<void> seedDefaultSitesIfEmpty();
+  Future<List<SiteModel>> hydrateRemoteSites(String userId);
 }
 
 class LocalSiteRepository implements SiteRepository {
   final AppDatabase _db;
+  final FirebaseFirestore? _firestore;
 
-  LocalSiteRepository(this._db);
+  LocalSiteRepository(this._db, {FirebaseFirestore? firestore}) : _firestore = firestore;
 
   @override
   Future<List<SiteModel>> getAllSites({String? creatorId}) async {
@@ -52,8 +55,14 @@ class LocalSiteRepository implements SiteRepository {
   }
 
   @override
-  Future<SiteModel?> getSiteById(String id) async {
-    final entry = await (_db.select(_db.sites)..where((tbl) => tbl.id.equals(id))).getSingleOrNull();
+  Future<SiteModel?> getSiteById(String id, {String? creatorId}) async {
+    if (creatorId == null || creatorId.isEmpty) {
+      // Strict fail-closed: unauthenticated sessions must never access local sites
+      return null;
+    }
+    final query = _db.select(_db.sites)
+      ..where((tbl) => tbl.id.equals(id) & tbl.creatorId.equals(creatorId));
+    final entry = await query.getSingleOrNull();
     if (entry == null) return null;
     return SiteModel(
       id: entry.id,
@@ -78,58 +87,88 @@ class LocalSiteRepository implements SiteRepository {
   }
 
   @override
-  Future<bool> hasMediaForSite(String siteId) async {
-    // Site deletion is blocked if:
-    // 1. Active media exists (is_deleted == 0), OR
-    // 2. A published tombstone is still pending sync (is_deleted == 1 & synced != 0 & tombstone_reconciled == 0).
-    // Site deletion is allowed when only never-published (synced == 0) or fully reconciled
-    // (tombstone_reconciled == 1) tombstones remain.
-    final countExpr = _db.media.id.count();
-    final query = _db.selectOnly(_db.media)
-      ..addColumns([countExpr])
-      ..where(
-        _db.media.siteId.equals(siteId) &
-            (_db.media.isDeleted.equals(0) |
-                (_db.media.isDeleted.equals(1) &
-                    _db.media.synced.equals(0).not() &
-                    _db.media.tombstoneReconciled.equals(0))),
-      );
-    final row = await query.getSingleOrNull();
-    final count = row?.read(countExpr) ?? 0;
-    return count > 0;
+  Future<bool> hasMediaForSite(String siteId, {String? creatorId}) async {
+    // R24 retention gate (creator-scoped, fail-closed).
+    //
+    // A site may be deleted only when EVERY media row it contains is a
+    // purge-eligible tombstone. Purge-eligible means fully reconciled with the
+    // cloud deletion ledger (architecture §8.4 / §25.1):
+    //   is_deleted = 1 AND tombstone_reconciled = 1 AND creator_id = creatorId
+    //
+    // Everything else blocks deletion and is retained:
+    //   * active media (is_deleted = 0) — the R23 active-media guard,
+    //   * unreconciled tombstones (tombstone_reconciled = 0), including
+    //     never-published items not yet settled by the verification no-op, and
+    //   * rows not owned by the authenticated creator (fail-closed).
+    if (creatorId == null || creatorId.isEmpty) {
+      // Fail closed: an unauthenticated/unscoped caller may never delete a site.
+      return true;
+    }
+
+    final totalExpr = _db.media.id.count();
+    final totalRow = await (_db.selectOnly(_db.media)
+          ..addColumns([totalExpr])
+          ..where(_db.media.siteId.equals(siteId)))
+        .getSingleOrNull();
+    final total = totalRow?.read(totalExpr) ?? 0;
+    if (total == 0) {
+      // No media: nothing to retain and nothing to purge.
+      return false;
+    }
+
+    final eligibleExpr = _db.media.id.count();
+    final eligibleRow = await (_db.selectOnly(_db.media)
+          ..addColumns([eligibleExpr])
+          ..where(_db.media.siteId.equals(siteId) &
+              _db.media.creatorId.equals(creatorId) &
+              _db.media.isDeleted.equals(1) &
+              _db.media.tombstoneReconciled.equals(1)))
+        .getSingleOrNull();
+    final eligible = eligibleRow?.read(eligibleExpr) ?? 0;
+
+    // Block unless every row in the site is purge-eligible, so a partial purge
+    // can never strand a row behind a deleted site.
+    return total != eligible;
   }
 
   @override
   Future<void> deleteSite(String id, {String? creatorId}) async {
+    if (creatorId == null || creatorId.isEmpty) {
+      // Fail closed: Never delete site without authenticated creatorId
+      return;
+    }
+
     await _db.transaction(() async {
-      // Creator authorization check: if creatorId is specified, verify site ownership
-      if (creatorId != null && creatorId.isNotEmpty) {
-        final site = await (_db.select(_db.sites)
-              ..where((tbl) => tbl.id.equals(id) & tbl.creatorId.equals(creatorId)))
-            .getSingleOrNull();
-        if (site == null) {
-          // Site does not exist or does not belong to creator
-          return;
-        }
+      // Creator authorization check: verify site exists and belongs to creator
+      final site = await (_db.select(_db.sites)
+            ..where((tbl) => tbl.id.equals(id) & tbl.creatorId.equals(creatorId)))
+          .getSingleOrNull();
+      if (site == null) {
+        // Site does not exist or does not belong to creator
+        return;
       }
 
-      final hasBlockingMedia = await hasMediaForSite(id);
+      final hasBlockingMedia = await hasMediaForSite(id, creatorId: creatorId);
       if (hasBlockingMedia) {
         throw const SiteReferencedByMediaException(
           'Cannot delete site because captured media references this site.',
         );
       }
 
-      // Atomically remove eligible tombstones (never-published or fully reconciled)
-      // before deleting the site, satisfying the SQLite FOREIGN KEY constraint.
+      // R24: atomically purge only fully reconciled, creator-owned tombstones.
+      // The retention gate above guarantees the site contains nothing else, so
+      // this removes every remaining row and satisfies the SQLite FOREIGN KEY
+      // constraint. The predicate is deterministic and idempotent.
       await (_db.delete(_db.media)
-            ..where((tbl) => tbl.siteId.equals(id) & tbl.isDeleted.equals(1)))
+            ..where((tbl) =>
+                tbl.siteId.equals(id) &
+                tbl.creatorId.equals(creatorId) &
+                tbl.isDeleted.equals(1) &
+                tbl.tombstoneReconciled.equals(1)))
           .go();
 
-      final query = _db.delete(_db.sites)..where((tbl) => tbl.id.equals(id));
-      if (creatorId != null && creatorId.isNotEmpty) {
-        query.where((tbl) => tbl.creatorId.equals(creatorId));
-      }
+      final query = _db.delete(_db.sites)
+        ..where((tbl) => tbl.id.equals(id) & tbl.creatorId.equals(creatorId));
       await query.go();
     });
   }
@@ -138,9 +177,60 @@ class LocalSiteRepository implements SiteRepository {
   Future<void> seedDefaultSitesIfEmpty() async {
     // Clean-slate: no default dummy sites seeded in production
   }
+
+  @override
+  Future<List<SiteModel>> hydrateRemoteSites(String userId) async {
+    final firestore = _firestore;
+    if (firestore == null || userId.isEmpty) {
+      return [];
+    }
+
+    try {
+      final hydratedSites = <String, SiteModel>{};
+
+      // Discover sites created by this user only (v1 creator-owned domain)
+      try {
+        final createdSnap = await firestore
+            .collection('sites')
+            .where('creator_id', isEqualTo: userId)
+            .get();
+        for (final doc in createdSnap.docs) {
+          final data = doc.data();
+          final docCreatorId = (data['creator_id'] as String?) ?? '';
+          if (docCreatorId == userId) {
+            hydratedSites[doc.id] = SiteModel(
+              id: doc.id,
+              siteCode: (data['site_code'] as String?) ?? '',
+              name: (data['name'] as String?) ?? '',
+              address: (data['address'] as String?) ?? '',
+              creatorId: userId,
+            );
+          }
+        }
+      } catch (_) {
+        // Network or security error on creator query
+      }
+
+      // Upsert discovered remote sites into local Drift DB
+      for (final site in hydratedSites.values) {
+        await saveSite(site);
+      }
+
+      return hydratedSites.values.toList();
+    } catch (_) {
+      // Fail closed/safely: network or Firestore exceptions must never crash local workflow
+      return [];
+    }
+  }
 }
 
 final siteRepositoryProvider = Provider<SiteRepository>((ref) {
   final db = ref.watch(appDatabaseProvider);
-  return LocalSiteRepository(db);
+  FirebaseFirestore? firestore;
+  try {
+    firestore = FirebaseFirestore.instance;
+  } catch (_) {
+    // Firebase not initialized in unit test or headless environment
+  }
+  return LocalSiteRepository(db, firestore: firestore);
 });

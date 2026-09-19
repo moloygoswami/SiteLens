@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sitelens/core/utils/crypto_utils.dart';
 import 'package:sitelens/features/camera/services/evidence_storage_service.dart';
 
 class TestEvidenceStorageService extends EvidenceStorageService {
@@ -167,6 +168,83 @@ void main() {
       expect(await thumbFile.exists(), isFalse);
       // Lingering temp file MUST be deleted
       expect(await tmpFile.exists(), isFalse);
+
+      tempDir.deleteSync(recursive: true);
+    });
+
+    test('R15: published bytes are re-verified against their digest (divergence detected)', () async {
+      final tempDir = Directory.systemTemp.createTempSync('sitelens_r15_verify_');
+      final service = TestEvidenceStorageService(tempDir);
+
+      final mediaDir = await service.getMediaDirectory();
+      final published = Uint8List.fromList([1, 2, 3, 4, 5]);
+      final file = File('${mediaDir.path}/evid_r15.jpg');
+      await file.writeAsBytes(published, flush: true);
+
+      // The exact published bytes satisfy their own digest.
+      expect(await service.verifyPublishedBytes(file, published), isTrue);
+
+      // Any divergence means the digest no longer describes what is on disk.
+      expect(
+        await service.verifyPublishedBytes(file, Uint8List.fromList([1, 2, 3, 4, 6])),
+        isFalse,
+      );
+
+      // A missing artifact can never be verified.
+      expect(
+        await service.verifyPublishedBytes(
+          File('${mediaDir.path}/does_not_exist.jpg'),
+          published,
+        ),
+        isFalse,
+      );
+
+      tempDir.deleteSync(recursive: true);
+    });
+
+    test('R15: saveEvidenceAndThumbnail publishes bytes that satisfy their digests', () async {
+      final tempDir = Directory.systemTemp.createTempSync('sitelens_r15_publish_');
+      final service = TestEvidenceStorageService(tempDir);
+
+      final evidBytes = Uint8List.fromList(List<int>.generate(64, (i) => i));
+      final thumbBytes = Uint8List.fromList([7, 7, 7, 7]);
+
+      final paths = await service.saveEvidenceAndThumbnail(
+        mediaId: 'r15_media',
+        evidenceBytes: evidBytes,
+        thumbnailBytes: thumbBytes,
+      );
+
+      final evidFile = File(await service.resolveAbsolutePath(paths['evidencePath']!));
+      final thumbFile = File(await service.resolveAbsolutePath(paths['thumbnailPath']!));
+
+      expect(
+        CryptoUtils.computeSha256(await evidFile.readAsBytes()),
+        equals(CryptoUtils.computeSha256(evidBytes)),
+      );
+      expect(
+        CryptoUtils.computeSha256(await thumbFile.readAsBytes()),
+        equals(CryptoUtils.computeSha256(thumbBytes)),
+      );
+      expect(await service.verifyPublishedBytes(evidFile, evidBytes), isTrue);
+      expect(await service.verifyPublishedBytes(thumbFile, thumbBytes), isTrue);
+
+      tempDir.deleteSync(recursive: true);
+    });
+
+    test('R15: saveOriginalBytes publishes bytes that satisfy their digest', () async {
+      final tempDir = Directory.systemTemp.createTempSync('sitelens_r15_orig_');
+      final service = TestEvidenceStorageService(tempDir);
+
+      final bytes = Uint8List.fromList([9, 8, 7, 6, 5, 4]);
+      final relPath = await service.saveOriginalBytes(bytes, 'r15_original');
+      final file = File(await service.resolveAbsolutePath(relPath));
+
+      expect(
+        CryptoUtils.computeSha256(await file.readAsBytes()),
+        equals(CryptoUtils.computeSha256(bytes)),
+      );
+      expect(await service.verifyPublishedBytes(file, bytes), isTrue);
 
       tempDir.deleteSync(recursive: true);
     });

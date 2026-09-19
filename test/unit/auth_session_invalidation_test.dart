@@ -86,7 +86,7 @@ class FakeMediaRepository implements MediaRepository {
   Future<List<MediaItem>> getTombstoneSyncCandidates({String? creatorId}) async => const [];
 
   @override
-  Stream<int> watchTombstoneCandidateCount() => const Stream<int>.empty();
+  Stream<int> watchTombstoneCandidateCount({String? creatorId}) => const Stream<int>.empty();
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);

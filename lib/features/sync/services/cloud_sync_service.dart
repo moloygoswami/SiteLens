@@ -115,6 +115,10 @@ class CloudSyncService {
       // 3. Storage: Original File Upload (Idempotent)
       await _ensureOriginalUploaded(item, origFile);
 
+      // 3b. Storage: Canonical Evidence Artifact Upload (R16 Option A).
+      // Publication order is ledger -> original -> evidence -> thumbnail.
+      await _ensureEvidenceUploaded(item, evidFile);
+
       // 4. Storage: Thumbnail File Upload (Idempotent with Deterministic Hash Verification)
       if (thumbFile != null && localThumbSha != null) {
         await _ensureThumbnailUploaded(item, thumbFile, localThumbSha);
@@ -165,6 +169,15 @@ class CloudSyncService {
       );
     }
 
+    // R22: A never-attempted publication has no cloud ledger document to
+    // reconcile, and Firestore rules deny reading a non-existent document
+    // (`resource != null`). Probing the cloud would surface a spurious
+    // permission-denied, so skip the read entirely: the local tombstone
+    // lifecycle still reconciles it (markTombstoneReconciled on success).
+    if (item.syncStatus == SyncStatusType.pending) {
+      return;
+    }
+
     await _runMappedSyncOperation(() async {
       final docRef = _firestore
           .collection('sites')
@@ -187,8 +200,8 @@ class CloudSyncService {
     });
   }
 
-  /// Ensures that the parent site document and creator administrator membership exist in Firestore.
-  /// If the site is newly created offline, provisions it atomically via a Firestore batch write.
+  /// Ensures that the parent site document exists in Firestore.
+  /// If the site is newly created offline, provisions it in Firestore.
   Future<void> _ensureSiteProvisioned(String siteId, String currentUserId) async {
     final siteDocRef = _firestore.collection('sites').doc(siteId);
 
@@ -202,12 +215,12 @@ class CloudSyncService {
       if (e.code != 'permission-denied') {
         rethrow;
       }
-      // If reading the site document returned permission-denied (caller not yet a member of non-existent site),
-      // proceed to attempt atomic batch creation.
+      // If reading the site document returned permission-denied (caller not yet owner),
+      // proceed to attempt site creation.
     }
 
-    // Site does not exist in Firestore -> retrieve local site metadata to provision atomically
-    final localSite = await _siteRepository?.getSiteById(siteId);
+    // Site does not exist in Firestore -> retrieve local site metadata to provision
+    final localSite = await _siteRepository?.getSiteById(siteId, creatorId: currentUserId);
     if (localSite == null) {
       throw PermanentSyncException('Cannot provision site $siteId: Site not found in local database.');
     }
@@ -218,11 +231,7 @@ class CloudSyncService {
       );
     }
 
-    // Atomic batch creation of Site + Initial Admin Member
-    final batch = _firestore.batch();
-    final memberDocRef = siteDocRef.collection('members').doc(currentUserId);
-
-    batch.set(siteDocRef, {
+    await siteDocRef.set({
       'id': siteId,
       'creator_id': currentUserId,
       'name': localSite.name,
@@ -230,22 +239,6 @@ class CloudSyncService {
       'address': localSite.address,
       'created_at': FieldValue.serverTimestamp(),
     });
-
-    batch.set(memberDocRef, {
-      'user_id': currentUserId,
-      'role': 'admin',
-      'status': 'active',
-      'joined_at': FieldValue.serverTimestamp(),
-    });
-
-    try {
-      await batch.commit();
-    } on FirebaseException catch (e) {
-      if (e.code == 'permission-denied' || e.code == 'unauthenticated') {
-        rethrow;
-      }
-      rethrow;
-    }
   }
 
   Future<void> _ensureOriginalUploaded(MediaItem item, File origFile) async {
@@ -304,6 +297,70 @@ class CloudSyncService {
     await storageRef.putFile(origFile, metadata);
   }
 
+  /// Storage object path (and matching Firestore ledger field) for the
+  /// cloud-authoritative canonical evidence artifact (R16 Option A).
+  static String evidenceStoragePath(String siteId, String mediaId) =>
+      'sites/$siteId/media/$mediaId/evidence';
+
+  /// R16 (Option A): replicates the canonical burned evidence artifact
+  /// (`evid_<id>.jpg`) to Cloud Storage as a cloud-authoritative record so its
+  /// exact bytes can be forensically verified without re-rendering the HUD.
+  ///
+  /// The upload is only considered complete once the replicated object reports
+  /// the exact SHA-256 of the local evidence bytes; a mismatch throws
+  /// [IntegrityConflictException] so the item is never marked synced. Videos have
+  /// no separate burned artifact (their `orig_` is the evidence), so this is a
+  /// no-op for them.
+  Future<void> _ensureEvidenceUploaded(MediaItem item, File evidFile) async {
+    if (item.type != MediaItemType.photo) return;
+
+    final expectedEvidSha = item.evidenceSha256Hash;
+    if (expectedEvidSha == null || expectedEvidSha.isEmpty) {
+      throw PermanentSyncException(
+        'Cannot replicate evidence artifact for ${item.id}: no evidence SHA-256 recorded.',
+      );
+    }
+
+    final storageRef = _storage.ref(evidenceStoragePath(item.siteId, item.id));
+
+    try {
+      final metadata = await storageRef.getMetadata();
+      final cloudEvidSha = metadata.customMetadata?['x-sitelens-evidence-sha256'];
+      if (cloudEvidSha == null || cloudEvidSha != expectedEvidSha) {
+        throw IntegrityConflictException(
+          'Cloud evidence artifact missing or conflicting SHA-256 ($cloudEvidSha != $expectedEvidSha).',
+        );
+      }
+      // Idempotent success: already replicated and verified.
+      return;
+    } on FirebaseException catch (e) {
+      if (e.code != 'object-not-found') {
+        rethrow;
+      }
+      // Object does not exist -> Proceed to upload
+    }
+
+    final metadata = SettableMetadata(
+      contentType: 'image/jpeg',
+      customMetadata: {
+        'x-sitelens-evidence-sha256': expectedEvidSha,
+      },
+    );
+
+    await storageRef.putFile(evidFile, metadata);
+
+    // Post-upload verification: the replicated object must report the exact
+    // digest of the local evidence bytes before the artifact counts as synced.
+    final uploaded = await storageRef.getMetadata();
+    final uploadedSha = uploaded.customMetadata?['x-sitelens-evidence-sha256'];
+    if (uploadedSha != expectedEvidSha) {
+      throw IntegrityConflictException(
+        'Replicated evidence artifact SHA-256 verification failed '
+        '($uploadedSha != $expectedEvidSha).',
+      );
+    }
+  }
+
   Future<void> _ensureThumbnailUploaded(MediaItem item, File thumbFile, String localThumbSha) async {
     final storageRef = _storage.ref('sites/${item.siteId}/media/${item.id}/thumbnail');
 
@@ -351,6 +408,10 @@ class CloudSyncService {
         'creator_id': currentUserId,
         'storage_original_path': 'sites/${item.siteId}/media/${item.id}/original',
         'storage_thumbnail_path': 'sites/${item.siteId}/media/${item.id}/thumbnail',
+        // R16 Option A: only photos have a distinct cloud-authoritative
+        // evidence artifact; a video's evidence IS its original.
+        if (item.type == MediaItemType.photo)
+          'storage_evidence_path': evidenceStoragePath(item.siteId, item.id),
         'type': item.type.name,
         'lat': item.lat,
         'lon': item.lon,
@@ -362,6 +423,8 @@ class CloudSyncService {
         'gnss_satellite_count': item.gnssSatelliteCount,
         'gnss_satellites_used_in_fix': item.gnssSatellitesUsedInFix,
         'gnss_fix_timestamp': item.gnssFixTimestampUtc?.toUtc().toIso8601String(),
+        'has_audio_track': item.hasAudioTrack,
+        'heading_degrees': item.headingDegrees,
         'activity_tag': item.activityTag,
         'observation_type': item.observationType.name,
         'linked_media_id': item.linkedMediaId,
@@ -473,6 +536,20 @@ class CloudSyncService {
         );
       }
 
+      final cloudHasAudio = data['has_audio_track'] as bool?;
+      if (cloudHasAudio != null && cloudHasAudio != item.hasAudioTrack) {
+        throw IntegrityConflictException(
+          'Firestore evidence document has_audio_track ($cloudHasAudio) conflicts with local (${item.hasAudioTrack}).',
+        );
+      }
+
+      final cloudHeading = (data['heading_degrees'] as num?)?.toDouble();
+      if (cloudHeading != null && cloudHeading != item.headingDegrees) {
+        throw IntegrityConflictException(
+          'Firestore evidence document heading_degrees ($cloudHeading) conflicts with local (${item.headingDegrees}).',
+        );
+      }
+
       final cloudType = data['type'] as String?;
       if (cloudType != null && cloudType != item.type.name) {
         throw IntegrityConflictException(
@@ -494,6 +571,18 @@ class CloudSyncService {
         throw IntegrityConflictException(
           'Firestore evidence document storage_thumbnail_path ($cloudThumbPath) conflicts with local ($expectedThumbPath).',
         );
+      }
+
+      // R16: the cloud-authoritative evidence artifact path is deterministic for
+      // photos. Never let a conflicting documented path stand.
+      final cloudEvidPath = data['storage_evidence_path'] as String?;
+      if (item.type == MediaItemType.photo && cloudEvidPath != null) {
+        final expectedEvidPath = evidenceStoragePath(item.siteId, item.id);
+        if (cloudEvidPath != expectedEvidPath) {
+          throw IntegrityConflictException(
+            'Firestore evidence document storage_evidence_path ($cloudEvidPath) conflicts with local ($expectedEvidPath).',
+          );
+        }
       }
 
       // Reconcile captured_at timestamp representation (handling ISO-8601 String or Firestore Timestamp)

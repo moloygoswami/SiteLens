@@ -115,6 +115,7 @@ class _MediaTagEditModalState extends ConsumerState<MediaTagEditModal> {
       centerLon: widget.item.lon,
       siteId: widget.item.siteId,
       activityTag: _activityController.text.trim(),
+      capturedBefore: widget.item.capturedAt,
       radiusMeters: 10.0,
       currentMediaId: widget.item.id,
       creatorId: widget.item.creatorId,
@@ -359,7 +360,7 @@ class _MediaTagEditModalState extends ConsumerState<MediaTagEditModal> {
               if (_isLinked)
                 SmartLinkCard(
                   candidate: _linkedCandidate!,
-                  distanceMeters: _linkedDistance ?? 0.0,
+                  distanceMeters: _linkedDistance,
                   isLinked: true,
                   onLink: () {},
                   onDismiss: _handleUnlink,
@@ -370,7 +371,7 @@ class _MediaTagEditModalState extends ConsumerState<MediaTagEditModal> {
                   padding: const EdgeInsets.only(top: 8),
                   child: SmartLinkCard(
                     candidate: _suggestedBeforeCandidate!,
-                    distanceMeters: _suggestedDistance ?? 0.0,
+                    distanceMeters: _suggestedDistance,
                     isLinked: false,
                     onLink: _handleLinkSuggestion,
                     onDismiss: _handleDismissSuggestion,

@@ -173,6 +173,10 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
 
     CameraController? initializedController;
     Object? lastError;
+    // The audio setting of the preset that actually initialized — the init
+    // retry loop can fall back to an audio-less preset, so the winning value is
+    // the only truthful audio source (R09).
+    bool? resolvedEnableAudio;
 
     for (final (preset, enableAudio) in presetsToTry) {
       if (!mounted || _isPaused) {
@@ -188,6 +192,7 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
       try {
         await _service.initializeController(candidate);
         initializedController = candidate;
+        resolvedEnableAudio = enableAudio;
         lastError = null;
         break;
       } catch (err) {
@@ -269,6 +274,7 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
         maxZoomLevel: maxZoom,
         currentZoomLevel: targetInitialZoom,
         lensZoom: initialLens,
+        isAudioEnabled: resolvedEnableAudio ?? false,
       );
     } catch (e) {
       if (!mounted || _isPaused) {
@@ -282,6 +288,7 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
         flashMode: resolvedFlashMode,
         currentZoomLevel: 1.0,
         lensZoom: CameraLensZoom.standard,
+        isAudioEnabled: resolvedEnableAudio ?? false,
       );
     }
   }
@@ -328,6 +335,8 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
   }
 
   Future<void> setZoomPreset(CameraLensZoom preset) async {
+    // R08: lens/zoom is locked while recording to protect the video stream.
+    if (state.isRecordingVideo) return;
     double requested;
     switch (preset) {
       case CameraLensZoom.wide:
@@ -360,6 +369,8 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
 
   Future<void> setPinchZoom(double targetZoom) async {
     if (!mounted) return;
+    // R08: digital zoom gestures are locked while recording.
+    if (state.isRecordingVideo) return;
     final clampedZoom = targetZoom.clamp(state.minZoomLevel, state.maxZoomLevel);
 
     if (_controller != null && _controller!.value.isInitialized) {
@@ -435,6 +446,9 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
         recordingStartedAtUtc: startTime,
         recordingDurationSeconds: 0,
         recordingGpsState: recordingGpsState,
+        // Freeze audio-track presence at T0 so it cannot be re-derived from a
+        // later state and so it discloses truthfully (R09).
+        recordingHasAudioTrack: state.isAudioEnabled,
       );
       return true;
     } catch (e) {

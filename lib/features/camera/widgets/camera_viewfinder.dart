@@ -25,6 +25,10 @@ class CameraViewfinder extends StatefulWidget {
   final VoidCallback? onOpenRecovery;
   final bool showMinimap;
 
+  /// True while a video recording is in flight. Optical lens switching, zoom
+  /// gestures and aspect/timer controls are locked during recording (R08).
+  final bool isRecordingVideo;
+
   const CameraViewfinder({
     super.key,
     required this.state,
@@ -33,6 +37,7 @@ class CameraViewfinder extends StatefulWidget {
     this.currentZoomLevel = 1.0,
     this.zoomDisplayLabel = '1x',
     this.showMinimap = true,
+    this.isRecordingVideo = false,
     required this.onTapFocus,
     required this.onPinchZoom,
     required this.onToggleFlash,
@@ -113,6 +118,8 @@ class _CameraViewfinderState extends State<CameraViewfinder> {
             }
           },
           onScaleUpdate: (details) {
+            // R08: digital zoom gestures are locked while recording.
+            if (widget.isRecordingVideo) return;
             if (details.pointerCount > 1) {
               _isPinching = true;
               final newZoom = _baseZoom * details.scale;
@@ -266,31 +273,33 @@ class _CameraViewfinderState extends State<CameraViewfinder> {
                 ),
 
                 // 7. Floating Quick Settings Controls (Right-Side Vertical Action Stack in Middle)
-                Positioned(
-                  right: 24,
-                  top: 0,
-                  bottom: (viewportWidth > viewportHeight) ? 16 : 120,
-                  child: Align(
-                    alignment: Alignment.centerRight,
-                    child: SingleChildScrollView(
-                      child: ViewfinderControls(
-                        flashMode: widget.state.flashMode,
-                        lensZoom: widget.state.lensZoom,
-                        aspectRatio: widget.state.aspectRatio,
-                        captureTimer: widget.state.captureTimer,
-                        zoomDisplayLabel: widget.zoomDisplayLabel,
-                        isGridVisible: widget.state.isGridVisible,
-                        isHighContrast: widget.state.isHighContrastMode,
-                        onToggleFlash: widget.onToggleFlash,
-                        onToggleGrid: widget.onToggleGrid,
-                        onCycleLens: widget.onCycleLens,
-                        onCycleAspectRatio: widget.onCycleAspectRatio,
-                        onCycleTimer: widget.onCycleTimer,
-                        onToggleHighContrast: widget.onToggleHighContrast,
+                // R08: lens/zoom/aspect/timer controls are hidden while recording.
+                if (!widget.isRecordingVideo)
+                  Positioned(
+                    right: 24,
+                    top: 0,
+                    bottom: (viewportWidth > viewportHeight) ? 16 : 120,
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: SingleChildScrollView(
+                        child: ViewfinderControls(
+                          flashMode: widget.state.flashMode,
+                          lensZoom: widget.state.lensZoom,
+                          aspectRatio: widget.state.aspectRatio,
+                          captureTimer: widget.state.captureTimer,
+                          zoomDisplayLabel: widget.zoomDisplayLabel,
+                          isGridVisible: widget.state.isGridVisible,
+                          isHighContrast: widget.state.isHighContrastMode,
+                          onToggleFlash: widget.onToggleFlash,
+                          onToggleGrid: widget.onToggleGrid,
+                          onCycleLens: widget.onCycleLens,
+                          onCycleAspectRatio: widget.onCycleAspectRatio,
+                          onCycleTimer: widget.onCycleTimer,
+                          onToggleHighContrast: widget.onToggleHighContrast,
+                        ),
                       ),
                     ),
                   ),
-                ),
 
                 // 8. Countdown Timer Display Overlay
                 if (widget.state.isCountingDown)

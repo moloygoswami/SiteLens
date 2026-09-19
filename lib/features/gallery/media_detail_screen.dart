@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../app/theme.dart';
+import '../../core/services/session_service.dart';
 import '../../core/utils/gps_utils.dart';
 import '../../core/utils/haversine.dart';
 import '../../data/repositories/media_repository.dart';
@@ -83,9 +84,11 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     final evidAbs = await storage.resolveAbsolutePath(_item.uri);
     final origAbs = await storage.resolveAbsolutePath(_item.originalUri);
 
+    final session = ref.read(sessionServiceProvider);
+    final currentUserId = session.user?.uid;
     final site = _item.siteId.isEmpty
         ? null
-        : await siteRepo.getSiteById(_item.siteId);
+        : await siteRepo.getSiteById(_item.siteId, creatorId: currentUserId);
 
     MediaItem? linked;
     if (_item.observationType == ObservationType.closed && _item.linkedMediaId != null) {
@@ -865,6 +868,15 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                           'ALTITUDE',
                           GPSUtils.formatAltitude(_item.altitude, isMsl: _item.isAltitudeMsl),
                         ),
+                        const SizedBox(height: 6),
+                        // R10: an uncalibrated compass heading stays explicitly
+                        // unknown rather than being rendered as 0°.
+                        _buildTelemetryRow(
+                          'HEADING',
+                          _item.headingDegrees != null
+                              ? '${_item.headingDegrees!.toStringAsFixed(1)}°'
+                              : '—',
+                        ),
                         if (_item.capturedAddress != null &&
                             _item.capturedAddress!.isNotEmpty) ...[
                           const SizedBox(height: 6),
@@ -875,6 +887,12 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                           'VERIFICATION',
                           '${_item.verificationStatus?.name.toUpperCase() ?? (_item.lowAccuracy ? "DEGRADED" : "VERIFIED")} (±${_item.accuracyM?.toStringAsFixed(1) ?? "N/A"}m)',
                         ),
+                        // R09: audio-track disclosure for video evidence only.
+                        // Unknown (historical rows) renders as "—", never assumed.
+                        if (_item.type == MediaItemType.video) ...[
+                          const SizedBox(height: 6),
+                          _buildTelemetryRow('AUDIO', _audioDisclosure),
+                        ],
                         if (_item.gnssSatelliteCount != null) ...[
                           const SizedBox(height: 6),
                           _buildTelemetryRow(
@@ -1061,6 +1079,14 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     );
   }
 
+
+  /// Truthful audio-track disclosure for a video record (R09): captured,
+  /// muted, or explicitly unknown — never an assumption.
+  String get _audioDisclosure {
+    final hasAudio = _item.hasAudioTrack;
+    if (hasAudio == null) return '—';
+    return hasAudio ? 'CAPTURED' : 'MUTED';
+  }
 
   Widget _buildTelemetryRow(String label, String value) {
     return Row(

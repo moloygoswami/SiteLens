@@ -30,6 +30,8 @@ class MediaItem {
   final SyncStatusType syncStatus;
   final bool isDeleted; // Soft-delete support (PRD Section 10 & 26)
   final bool tombstoneReconciled; // Tombstone cloud-ledger reconciliation status
+  final bool? hasAudioTrack; // Video audio-track presence: true=recorded, false=muted, null=unknown/photo — Added in v10 (R09)
+  final double? headingDegrees; // Compass heading at capture time, null=unknown — Added in v10 (R10)
 
   const MediaItem({
     required this.id,
@@ -60,6 +62,8 @@ class MediaItem {
     this.syncStatus = SyncStatusType.pending,
     this.isDeleted = false,
     this.tombstoneReconciled = false,
+    this.hasAudioTrack,
+    this.headingDegrees,
   });
 
   MediaItem copyWith({
@@ -91,6 +95,8 @@ class MediaItem {
     SyncStatusType? syncStatus,
     bool? isDeleted,
     bool? tombstoneReconciled,
+    bool? hasAudioTrack,
+    double? headingDegrees,
   }) {
     return MediaItem(
       id: id ?? this.id,
@@ -121,6 +127,8 @@ class MediaItem {
       syncStatus: syncStatus ?? this.syncStatus,
       isDeleted: isDeleted ?? this.isDeleted,
       tombstoneReconciled: tombstoneReconciled ?? this.tombstoneReconciled,
+      hasAudioTrack: hasAudioTrack ?? this.hasAudioTrack,
+      headingDegrees: headingDegrees ?? this.headingDegrees,
     );
   }
 

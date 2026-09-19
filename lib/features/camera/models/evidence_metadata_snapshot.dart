@@ -16,6 +16,9 @@ class EvidenceMetadataSnapshot {
   final bool isAltitudeMsl;
   final double? accuracyMeters;
   final double? headingDegrees;
+  /// Video audio-track presence: true=recorded, false=muted, null=unknown or
+  /// not applicable (photo). Truthful disclosure — never assumed (R09).
+  final bool? hasAudioTrack;
   final bool lowAccuracy;
   final DateTime capturedAtUtc;
   final String canonicalTimestampUtc;
@@ -59,6 +62,7 @@ class EvidenceMetadataSnapshot {
     this.isAltitudeMsl = true,
     this.accuracyMeters,
     this.headingDegrees,
+    this.hasAudioTrack,
     required this.lowAccuracy,
     required this.capturedAtUtc,
     required this.canonicalTimestampUtc,
@@ -110,6 +114,7 @@ class EvidenceMetadataSnapshot {
     double? lowAccuracyThresholdMeters,
     GnssSnapshot? customGnssSnapshot,
     DateTime? customCaptureTimeUtc,
+    bool? hasAudioTrack,
   }) {
     final mediaId = customMediaId ?? const Uuid().v4();
     final nowUtc = DateTime.now().toUtc();
@@ -162,6 +167,7 @@ class EvidenceMetadataSnapshot {
       isAltitudeMsl: gpsState.isAltitudeMsl,
       accuracyMeters: accuracy,
       headingDegrees: gpsState.headingDegrees,
+      hasAudioTrack: hasAudioTrack,
       lowAccuracy: isLowAcc,
       capturedAtUtc: captureUtc,
       canonicalTimestampUtc: canonicalFormatted,

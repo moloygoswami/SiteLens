@@ -656,5 +656,6 @@ void main() {
       expect(notifier.state.hasInterruptedRecording, isFalse);
       expect(notifier.state.recordingGpsState, isNull);
     });
+
   });
 }

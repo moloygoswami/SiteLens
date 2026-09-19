@@ -629,41 +629,46 @@ class _GpsMapThumbnailState extends ConsumerState<GpsMapThumbnail> {
       );
     }
 
+    // No live snapshot and no canonical cached imagery: the minimap must not
+    // fabricate map graphics (grids/roads/reticles). Show a neutral, truthful
+    // offline status instead (R11).
     return SizedBox.expand(
-      child: CustomPaint(
-        painter: _MiniMapGridPainter(),
+      child: Container(
+        color: const Color(0xFF141715),
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+        child: const Center(
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.map_outlined, size: 14, color: AppColors.statusAmber),
+                SizedBox(height: 1),
+                Text(
+                  'MAP',
+                  style: TextStyle(
+                    color: AppColors.statusAmber,
+                    fontSize: 8,
+                    fontWeight: FontWeight.bold,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+                Text(
+                  'OFFLINE',
+                  style: TextStyle(
+                    color: Colors.white54,
+                    fontSize: 7,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
-}
-
-class _MiniMapGridPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final gridPaint = Paint()
-      ..color = Colors.white.withAlpha(15)
-      ..strokeWidth = 0.8
-      ..style = PaintingStyle.stroke;
-
-    final roadPaint = Paint()
-      ..color = Colors.white.withAlpha(40)
-      ..strokeWidth = 2.0
-      ..style = PaintingStyle.stroke;
-
-    // Grid lines
-    canvas.drawLine(Offset(size.width * 0.33, 0), Offset(size.width * 0.33, size.height), gridPaint);
-    canvas.drawLine(Offset(size.width * 0.66, 0), Offset(size.width * 0.66, size.height), gridPaint);
-    canvas.drawLine(Offset(0, size.height * 0.5), Offset(size.width, size.height * 0.5), gridPaint);
-
-    // Diagonal road path
-    final roadPath = Path()
-      ..moveTo(0, size.height * 0.75)
-      ..quadraticBezierTo(size.width * 0.5, size.height * 0.6, size.width, size.height * 0.2);
-    canvas.drawPath(roadPath, roadPaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class _HeadingConePainter extends CustomPainter {

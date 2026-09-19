@@ -181,6 +181,31 @@ void main() {
       expect(snapshot.gnssSnapshot, gnss);
     });
 
+    test('R10: an available-but-unreported satellite count stays null on evidence', () {
+      const gnss = GnssSnapshot(isSupported: true, isAvailable: true);
+
+      final gpsState = GpsHardwareState(
+        fixStatus: GPSFixStatus.high,
+        hasValidFix: true,
+        latitude: 22.57264,
+        longitude: 88.36391,
+        accuracyMeters: 3.2,
+        gnssSnapshot: gnss,
+      );
+
+      final snapshot = EvidenceMetadataSnapshot.capture(
+        gpsState: gpsState,
+        siteId: 'SITE_101',
+        siteCode: 'HOME',
+        siteName: 'Sonar Kella Apartment',
+      );
+
+      // GNSS availability does not imply an established count: an unreported
+      // count must never be disclosed as a fabricated 0 (R10).
+      expect(snapshot.gnssSatelliteCount, isNull);
+      expect(snapshot.gnssSatellitesUsedInFix, isNull);
+    });
+
     test('Negative and null altitude representations are clean', () {
       final negSnapshot = EvidenceMetadataSnapshot(
         mediaId: 'id1',

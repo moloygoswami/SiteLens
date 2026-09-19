@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/theme.dart';
+import '../../core/services/auth_service.dart';
+import '../../data/repositories/site_repository.dart';
 import '../../domain/models/enums.dart';
 import '../../domain/models/media_item.dart';
+import '../camera/hud/hud_formatter.dart';
 import 'controllers/nearby_search_controller.dart';
 import 'models/nearby_search_state.dart';
 import 'widgets/location_timeline_view.dart';
@@ -16,6 +19,10 @@ class NearbySearchScreen extends ConsumerStatefulWidget {
   final double? initialLat;
   final double? initialLon;
   final String? initialSiteId;
+
+  /// Canonical human-facing site code for [initialSiteId], when the caller
+  /// already knows it. The internal site id is never rendered (R20).
+  final String? initialSiteCode;
   final bool isPicker;
   final void Function(MediaItem)? onSelectCandidate;
 
@@ -25,6 +32,7 @@ class NearbySearchScreen extends ConsumerStatefulWidget {
     this.initialLat,
     this.initialLon,
     this.initialSiteId,
+    this.initialSiteCode,
     this.isPicker = false,
     this.onSelectCandidate,
   });
@@ -34,9 +42,14 @@ class NearbySearchScreen extends ConsumerStatefulWidget {
 }
 
 class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
+  /// Canonical site code resolved for the search origin, or null when it could
+  /// not be established (the internal id is never displayed in its place).
+  String? _canonicalSiteLabel;
+
   @override
   void initState() {
     super.initState();
+    _resolveCanonicalSiteLabel();
     if (widget.sourceMedia == null &&
         (widget.initialLat != null || widget.initialSiteId != null)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -50,6 +63,31 @@ class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
         );
       });
     }
+  }
+
+  /// R20: resolves the canonical human-facing site identifier (site code) for
+  /// the search origin. The internal database site id is never rendered.
+  Future<void> _resolveCanonicalSiteLabel() async {
+    final siteId = widget.sourceMedia?.siteId ?? widget.initialSiteId;
+    if (siteId == null || siteId.isEmpty) return;
+
+    String? code = widget.initialSiteCode;
+    if (code == null || code.trim().isEmpty) {
+      try {
+        final repo = ref.read(siteRepositoryProvider);
+        final uid = ref.read(authServiceProvider).currentUser?.uid;
+        final site = await repo.getSiteById(siteId, creatorId: uid);
+        code = site?.siteCode;
+      } catch (_) {
+        // Unresolvable: omit the identifier rather than showing an internal id.
+        return;
+      }
+    }
+
+    if (!mounted || code == null || code.trim().isEmpty) return;
+    setState(() {
+      _canonicalSiteLabel = HudFormatter.resolveSiteIdentifier(code);
+    });
   }
 
   void _handleCandidateSelected(MediaItem item, NearbySearchState searchState) {
@@ -517,14 +555,15 @@ class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
                       ),
                     ),
                     const SizedBox(width: 6),
-                    Text(
-                      '• ${source.siteId}',
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.textPrimary,
+                    if (_canonicalSiteLabel != null)
+                      Text(
+                        '• $_canonicalSiteLabel',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                        ),
                       ),
-                    ),
                   ],
                 ),
                 const SizedBox(height: 2),
@@ -545,7 +584,8 @@ class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
   }
 
   Widget _buildCoordinateAnchorCard(double lat, double lon) {
-    final siteStr = widget.initialSiteId != null ? ' • ${widget.initialSiteId}' : '';
+    final siteStr =
+        _canonicalSiteLabel != null ? ' • $_canonicalSiteLabel' : '';
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),

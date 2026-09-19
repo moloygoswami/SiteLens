@@ -493,6 +493,18 @@ class $MediaTable extends Media with TableInfo<$MediaTable, MediaEntry> {
       type: DriftSqlType.int,
       requiredDuringInsert: false,
       defaultValue: const Constant(0));
+  static const VerificationMeta _hasAudioTrackMeta =
+      const VerificationMeta('hasAudioTrack');
+  @override
+  late final GeneratedColumn<int> hasAudioTrack = GeneratedColumn<int>(
+      'has_audio_track', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  static const VerificationMeta _headingDegreesMeta =
+      const VerificationMeta('headingDegrees');
+  @override
+  late final GeneratedColumn<double> headingDegrees = GeneratedColumn<double>(
+      'heading_degrees', aliasedName, true,
+      type: DriftSqlType.double, requiredDuringInsert: false);
   @override
   List<GeneratedColumn> get $columns => [
         id,
@@ -522,7 +534,9 @@ class $MediaTable extends Media with TableInfo<$MediaTable, MediaEntry> {
         gnssFixTimestamp,
         synced,
         isDeleted,
-        tombstoneReconciled
+        tombstoneReconciled,
+        hasAudioTrack,
+        headingDegrees
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -686,6 +700,18 @@ class $MediaTable extends Media with TableInfo<$MediaTable, MediaEntry> {
           tombstoneReconciled.isAcceptableOrUnknown(
               data['tombstone_reconciled']!, _tombstoneReconciledMeta));
     }
+    if (data.containsKey('has_audio_track')) {
+      context.handle(
+          _hasAudioTrackMeta,
+          hasAudioTrack.isAcceptableOrUnknown(
+              data['has_audio_track']!, _hasAudioTrackMeta));
+    }
+    if (data.containsKey('heading_degrees')) {
+      context.handle(
+          _headingDegreesMeta,
+          headingDegrees.isAcceptableOrUnknown(
+              data['heading_degrees']!, _headingDegreesMeta));
+    }
     return context;
   }
 
@@ -752,6 +778,10 @@ class $MediaTable extends Media with TableInfo<$MediaTable, MediaEntry> {
           .read(DriftSqlType.int, data['${effectivePrefix}is_deleted'])!,
       tombstoneReconciled: attachedDatabase.typeMapping.read(
           DriftSqlType.int, data['${effectivePrefix}tombstone_reconciled'])!,
+      hasAudioTrack: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}has_audio_track']),
+      headingDegrees: attachedDatabase.typeMapping
+          .read(DriftSqlType.double, data['${effectivePrefix}heading_degrees']),
     );
   }
 
@@ -790,6 +820,8 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
   final int synced;
   final int isDeleted;
   final int tombstoneReconciled;
+  final int? hasAudioTrack;
+  final double? headingDegrees;
   const MediaEntry(
       {required this.id,
       this.siteId,
@@ -818,7 +850,9 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
       this.gnssFixTimestamp,
       required this.synced,
       required this.isDeleted,
-      required this.tombstoneReconciled});
+      required this.tombstoneReconciled,
+      this.hasAudioTrack,
+      this.headingDegrees});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -887,6 +921,12 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
     map['synced'] = Variable<int>(synced);
     map['is_deleted'] = Variable<int>(isDeleted);
     map['tombstone_reconciled'] = Variable<int>(tombstoneReconciled);
+    if (!nullToAbsent || hasAudioTrack != null) {
+      map['has_audio_track'] = Variable<int>(hasAudioTrack);
+    }
+    if (!nullToAbsent || headingDegrees != null) {
+      map['heading_degrees'] = Variable<double>(headingDegrees);
+    }
     return map;
   }
 
@@ -951,6 +991,12 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
       synced: Value(synced),
       isDeleted: Value(isDeleted),
       tombstoneReconciled: Value(tombstoneReconciled),
+      hasAudioTrack: hasAudioTrack == null && nullToAbsent
+          ? const Value.absent()
+          : Value(hasAudioTrack),
+      headingDegrees: headingDegrees == null && nullToAbsent
+          ? const Value.absent()
+          : Value(headingDegrees),
     );
   }
 
@@ -990,6 +1036,8 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
       isDeleted: serializer.fromJson<int>(json['isDeleted']),
       tombstoneReconciled:
           serializer.fromJson<int>(json['tombstoneReconciled']),
+      hasAudioTrack: serializer.fromJson<int?>(json['hasAudioTrack']),
+      headingDegrees: serializer.fromJson<double?>(json['headingDegrees']),
     );
   }
   @override
@@ -1025,6 +1073,8 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
       'synced': serializer.toJson<int>(synced),
       'isDeleted': serializer.toJson<int>(isDeleted),
       'tombstoneReconciled': serializer.toJson<int>(tombstoneReconciled),
+      'hasAudioTrack': serializer.toJson<int?>(hasAudioTrack),
+      'headingDegrees': serializer.toJson<double?>(headingDegrees),
     };
   }
 
@@ -1056,7 +1106,9 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
           Value<String?> gnssFixTimestamp = const Value.absent(),
           int? synced,
           int? isDeleted,
-          int? tombstoneReconciled}) =>
+          int? tombstoneReconciled,
+          Value<int?> hasAudioTrack = const Value.absent(),
+          Value<double?> headingDegrees = const Value.absent()}) =>
       MediaEntry(
         id: id ?? this.id,
         siteId: siteId.present ? siteId.value : this.siteId,
@@ -1102,6 +1154,10 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
         synced: synced ?? this.synced,
         isDeleted: isDeleted ?? this.isDeleted,
         tombstoneReconciled: tombstoneReconciled ?? this.tombstoneReconciled,
+        hasAudioTrack:
+            hasAudioTrack.present ? hasAudioTrack.value : this.hasAudioTrack,
+        headingDegrees:
+            headingDegrees.present ? headingDegrees.value : this.headingDegrees,
       );
   MediaEntry copyWithCompanion(MediaCompanion data) {
     return MediaEntry(
@@ -1158,6 +1214,12 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
       tombstoneReconciled: data.tombstoneReconciled.present
           ? data.tombstoneReconciled.value
           : this.tombstoneReconciled,
+      hasAudioTrack: data.hasAudioTrack.present
+          ? data.hasAudioTrack.value
+          : this.hasAudioTrack,
+      headingDegrees: data.headingDegrees.present
+          ? data.headingDegrees.value
+          : this.headingDegrees,
     );
   }
 
@@ -1191,7 +1253,9 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
           ..write('gnssFixTimestamp: $gnssFixTimestamp, ')
           ..write('synced: $synced, ')
           ..write('isDeleted: $isDeleted, ')
-          ..write('tombstoneReconciled: $tombstoneReconciled')
+          ..write('tombstoneReconciled: $tombstoneReconciled, ')
+          ..write('hasAudioTrack: $hasAudioTrack, ')
+          ..write('headingDegrees: $headingDegrees')
           ..write(')'))
         .toString();
   }
@@ -1225,7 +1289,9 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
         gnssFixTimestamp,
         synced,
         isDeleted,
-        tombstoneReconciled
+        tombstoneReconciled,
+        hasAudioTrack,
+        headingDegrees
       ]);
   @override
   bool operator ==(Object other) =>
@@ -1258,7 +1324,9 @@ class MediaEntry extends DataClass implements Insertable<MediaEntry> {
           other.gnssFixTimestamp == this.gnssFixTimestamp &&
           other.synced == this.synced &&
           other.isDeleted == this.isDeleted &&
-          other.tombstoneReconciled == this.tombstoneReconciled);
+          other.tombstoneReconciled == this.tombstoneReconciled &&
+          other.hasAudioTrack == this.hasAudioTrack &&
+          other.headingDegrees == this.headingDegrees);
 }
 
 class MediaCompanion extends UpdateCompanion<MediaEntry> {
@@ -1290,6 +1358,8 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
   final Value<int> synced;
   final Value<int> isDeleted;
   final Value<int> tombstoneReconciled;
+  final Value<int?> hasAudioTrack;
+  final Value<double?> headingDegrees;
   final Value<int> rowid;
   const MediaCompanion({
     this.id = const Value.absent(),
@@ -1320,6 +1390,8 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
     this.synced = const Value.absent(),
     this.isDeleted = const Value.absent(),
     this.tombstoneReconciled = const Value.absent(),
+    this.hasAudioTrack = const Value.absent(),
+    this.headingDegrees = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   MediaCompanion.insert({
@@ -1351,6 +1423,8 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
     this.synced = const Value.absent(),
     this.isDeleted = const Value.absent(),
     this.tombstoneReconciled = const Value.absent(),
+    this.hasAudioTrack = const Value.absent(),
+    this.headingDegrees = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         uri = Value(uri),
@@ -1386,6 +1460,8 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
     Expression<int>? synced,
     Expression<int>? isDeleted,
     Expression<int>? tombstoneReconciled,
+    Expression<int>? hasAudioTrack,
+    Expression<double>? headingDegrees,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -1421,6 +1497,8 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
       if (isDeleted != null) 'is_deleted': isDeleted,
       if (tombstoneReconciled != null)
         'tombstone_reconciled': tombstoneReconciled,
+      if (hasAudioTrack != null) 'has_audio_track': hasAudioTrack,
+      if (headingDegrees != null) 'heading_degrees': headingDegrees,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1454,6 +1532,8 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
       Value<int>? synced,
       Value<int>? isDeleted,
       Value<int>? tombstoneReconciled,
+      Value<int?>? hasAudioTrack,
+      Value<double?>? headingDegrees,
       Value<int>? rowid}) {
     return MediaCompanion(
       id: id ?? this.id,
@@ -1485,6 +1565,8 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
       synced: synced ?? this.synced,
       isDeleted: isDeleted ?? this.isDeleted,
       tombstoneReconciled: tombstoneReconciled ?? this.tombstoneReconciled,
+      hasAudioTrack: hasAudioTrack ?? this.hasAudioTrack,
+      headingDegrees: headingDegrees ?? this.headingDegrees,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1577,6 +1659,12 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
     if (tombstoneReconciled.present) {
       map['tombstone_reconciled'] = Variable<int>(tombstoneReconciled.value);
     }
+    if (hasAudioTrack.present) {
+      map['has_audio_track'] = Variable<int>(hasAudioTrack.value);
+    }
+    if (headingDegrees.present) {
+      map['heading_degrees'] = Variable<double>(headingDegrees.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1614,6 +1702,8 @@ class MediaCompanion extends UpdateCompanion<MediaEntry> {
           ..write('synced: $synced, ')
           ..write('isDeleted: $isDeleted, ')
           ..write('tombstoneReconciled: $tombstoneReconciled, ')
+          ..write('hasAudioTrack: $hasAudioTrack, ')
+          ..write('headingDegrees: $headingDegrees, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -2340,6 +2430,8 @@ typedef $$MediaTableCreateCompanionBuilder = MediaCompanion Function({
   Value<int> synced,
   Value<int> isDeleted,
   Value<int> tombstoneReconciled,
+  Value<int?> hasAudioTrack,
+  Value<double?> headingDegrees,
   Value<int> rowid,
 });
 typedef $$MediaTableUpdateCompanionBuilder = MediaCompanion Function({
@@ -2371,6 +2463,8 @@ typedef $$MediaTableUpdateCompanionBuilder = MediaCompanion Function({
   Value<int> synced,
   Value<int> isDeleted,
   Value<int> tombstoneReconciled,
+  Value<int?> hasAudioTrack,
+  Value<double?> headingDegrees,
   Value<int> rowid,
 });
 
@@ -2518,6 +2612,13 @@ class $$MediaTableFilterComposer extends Composer<_$AppDatabase, $MediaTable> {
 
   ColumnFilters<int> get tombstoneReconciled => $composableBuilder(
       column: $table.tombstoneReconciled,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get hasAudioTrack => $composableBuilder(
+      column: $table.hasAudioTrack, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<double> get headingDegrees => $composableBuilder(
+      column: $table.headingDegrees,
       builder: (column) => ColumnFilters(column));
 
   $$SitesTableFilterComposer get siteId {
@@ -2680,6 +2781,14 @@ class $$MediaTableOrderingComposer
       column: $table.tombstoneReconciled,
       builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<int> get hasAudioTrack => $composableBuilder(
+      column: $table.hasAudioTrack,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<double> get headingDegrees => $composableBuilder(
+      column: $table.headingDegrees,
+      builder: (column) => ColumnOrderings(column));
+
   $$SitesTableOrderingComposer get siteId {
     final $$SitesTableOrderingComposer composer = $composerBuilder(
         composer: this,
@@ -2808,6 +2917,12 @@ class $$MediaTableAnnotationComposer
   GeneratedColumn<int> get tombstoneReconciled => $composableBuilder(
       column: $table.tombstoneReconciled, builder: (column) => column);
 
+  GeneratedColumn<int> get hasAudioTrack => $composableBuilder(
+      column: $table.hasAudioTrack, builder: (column) => column);
+
+  GeneratedColumn<double> get headingDegrees => $composableBuilder(
+      column: $table.headingDegrees, builder: (column) => column);
+
   $$SitesTableAnnotationComposer get siteId {
     final $$SitesTableAnnotationComposer composer = $composerBuilder(
         composer: this,
@@ -2924,6 +3039,8 @@ class $$MediaTableTableManager extends RootTableManager<
             Value<int> synced = const Value.absent(),
             Value<int> isDeleted = const Value.absent(),
             Value<int> tombstoneReconciled = const Value.absent(),
+            Value<int?> hasAudioTrack = const Value.absent(),
+            Value<double?> headingDegrees = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               MediaCompanion(
@@ -2955,6 +3072,8 @@ class $$MediaTableTableManager extends RootTableManager<
             synced: synced,
             isDeleted: isDeleted,
             tombstoneReconciled: tombstoneReconciled,
+            hasAudioTrack: hasAudioTrack,
+            headingDegrees: headingDegrees,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -2986,6 +3105,8 @@ class $$MediaTableTableManager extends RootTableManager<
             Value<int> synced = const Value.absent(),
             Value<int> isDeleted = const Value.absent(),
             Value<int> tombstoneReconciled = const Value.absent(),
+            Value<int?> hasAudioTrack = const Value.absent(),
+            Value<double?> headingDegrees = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               MediaCompanion.insert(
@@ -3017,6 +3138,8 @@ class $$MediaTableTableManager extends RootTableManager<
             synced: synced,
             isDeleted: isDeleted,
             tombstoneReconciled: tombstoneReconciled,
+            hasAudioTrack: hasAudioTrack,
+            headingDegrees: headingDegrees,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0

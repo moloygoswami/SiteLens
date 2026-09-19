@@ -5,6 +5,7 @@ import '../../../app/theme.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../domain/models/enums.dart';
 import '../../../domain/models/media_item.dart';
+import '../../camera/hud/hud_formatter.dart';
 import '../../camera/services/evidence_storage_service.dart';
 import '../../sites/site_controller.dart';
 import '../services/evidence_export_service.dart';
@@ -122,7 +123,8 @@ class SingleItemShareSheet extends ConsumerWidget {
                   final absPath = await storageService.resolveAbsolutePath(targetUri);
                   await exportService.shareSingleFile(
                     absPath,
-                    text: 'SiteLens Evidence: ${activeSite?.siteCode ?? item.siteId} • ${item.capturedAddress ?? ""}',
+                    text:
+                        'SiteLens Evidence: ${HudFormatter.resolveSiteIdentifier(activeSite?.siteCode)} • ${item.capturedAddress ?? ""}',
                   );
                 } catch (e) {
                   if (context.mounted) {
@@ -150,7 +152,8 @@ class SingleItemShareSheet extends ConsumerWidget {
                     item: item,
                     siteCode: activeSite?.siteCode,
                     siteName: activeSite?.name,
-                    inspectorEmail: currentUser?.email,
+                    exporterEmail: currentUser?.email,
+                    exporterUid: currentUser?.uid,
                   );
                 } catch (e) {
                   if (context.mounted) {

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../../app/theme.dart';
+import '../../../core/utils/gps_utils.dart';
 import '../../../data/repositories/media_repository.dart';
 import '../../../domain/models/enums.dart';
 import '../../camera/services/evidence_storage_service.dart';
@@ -91,6 +92,12 @@ class _NearbyMediaCardState extends ConsumerState<NearbyMediaCard> {
   Widget build(BuildContext context) {
     final item = widget.result.item;
     final distanceMeters = widget.result.distanceMeters;
+    // R19: present the GNSS uncertainty margin rather than exact-looking meters.
+    final distanceLabel = GPSUtils.formatDistanceWithUncertainty(
+          distanceMeters,
+          accuracyMeters: item.accuracyM,
+        ) ??
+        'distance unknown';
     final isVideo = item.type == MediaItemType.video;
     final localTime = DateFormat('yyyy-MM-dd HH:mm').format(item.capturedAt.toLocal());
 
@@ -224,7 +231,7 @@ class _NearbyMediaCardState extends ConsumerState<NearbyMediaCard> {
                               ),
                               const SizedBox(width: 3),
                               Text(
-                                '${distanceMeters.toStringAsFixed(1)}m away',
+                                '$distanceLabel away',
                                 style: const TextStyle(
                                   fontFamily: 'monospace',
                                   fontSize: 11,

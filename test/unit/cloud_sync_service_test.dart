@@ -30,6 +30,10 @@ class FakeReference implements Reference {
   int putFileCallCount = 0;
   SettableMetadata? lastSettableMetadata;
 
+  /// When set, the uploaded object reports this SHA instead of the one supplied
+  /// at upload time — models a corrupted/divergent replicated artifact.
+  String? postUploadShaOverride;
+
   FakeReference(this.path);
 
   @override
@@ -47,6 +51,15 @@ class FakeReference implements Reference {
   UploadTask putFile(File file, [SettableMetadata? metadata]) {
     putFileCallCount++;
     lastSettableMetadata = metadata;
+    // Mirror real Cloud Storage: the uploaded object carries the metadata that
+    // was supplied at upload time, so a post-upload getMetadata() reflects it.
+    if (metadata != null) {
+      final custom = Map<String, String>.from(metadata.customMetadata ?? const {});
+      if (postUploadShaOverride != null) {
+        custom['x-sitelens-evidence-sha256'] = postUploadShaOverride!;
+      }
+      metadataToReturn = FakeFullMetadata(customMetadata: custom);
+    }
     return FakeUploadTask();
   }
 
@@ -101,6 +114,8 @@ class FakeDocumentReference implements DocumentReference<Map<String, dynamic>> {
   FakeDocumentSnapshot? snapshotToReturn;
   Map<String, dynamic>? lastSetData;
   Map<Object, Object?>? lastUpdateData;
+  int getCallCount = 0;
+  Object? getExceptionToThrow;
 
   FakeDocumentReference(this.path, this.firestore);
 
@@ -111,12 +126,21 @@ class FakeDocumentReference implements DocumentReference<Map<String, dynamic>> {
 
   @override
   Future<DocumentSnapshot<Map<String, dynamic>>> get([GetOptions? options]) async {
+    getCallCount++;
+    final toThrow = getExceptionToThrow;
+    if (toThrow != null) {
+      throw toThrow;
+    }
     return snapshotToReturn ?? FakeDocumentSnapshot(exists: false);
   }
 
   @override
   Future<void> set(Map<String, dynamic> data, [SetOptions? options]) async {
     lastSetData = data;
+    snapshotToReturn = FakeDocumentSnapshot(
+      exists: true,
+      data: data,
+    );
   }
 
   @override
@@ -175,7 +199,7 @@ class FakeSiteRepository implements SiteRepository {
   final Map<String, SiteModel> sites = {};
 
   @override
-  Future<SiteModel?> getSiteById(String id) async => sites[id];
+  Future<SiteModel?> getSiteById(String id, {String? creatorId}) async => sites[id];
 
   @override
   Future<void> saveSite(SiteModel site) async => sites[site.id] = site;
@@ -187,10 +211,13 @@ class FakeSiteRepository implements SiteRepository {
   Future<void> deleteSite(String id, {String? creatorId}) async => sites.remove(id);
 
   @override
-  Future<bool> hasMediaForSite(String siteId) async => false;
+  Future<bool> hasMediaForSite(String siteId, {String? creatorId}) async => false;
 
   @override
   Future<void> seedDefaultSitesIfEmpty() async {}
+
+  @override
+  Future<List<SiteModel>> hydrateRemoteSites(String userId) async => [];
 }
 
 class FakeFirestore implements FirebaseFirestore {
@@ -332,21 +359,12 @@ void main() {
         currentUserId: 'engineer-bob',
       );
 
-      // Verify atomic batch was committed
-      expect(testFirestore.lastBatch, isNotNull);
-      expect(testFirestore.lastBatch!.commitCount, equals(1));
-
-      // Verify site doc was created
+      // Verify site doc was created directly (creator-owned v1 model)
       final siteRef = testFirestore.doc('sites/$newSiteId') as FakeDocumentReference;
       expect(siteRef.snapshotToReturn?.exists, isTrue);
       expect(siteRef.snapshotToReturn?.data()?['creator_id'], equals('engineer-bob'));
       expect(siteRef.snapshotToReturn?.data()?['site_code'], equals('8801'));
-
-      // Verify member doc was created
-      final memberRef = testFirestore.doc('sites/$newSiteId/members/engineer-bob') as FakeDocumentReference;
-      expect(memberRef.snapshotToReturn?.exists, isTrue);
-      expect(memberRef.snapshotToReturn?.data()?['role'], equals('admin'));
-      expect(memberRef.snapshotToReturn?.data()?['status'], equals('active'));
+      expect(siteRef.snapshotToReturn?.data()?['name'], equals('New Offline Station'));
     });
 
     test('Throws PermanentSyncException if local site creator does not match active session', () async {
@@ -1209,6 +1227,11 @@ void main() {
         currentUserId: 'engineer-bob',
       );
 
+      // R22: the never-published path must not probe the cloud at all. A get()
+      // on a non-existent media document is denied by the read rule
+      // (`resource != null`), which would surface a spurious permission-denied.
+      expect(docRef.getCallCount, equals(0));
+
       // Nothing was created or updated in Firestore: a nonexistent cloud record
       // cannot gain a deletion ledger entry (rules forbid is_deleted at create).
       expect(docRef.lastSetData, isNull);
@@ -1262,6 +1285,166 @@ void main() {
       final thumbRef = fakeStorage.ref('sites/site-alpha/media/media-100/thumbnail') as FakeReference;
       expect(origRef.putFileCallCount, equals(0));
       expect(thumbRef.putFileCallCount, equals(0));
+    });
+
+    test('R22: published tombstone with a genuinely missing cloud record is a no-op (read attempted, nothing written)', () async {
+      final docRef = fakeFirestore.doc('sites/site-alpha/media/media-published-missing') as FakeDocumentReference;
+      docRef.snapshotToReturn = FakeDocumentSnapshot(exists: false);
+
+      await syncService.syncTombstone(
+        item: baseItem.copyWith(
+          id: 'media-published-missing',
+          isDeleted: true,
+          syncStatus: SyncStatusType.synced,
+        ),
+        currentUserId: 'engineer-bob',
+      );
+
+      expect(docRef.getCallCount, equals(1));
+      expect(docRef.lastSetData, isNull);
+      expect(docRef.lastUpdateData, isNull);
+    });
+
+    test('R22: permission-denied on a published tombstone remains a real failure (never converted to not-found)', () async {
+      final docRef = fakeFirestore.doc('sites/site-alpha/media/media-100') as FakeDocumentReference;
+      docRef.getExceptionToThrow = FirebaseException(
+        plugin: 'cloud_firestore',
+        code: 'permission-denied',
+        message: 'Missing or insufficient permissions.',
+      );
+
+      await expectLater(
+        syncService.syncTombstone(item: tombstonedItem(), currentUserId: 'engineer-bob'),
+        throwsA(isA<FirebaseException>()),
+      );
+
+      expect(docRef.getCallCount, equals(1));
+      expect(docRef.lastSetData, isNull);
+      expect(docRef.lastUpdateData, isNull);
+    });
+
+    test('R22: creator mismatch throws even for a never-published (pending) tombstone', () async {
+      final docRef = fakeFirestore.doc('sites/site-alpha/media/media-never-other') as FakeDocumentReference;
+
+      await expectLater(
+        syncService.syncTombstone(
+          item: baseItem.copyWith(
+            id: 'media-never-other',
+            isDeleted: true,
+            syncStatus: SyncStatusType.pending,
+          ),
+          currentUserId: 'someone-else',
+        ),
+        throwsA(isA<PermanentSyncException>()),
+      );
+
+      // The authorization guard runs before the never-published short-circuit:
+      // another user's tombstone is never treated as a local-only no-op.
+      expect(docRef.getCallCount, equals(0));
+    });
+  });
+
+  group('R16 Cloud Evidence Artifact Replication (Option A)', () {
+    FakeReference evidenceRef() =>
+        fakeStorage.ref('sites/site-alpha/media/media-100/evidence') as FakeReference;
+
+    test('replicates the canonical evidence artifact and records its ledger path', () async {
+      await syncService.syncMediaItem(
+        item: baseItem,
+        absoluteOriginalPath: origFile.path,
+        absoluteEvidencePath: evidFile.path,
+        absoluteThumbnailPath: thumbFile.path,
+        currentUserId: 'engineer-bob',
+      );
+
+      final evidRef = evidenceRef();
+      expect(evidRef.putFileCallCount, equals(1));
+      expect(
+        evidRef.lastSettableMetadata?.customMetadata?['x-sitelens-evidence-sha256'],
+        equals(evidSha),
+      );
+      expect(evidRef.lastSettableMetadata?.contentType, equals('image/jpeg'));
+
+      // Publication order: ledger -> original -> evidence -> thumbnail.
+      final origRef = fakeStorage.ref('sites/site-alpha/media/media-100/original') as FakeReference;
+      final thumbRef = fakeStorage.ref('sites/site-alpha/media/media-100/thumbnail') as FakeReference;
+      expect(origRef.putFileCallCount, equals(1));
+      expect(thumbRef.putFileCallCount, equals(1));
+
+      final docRef = fakeFirestore.doc('sites/site-alpha/media/media-100') as FakeDocumentReference;
+      expect(
+        docRef.lastSetData?['storage_evidence_path'],
+        equals('sites/site-alpha/media/media-100/evidence'),
+      );
+    });
+
+    test('is idempotent when the replicated evidence artifact already matches', () async {
+      evidenceRef().metadataToReturn = FakeFullMetadata(
+        customMetadata: {'x-sitelens-evidence-sha256': evidSha},
+      );
+
+      await syncService.syncMediaItem(
+        item: baseItem,
+        absoluteOriginalPath: origFile.path,
+        absoluteEvidencePath: evidFile.path,
+        absoluteThumbnailPath: thumbFile.path,
+        currentUserId: 'engineer-bob',
+      );
+
+      expect(evidenceRef().putFileCallCount, equals(0));
+    });
+
+    test('a conflicting cloud evidence SHA aborts without uploading', () async {
+      evidenceRef().metadataToReturn = FakeFullMetadata(
+        customMetadata: {'x-sitelens-evidence-sha256': 'f' * 64},
+      );
+
+      expect(
+        () => syncService.syncMediaItem(
+          item: baseItem,
+          absoluteOriginalPath: origFile.path,
+          absoluteEvidencePath: evidFile.path,
+          absoluteThumbnailPath: thumbFile.path,
+          currentUserId: 'engineer-bob',
+        ),
+        throwsA(isA<IntegrityConflictException>()),
+      );
+
+      expect(evidenceRef().putFileCallCount, equals(0));
+    });
+
+    test('a divergent replicated artifact fails post-upload verification', () async {
+      evidenceRef().postUploadShaOverride = 'a' * 64;
+
+      await expectLater(
+        syncService.syncMediaItem(
+          item: baseItem,
+          absoluteOriginalPath: origFile.path,
+          absoluteEvidencePath: evidFile.path,
+          absoluteThumbnailPath: thumbFile.path,
+          currentUserId: 'engineer-bob',
+        ),
+        throwsA(isA<IntegrityConflictException>()),
+      );
+
+      // The upload was attempted, but the artifact is never accepted as synced.
+      expect(evidenceRef().putFileCallCount, equals(1));
+    });
+
+    test('video items do not replicate a separate evidence artifact', () async {
+      final videoItem = baseItem.copyWith(type: MediaItemType.video);
+
+      await syncService.syncMediaItem(
+        item: videoItem,
+        absoluteOriginalPath: origFile.path,
+        absoluteEvidencePath: evidFile.path,
+        absoluteThumbnailPath: thumbFile.path,
+        currentUserId: 'engineer-bob',
+      );
+
+      expect(evidenceRef().putFileCallCount, equals(0));
+      final docRef = fakeFirestore.doc('sites/site-alpha/media/media-100') as FakeDocumentReference;
+      expect(docRef.lastSetData?.containsKey('storage_evidence_path'), isFalse);
     });
   });
 }

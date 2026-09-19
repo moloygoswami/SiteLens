@@ -3,14 +3,22 @@ const assert = require('node:assert');
 const { handleDeleteUserAccount } = require('../index.js');
 
 /**
- * In-memory Mock Firestore with subcollections and collectionGroup support for deletion tests.
+ * In-memory Mock Firestore with subcollections for creator-owned deletion tests.
  */
 class MockDeletionFirestore {
   constructor() {
-    this.sites = new Map(); // siteId -> { data: {}, members: Map(userId -> data), media: Map(mediaId -> data) }
+    this.sites = new Map(); // siteId -> { data: {}, media: Map(mediaId -> data) }
     this.users = new Map(); // userId -> data
     this.enquiries = new Map(); // enqId -> data
     this.rateLimits = new Map(); // rlId -> data
+
+    // R23 failure injection (all default off)
+    this.failSiteQuery = false;
+    this.failSiteDocDelete = new Set();
+    this.failMediaDocDelete = new Set();
+    this.failUserDelete = false;
+    this.failEnquiryUpdate = new Set();
+    this.failRateLimitDelete = new Set();
   }
 
   collection(name) {
@@ -18,6 +26,9 @@ class MockDeletionFirestore {
       return {
         where: (field, op, val) => ({
           get: async () => {
+            if (this.failSiteQuery) {
+              throw new Error('site discovery failed');
+            }
             const docs = [];
             for (const [id, site] of this.sites.entries()) {
               if (op === '==' && site.data[field] === val) {
@@ -39,6 +50,9 @@ class MockDeletionFirestore {
             };
           },
           delete: async () => {
+            if (this.failSiteDocDelete.has(siteId)) {
+              throw new Error(`site doc delete failed: ${siteId}`);
+            }
             this.sites.delete(siteId);
           },
           collection: (subName) => {
@@ -55,6 +69,9 @@ class MockDeletionFirestore {
                       data: () => ({ ...data }),
                       ref: {
                         delete: async () => {
+                          if (this.failMediaDocDelete.has(id)) {
+                            throw new Error(`media doc delete failed: ${id}`);
+                          }
                           subMap.delete(id);
                         },
                         update: async (patch) => {
@@ -102,6 +119,9 @@ class MockDeletionFirestore {
             };
           },
           delete: async () => {
+            if (this.failUserDelete) {
+              throw new Error(`user delete failed: ${userId}`);
+            }
             this.users.delete(userId);
           },
         }),
@@ -120,6 +140,9 @@ class MockDeletionFirestore {
                   data: () => ({ ...enq }),
                   ref: {
                     update: async (patch) => {
+                      if (this.failEnquiryUpdate.has(id)) {
+                        throw new Error(`enquiry update failed: ${id}`);
+                      }
                       const cur = this.enquiries.get(id);
                       this.enquiries.set(id, { ...cur, ...patch });
                     },
@@ -143,6 +166,9 @@ class MockDeletionFirestore {
               data: () => ({ ...data }),
               ref: {
                 delete: async () => {
+                  if (this.failRateLimitDelete.has(id)) {
+                    throw new Error(`rate-limit delete failed: ${id}`);
+                  }
                   this.rateLimits.delete(id);
                 },
               },
@@ -154,37 +180,6 @@ class MockDeletionFirestore {
     }
 
     throw new Error(`Unexpected collection: ${name}`);
-  }
-
-  collectionGroup(name) {
-    if (name === 'members') {
-      return {
-        where: (field, op, val) => ({
-          get: async () => {
-            const docs = [];
-            for (const [siteId, site] of this.sites.entries()) {
-              for (const [memberId, memberData] of site.members.entries()) {
-                if (op === '==' && memberData[field] === val) {
-                  docs.push({
-                    id: memberId,
-                    data: () => ({ ...memberData }),
-                    ref: {
-                      parent: {
-                        parent: {
-                          id: siteId,
-                        },
-                      },
-                    },
-                  });
-                }
-              }
-            }
-            return { docs, forEach: (fn) => docs.forEach(fn) };
-          },
-        }),
-      };
-    }
-    throw new Error(`Unexpected collectionGroup: ${name}`);
   }
 }
 
@@ -219,6 +214,7 @@ class MockAuth {
 class MockStorageBucket {
   constructor() {
     this.files = new Set();
+    this.failDeletePrefixes = new Set();
   }
 
   async getFiles({ prefix }) {
@@ -232,6 +228,9 @@ class MockStorageBucket {
   }
 
   async deleteFiles({ prefix }) {
+    if (this.failDeletePrefixes.has(prefix)) {
+      throw new Error(`storage purge failed: ${prefix}`);
+    }
     for (const file of Array.from(this.files)) {
       if (file.startsWith(prefix)) {
         this.files.delete(file);
@@ -316,7 +315,6 @@ describe('Backend: Account Deletion (deleteUserAccount)', () => {
 
     assert.strictEqual(result.success, true);
     assert.strictEqual(result.deletedSitesCount, 0);
-    assert.strictEqual(result.sharedSitesUpdatedCount, 0);
     assert.strictEqual(mockDb.users.has(uid), false);
     assert.deepStrictEqual(mockAuth.deletedUsers, [uid]);
 
@@ -330,19 +328,15 @@ describe('Backend: Account Deletion (deleteUserAccount)', () => {
     assert.strictEqual(mockDb.rateLimits.has(`uid_${uid}_12345`), false);
   });
 
-  test('4. Sole-member site: cascades deletion to site, members, media, and storage files', async () => {
-    const uid = 'sole_admin_1';
+  test('4. Creator-owned site: cascades deletion to site, media, and storage files', async () => {
+    const uid = 'creator_1';
     const siteId = 'site_personal';
 
-    // Populate sole-member site
-    const members = new Map();
-    members.set(uid, { user_id: uid, role: 'admin', status: 'active' });
     const media = new Map();
     media.set('media_1', { photo_hash: 'abc', file_path: `sites/${siteId}/photos/photo1.jpg` });
 
     mockDb.sites.set(siteId, {
       data: { name: 'Personal Site', creator_id: uid },
-      members,
       media,
     });
 
@@ -368,171 +362,7 @@ describe('Backend: Account Deletion (deleteUserAccount)', () => {
     assert.deepStrictEqual(mockAuth.deletedUsers, [uid]);
   });
 
-  test('5. Shared site with multiple admins: caller leaves without requiring successor', async () => {
-    const uid = 'admin_leaving';
-    const otherAdminUid = 'admin_remaining';
-    const siteId = 'shared_site_1';
-
-    const members = new Map();
-    members.set(uid, { user_id: uid, role: 'admin', status: 'active' });
-    members.set(otherAdminUid, { user_id: otherAdminUid, role: 'admin', status: 'active' });
-    const media = new Map();
-    media.set('media_shared', { creator_id: uid, photo_hash: '123' });
-
-    mockDb.sites.set(siteId, {
-      data: { name: 'Shared Team Site', creator_id: uid },
-      members,
-      media,
-    });
-
-    const request = {
-      auth: { uid },
-    };
-
-    const result = await handleDeleteUserAccount(request, {
-      db: mockDb,
-      auth: mockAuth,
-      bucket: mockBucket,
-      enforceAppCheck: false,
-    });
-
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.deletedSitesCount, 0);
-    assert.strictEqual(result.sharedSitesUpdatedCount, 1);
-    // Site must remain
-    assert.strictEqual(mockDb.sites.has(siteId), true);
-    // Caller removed from members
-    const updatedMembers = mockDb.sites.get(siteId).members;
-    assert.strictEqual(updatedMembers.has(uid), false);
-    assert.strictEqual(updatedMembers.has(otherAdminUid), true);
-    // Media must remain intact (pseudonymous retention)
-    assert.strictEqual(mockDb.sites.get(siteId).media.has('media_shared'), true);
-    assert.deepStrictEqual(mockAuth.deletedUsers, [uid]);
-  });
-
-  test('6. Sole-admin shared site without designated successor fails with requiresSuccessor', async () => {
-    const uid = 'sole_admin_shared';
-    const memberUid = 'regular_member_1';
-    const siteId = 'company_site';
-
-    const members = new Map();
-    members.set(uid, { user_id: uid, role: 'admin', status: 'active' });
-    members.set(memberUid, { user_id: memberUid, role: 'member', status: 'active' });
-
-    mockDb.sites.set(siteId, {
-      data: { name: 'Company Site', creator_id: uid },
-      members,
-      media: new Map(),
-    });
-
-    const request = {
-      auth: { uid },
-      data: {}, // no successorAdmins provided
-    };
-
-    await assert.rejects(
-      async () => {
-        await handleDeleteUserAccount(request, {
-          db: mockDb,
-          auth: mockAuth,
-          bucket: mockBucket,
-          enforceAppCheck: false,
-        });
-      },
-      (err) => {
-        assert.strictEqual(err.code, 'failed-precondition');
-        assert.strictEqual(err.details.requiresSuccessor, true);
-        assert.strictEqual(err.details.sitesNeedingSuccessor.length, 1);
-        assert.strictEqual(err.details.sitesNeedingSuccessor[0].siteId, siteId);
-        assert.strictEqual(err.details.sitesNeedingSuccessor[0].eligibleMembers.length, 1);
-        assert.strictEqual(err.details.sitesNeedingSuccessor[0].eligibleMembers[0].userId, memberUid);
-        return true;
-      }
-    );
-
-    // Auth user must NOT have been deleted
-    assert.strictEqual(mockAuth.deletedUsers.length, 0);
-  });
-
-  test('7. Sole-admin shared site with invalid successor (self or not a member) fails safely', async () => {
-    const uid = 'sole_admin_shared';
-    const memberUid = 'regular_member_1';
-    const siteId = 'company_site';
-
-    const members = new Map();
-    members.set(uid, { user_id: uid, role: 'admin', status: 'active' });
-    members.set(memberUid, { user_id: memberUid, role: 'member', status: 'active' });
-
-    mockDb.sites.set(siteId, {
-      data: { name: 'Company Site', creator_id: uid },
-      members,
-      media: new Map(),
-    });
-
-    // Case A: Designating oneself
-    await assert.rejects(
-      async () => {
-        await handleDeleteUserAccount(
-          { auth: { uid }, data: { successorAdmins: { [siteId]: uid } } },
-          { db: mockDb, auth: mockAuth, bucket: mockBucket, enforceAppCheck: false }
-        );
-      },
-      (err) => err.details && err.details.requiresSuccessor === true
-    );
-
-    // Case B: Designating an unknown non-member
-    await assert.rejects(
-      async () => {
-        await handleDeleteUserAccount(
-          { auth: { uid }, data: { successorAdmins: { [siteId]: 'random_stranger' } } },
-          { db: mockDb, auth: mockAuth, bucket: mockBucket, enforceAppCheck: false }
-        );
-      },
-      (err) => err.details && err.details.requiresSuccessor === true
-    );
-  });
-
-  test('8. Sole-admin shared site with valid designated successor promotes successor and proceeds', async () => {
-    const uid = 'sole_admin_shared';
-    const successorUid = 'chosen_successor';
-    const siteId = 'company_site';
-
-    const members = new Map();
-    members.set(uid, { user_id: uid, role: 'admin', status: 'active' });
-    members.set(successorUid, { user_id: successorUid, role: 'member', status: 'active' });
-
-    mockDb.sites.set(siteId, {
-      data: { name: 'Company Site', creator_id: uid },
-      members,
-      media: new Map(),
-    });
-
-    const request = {
-      auth: { uid },
-      data: {
-        successorAdmins: {
-          [siteId]: successorUid,
-        },
-      },
-    };
-
-    const result = await handleDeleteUserAccount(request, {
-      db: mockDb,
-      auth: mockAuth,
-      bucket: mockBucket,
-      enforceAppCheck: false,
-    });
-
-    assert.strictEqual(result.success, true);
-    assert.strictEqual(result.sharedSitesUpdatedCount, 1);
-
-    const updatedMembers = mockDb.sites.get(siteId).members;
-    assert.strictEqual(updatedMembers.has(uid), false);
-    assert.strictEqual(updatedMembers.get(successorUid).role, 'admin');
-    assert.deepStrictEqual(mockAuth.deletedUsers, [uid]);
-  });
-
-  test('9. Idempotency: handles auth/user-not-found without throwing error', async () => {
+  test('5. Idempotency: handles auth/user-not-found without throwing error', async () => {
     const uid = 'already_deleted_in_auth';
     mockAuth.simulateUserNotFound = true;
 
@@ -548,5 +378,143 @@ describe('Backend: Account Deletion (deleteUserAccount)', () => {
     });
 
     assert.strictEqual(result.success, true);
+  });
+
+  test('6. R23: reports success only when every required cleanup succeeds', async () => {
+    const uid = 'creator_ok';
+    const siteId = 'site_ok';
+    const media = new Map();
+    media.set('media_ok_1', { file_path: `sites/${siteId}/photos/p1.jpg` });
+
+    mockDb.sites.set(siteId, { data: { name: 'Ok Site', creator_id: uid }, media });
+    mockBucket.files.add(`sites/${siteId}/photos/p1.jpg`);
+    mockDb.users.set(uid, { email: 'ok@example.com' });
+    mockDb.enquiries.set('enq_ok', { userId: uid, email: 'ok@example.com', name: 'Ok' });
+    mockDb.rateLimits.set(`uid_${uid}_999`, { attempts: 1 });
+
+    const result = await handleDeleteUserAccount({ auth: { uid } }, {
+      db: mockDb,
+      auth: mockAuth,
+      bucket: mockBucket,
+      enforceAppCheck: false,
+    });
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.deletedSitesCount, 1);
+    assert.strictEqual(result.purgedStorageFilesCount, 1);
+    assert.strictEqual(mockDb.sites.has(siteId), false);
+    assert.strictEqual(mockDb.users.has(uid), false);
+    assert.strictEqual(mockDb.enquiries.get('enq_ok').userId, null);
+    assert.strictEqual(mockDb.rateLimits.has(`uid_${uid}_999`), false);
+    assert.deepStrictEqual(mockAuth.deletedUsers, [uid]);
+  });
+
+  test('7. R23: a single required cleanup failure reports failure and never deletes the Auth identity', async () => {
+    const uid = 'creator_fail_one';
+    const siteId = 'site_fail_one';
+    const media = new Map();
+    media.set('media_f1', { file_path: `sites/${siteId}/photos/p1.jpg` });
+
+    mockDb.sites.set(siteId, { data: { name: 'Fail Site', creator_id: uid }, media });
+    mockBucket.files.add(`sites/${siteId}/photos/p1.jpg`);
+    mockBucket.failDeletePrefixes.add(`sites/${siteId}/`);
+
+    await assert.rejects(
+      async () => {
+        await handleDeleteUserAccount({ auth: { uid } }, {
+          db: mockDb,
+          auth: mockAuth,
+          bucket: mockBucket,
+          enforceAppCheck: false,
+        });
+      },
+      (err) => {
+        assert.strictEqual(err.code, 'internal');
+        assert.match(err.message, /Account deletion incomplete/);
+        assert.match(err.message, /1 required remote cleanup operation\(s\) failed/);
+        return true;
+      }
+    );
+
+    // Failure is reported (no falsely successful response) and the Auth
+    // identity is intact so the caller can safely retry.
+    assert.deepStrictEqual(mockAuth.deletedUsers, []);
+    // The site document is retained so the retry can re-discover and reclaim it.
+    assert.strictEqual(mockDb.sites.has(siteId), true);
+  });
+
+  test('8. R23: multiple required cleanup failures are all tracked and reported as failure', async () => {
+    const uid = 'creator_fail_many';
+    const siteId = 'site_fail_many';
+    const media = new Map();
+    media.set('media_m1', { file_path: `sites/${siteId}/photos/p1.jpg` });
+
+    mockDb.sites.set(siteId, { data: { name: 'Many Fail Site', creator_id: uid }, media });
+    mockBucket.files.add(`sites/${siteId}/photos/p1.jpg`);
+    mockDb.users.set(uid, { email: 'many@example.com' });
+    mockBucket.failDeletePrefixes.add(`sites/${siteId}/`);
+    mockDb.failMediaDocDelete.add('media_m1');
+    mockDb.failUserDelete = true;
+
+    await assert.rejects(
+      async () => {
+        await handleDeleteUserAccount({ auth: { uid } }, {
+          db: mockDb,
+          auth: mockAuth,
+          bucket: mockBucket,
+          enforceAppCheck: false,
+        });
+      },
+      (err) => {
+        assert.strictEqual(err.code, 'internal');
+        assert.match(err.message, /3 required remote cleanup operation\(s\) failed/);
+        return true;
+      }
+    );
+
+    assert.deepStrictEqual(mockAuth.deletedUsers, []);
+    assert.strictEqual(mockDb.sites.has(siteId), true);
+    assert.strictEqual(mockDb.users.has(uid), true);
+  });
+
+  test('9. R23: retry after a partial failure is safe and idempotent', async () => {
+    const uid = 'creator_retry';
+    const siteId = 'site_retry';
+    const media = new Map();
+    media.set('media_r1', { file_path: `sites/${siteId}/photos/p1.jpg` });
+
+    mockDb.sites.set(siteId, { data: { name: 'Retry Site', creator_id: uid }, media });
+    mockBucket.files.add(`sites/${siteId}/photos/p1.jpg`);
+
+    // 1st attempt: Storage purge fails -> failure, Auth intact, site retained.
+    mockBucket.failDeletePrefixes.add(`sites/${siteId}/`);
+    await assert.rejects(
+      async () => {
+        await handleDeleteUserAccount({ auth: { uid } }, {
+          db: mockDb,
+          auth: mockAuth,
+          bucket: mockBucket,
+          enforceAppCheck: false,
+        });
+      }
+    );
+    assert.deepStrictEqual(mockAuth.deletedUsers, []);
+    assert.strictEqual(mockDb.sites.has(siteId), true);
+
+    // 2nd attempt: the transient failure is resolved -> idempotent success.
+    mockBucket.failDeletePrefixes.delete(`sites/${siteId}/`);
+    const result = await handleDeleteUserAccount({ auth: { uid } }, {
+      db: mockDb,
+      auth: mockAuth,
+      bucket: mockBucket,
+      enforceAppCheck: false,
+    });
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.deletedSitesCount, 1);
+    assert.strictEqual(result.purgedStorageFilesCount, 1);
+    assert.strictEqual(mockDb.sites.has(siteId), false);
+    assert.strictEqual(mockBucket.files.size, 0);
+    assert.deepStrictEqual(mockAuth.deletedUsers, [uid]);
   });
 });

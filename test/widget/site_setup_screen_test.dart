@@ -30,7 +30,7 @@ class WidgetTestSiteRepository implements SiteRepository {
   }
 
   @override
-  Future<SiteModel?> getSiteById(String id) async {
+  Future<SiteModel?> getSiteById(String id, {String? creatorId}) async {
     for (final list in userSites.values) {
       final match = list.where((s) => s.id == id).firstOrNull;
       if (match != null) return match;
@@ -58,10 +58,13 @@ class WidgetTestSiteRepository implements SiteRepository {
   }
 
   @override
-  Future<bool> hasMediaForSite(String siteId) async => shouldThrowOnDelete;
+  Future<bool> hasMediaForSite(String siteId, {String? creatorId}) async => shouldThrowOnDelete;
 
   @override
   Future<void> seedDefaultSitesIfEmpty() async {}
+
+  @override
+  Future<List<SiteModel>> hydrateRemoteSites(String userId) async => [];
 }
 
 class SimpleMockAuthService implements AuthService {

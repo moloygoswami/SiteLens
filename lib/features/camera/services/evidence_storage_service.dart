@@ -1,7 +1,8 @@
 import 'dart:io';
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
+import '../../../core/utils/crypto_utils.dart';
 
 final evidenceStorageServiceProvider = Provider<EvidenceStorageService>((ref) {
   return EvidenceStorageService();
@@ -61,6 +62,22 @@ class EvidenceStorageService {
     }
   }
 
+  /// R15: re-reads a just-published artifact and asserts its SHA-256 equals the
+  /// digest of the exact bytes that were written, so a committed or published
+  /// digest always describes what is physically on disk. Returns false when the
+  /// file is missing, unreadable, or byte-divergent.
+  @visibleForTesting
+  Future<bool> verifyPublishedBytes(File file, Uint8List expectedBytes) async {
+    try {
+      if (!await file.exists()) return false;
+      final persisted = await file.readAsBytes();
+      return CryptoUtils.computeSha256(persisted) ==
+          CryptoUtils.computeSha256(expectedBytes);
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Saves raw original camera bytes untouched with OS-level flush and atomic publication.
   /// Returns the relative path contract (e.g. "media/orig_xxx.jpg").
   Future<String> saveOriginalBytes(Uint8List originalBytes, String mediaId) async {
@@ -70,6 +87,15 @@ class EvidenceStorageService {
 
     final file = File(absPath);
     await _atomicWriteFile(file, originalBytes);
+
+    // R15: the published bytes must satisfy the recorded digest before the hash
+    // can be committed. Never delete the original here — a mismatch aborts so
+    // the caller reports truthfully and the bytes remain available for retry.
+    if (!await verifyPublishedBytes(file, originalBytes)) {
+      throw const FileSystemException(
+        'Original artifact failed SHA-256 verification after write.',
+      );
+    }
     return relPath;
   }
 
@@ -99,6 +125,16 @@ class EvidenceStorageService {
 
       await evidTemp.rename(evidAbsPath);
       await thumbTemp.rename(thumbAbsPath);
+
+      // R15: re-verify the final published bytes before their digests can be
+      // committed. A mismatch throws inside the try so the derived artifacts and
+      // any temporary remnants are removed while the original is never touched.
+      if (!await verifyPublishedBytes(evidenceFile, evidenceBytes) ||
+          !await verifyPublishedBytes(thumbFile, thumbnailBytes)) {
+        throw const FileSystemException(
+          'Published evidence artifacts failed SHA-256 verification.',
+        );
+      }
 
       return {
         'evidencePath': evidRelPath,

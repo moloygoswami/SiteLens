@@ -74,7 +74,15 @@ class GalleryFilterNotifier extends StateNotifier<GalleryFilterState> {
 
 final galleryFilterProvider =
     StateNotifierProvider<GalleryFilterNotifier, GalleryFilterState>((ref) {
-  return GalleryFilterNotifier();
+  final notifier = GalleryFilterNotifier();
+  try {
+    ref.listen<UserSessionState>(sessionServiceProvider, (previous, next) {
+      if (next.status == SessionStatus.unauthenticated || next.user == null) {
+        notifier.resetFilters();
+      }
+    });
+  } catch (_) {}
+  return notifier;
 });
 
 final galleryViewModeProvider = StateProvider<GalleryViewMode>((ref) {
@@ -91,6 +99,11 @@ final filteredGalleryMediaProvider = StreamProvider<List<MediaItem>>((ref) {
     currentUserId = session.user?.uid;
   } catch (_) {
     currentUserId = null;
+  }
+
+  if (currentUserId == null || currentUserId.isEmpty) {
+    // Fail closed: No authenticated user session -> emit empty list immediately
+    return Stream.value(const []);
   }
 
   // Use explicit site filter if set, otherwise default to active site (or null for all sites)

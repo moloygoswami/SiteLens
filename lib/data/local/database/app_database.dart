@@ -50,6 +50,8 @@ class Media extends Table {
   IntColumn get synced => integer().withDefault(const Constant(0))();
   IntColumn get isDeleted => integer().withDefault(const Constant(0)).named('is_deleted')(); // soft delete
   IntColumn get tombstoneReconciled => integer().withDefault(const Constant(0)).named('tombstone_reconciled')(); // Added in v9 (0=pending, 1=reconciled)
+  IntColumn get hasAudioTrack => integer().nullable().named('has_audio_track')(); // Added in v10 (1=audio recorded, 0=muted, null=unknown)
+  RealColumn get headingDegrees => real().nullable().named('heading_degrees')(); // Added in v10 (compass heading at capture, null=unknown)
 
   @override
   Set<Column> get primaryKey => {id};
@@ -89,7 +91,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? e]) : super(e ?? _openConnection());
 
   @override
-  int get schemaVersion => 9;
+  int get schemaVersion => 10;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -140,6 +142,13 @@ class AppDatabase extends _$AppDatabase {
       if (from < 9) {
         // v9: track whether a tombstone has been reconciled with cloud sync
         await m.addColumn(media, media.tombstoneReconciled);
+      }
+      if (from < 10) {
+        // v10: audio-track disclosure (R09) and compass heading (R10).
+        // Nullable with NO default: historical rows keep an explicit unknown
+        // state rather than a fabricated value.
+        await m.addColumn(media, media.hasAudioTrack);
+        await m.addColumn(media, media.headingDegrees);
       }
     },
   );

@@ -153,9 +153,12 @@ class GpsUiFixture {
   final GPSFixStatus status;
   final GpsBlockReason? blockReason;
   final double? accuracyMeters;
+  // Coordinates use 0.0 as the established "no fix" sentinel; the HUD card
+  // rejects a 0.0 pair as a fix. Altitude is genuinely nullable so an
+  // unestablished altitude renders as "—" rather than a fabricated 0 m (R10).
   final double latitude;
   final double longitude;
-  final double altitudeMeters;
+  final double? altitudeMeters;
   final bool isAltitudeMsl;
   final double? headingDegrees;
   final String timestampUtc;
@@ -173,7 +176,7 @@ class GpsUiFixture {
     required this.accuracyMeters,
     required this.latitude,
     required this.longitude,
-    required this.altitudeMeters,
+    this.altitudeMeters,
     this.isAltitudeMsl = true,
     this.headingDegrees,
     required this.timestampUtc,

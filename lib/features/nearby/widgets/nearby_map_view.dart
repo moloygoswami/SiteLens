@@ -6,6 +6,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../../app/theme.dart';
 import '../../../core/controllers/map_type_settings_controller.dart';
+import '../../../core/utils/gps_utils.dart';
 import '../../../data/repositories/media_repository.dart';
 import '../../../domain/models/enums.dart';
 import '../../../domain/models/media_item.dart';
@@ -115,7 +116,8 @@ class _NearbyMapViewState extends ConsumerState<NearbyMapView> {
           position: LatLng(item.lat, item.lon),
           icon: BitmapDescriptor.defaultMarkerWithHue(hue),
           infoWindow: InfoWindow(
-            title: '${item.activityTag ?? item.observationType.label} • ${res.distanceMeters.toStringAsFixed(1)}m',
+            title:
+                '${item.activityTag ?? item.observationType.label} • ${GPSUtils.formatDistanceWithUncertainty(res.distanceMeters, accuracyMeters: item.accuracyM) ?? 'distance unknown'}',
             snippet: DateFormat('yyyy-MM-dd HH:mm').format(item.capturedAt.toLocal()),
           ),
           onTap: () => _selectResult(res),
@@ -365,7 +367,7 @@ class _NearbyMapViewState extends ConsumerState<NearbyMapView> {
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        '• ${result.distanceMeters.toStringAsFixed(1)}m away',
+                        '• ${GPSUtils.formatDistanceWithUncertainty(result.distanceMeters, accuracyMeters: result.item.accuracyM) ?? 'distance unknown'} away',
                         style: const TextStyle(
                           fontFamily: 'monospace',
                           fontSize: 10,

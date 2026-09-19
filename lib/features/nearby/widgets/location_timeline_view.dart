@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../../app/theme.dart';
+import '../../../core/utils/gps_utils.dart';
 import '../../../data/repositories/media_repository.dart';
 import '../../../domain/models/enums.dart';
 import '../../camera/services/evidence_storage_service.dart';
@@ -300,7 +301,7 @@ class _LocationTimelineViewState extends ConsumerState<LocationTimelineView> {
                                         ),
                                       ),
                                       Text(
-                                        '${result.distanceMeters.toStringAsFixed(1)}m away',
+                                        '${GPSUtils.formatDistanceWithUncertainty(result.distanceMeters, accuracyMeters: result.item.accuracyM) ?? 'distance unknown'} away',
                                         style: const TextStyle(
                                           fontFamily: 'monospace',
                                           fontSize: 10,

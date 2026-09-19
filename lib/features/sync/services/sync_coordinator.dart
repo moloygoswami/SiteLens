@@ -115,6 +115,9 @@ class SyncCoordinator extends StateNotifier<SyncState> with WidgetsBindingObserv
     // 5. Listen to Auth state changes
     _authSub = _authService.authStateChanges.listen((user) async {
       _syncSessionGeneration++;
+      // R04: rebind the SQLite count streams to the active creator so a previous
+      // user's subscription can never drive (or leak into) this session.
+      _subscribeCountStreams(user?.uid);
       if (user == null) {
         // User signed out -> Cancel/Pause in-flight worker and zero UI counts
         _inFlightMediaIds.clear();
@@ -135,15 +138,34 @@ class SyncCoordinator extends StateNotifier<SyncState> with WidgetsBindingObserv
       }
     });
 
-    // 6. Listen to unsynced counts in SQLite
-    _unsyncedCountSub = _mediaRepo.watchUnsyncedCount().listen((count) async {
+    // 6. Bind the creator-scoped SQLite count streams for the initial session.
+    // The repository fails closed on a null/empty UID.
+    _subscribeCountStreams(_authService.currentUser?.uid);
+
+    await _refreshCounts();
+    triggerSync(isManual: false);
+  }
+
+  /// (Re)binds the SQLite count streams to [userId]. Previous subscriptions are
+  /// always torn down first, so an auth transition (A signs out, B signs in)
+  /// leaves A's streams disposed and only B's active (R04). A null/empty UID is
+  /// fail-closed by the repository (0), so an unauthenticated session can never
+  /// observe another user's counts.
+  void _subscribeCountStreams(String? userId) {
+    _unsyncedCountSub?.cancel();
+    _tombstoneCountSub?.cancel();
+
+    _lastUnsyncedCount = 0;
+    _lastTombstoneCount = 0;
+
+    // F1: A freshly persisted pending capture (online session) automatically
+    // enters the existing sync pipeline; offline captures stay queued and sync
+    // after reconnect via the connectivity listener. The local transaction has
+    // already committed before this Drift-backed stream emits.
+    _unsyncedCountSub = _mediaRepo.watchUnsyncedCount(creatorId: userId).listen((count) async {
       final increased = count > _lastUnsyncedCount;
       _lastUnsyncedCount = count;
 
-      // F1: A freshly persisted pending capture (online session) automatically
-      // enters the existing sync pipeline; offline captures stay queued and sync
-      // after reconnect via the connectivity listener. The local transaction has
-      // already committed before this Drift-backed stream emits.
       if (increased && state.isOnline) {
         unawaited(triggerSync(isManual: false));
       }
@@ -153,7 +175,7 @@ class SyncCoordinator extends StateNotifier<SyncState> with WidgetsBindingObserv
     // B-1: A newly soft-deleted previously-synced item must propagate its
     // is_deleted tombstone to the cloud ledger. Mirror of the unsynced-count
     // edge trigger: a new tombstone candidate enters the existing sync cycle.
-    _tombstoneCountSub = _mediaRepo.watchTombstoneCandidateCount().listen((count) {
+    _tombstoneCountSub = _mediaRepo.watchTombstoneCandidateCount(creatorId: userId).listen((count) {
       final increased = count > _lastTombstoneCount;
       _lastTombstoneCount = count;
 
@@ -161,9 +183,6 @@ class SyncCoordinator extends StateNotifier<SyncState> with WidgetsBindingObserv
         unawaited(triggerSync(isManual: false));
       }
     });
-
-    await _refreshCounts();
-    triggerSync(isManual: false);
   }
 
   @override
@@ -259,6 +278,16 @@ class SyncCoordinator extends StateNotifier<SyncState> with WidgetsBindingObserv
 
         // Skip permanent failures unless manually triggered
         if (!isManual && _permanentFailedIds.contains(item.id)) {
+          continue;
+        }
+
+        // R25: automatic cycles must also honour the DURABLE permanent-failure
+        // marker persisted in the sync-status field, so the suppression survives
+        // a process restart (the in-memory set above does not). Manual retry
+        // explicitly re-evaluates failed items. Tombstone rows keep their
+        // pre-deletion status and are never treated as artifact failures here
+        // (B-1 forbids persisting an artifact-sync status for tombstones).
+        if (!isManual && !item.isDeleted && item.syncStatus == SyncStatusType.failed) {
           continue;
         }
 
@@ -365,7 +394,7 @@ class SyncCoordinator extends StateNotifier<SyncState> with WidgetsBindingObserv
               _permanentFailedIds.add(item.id);
               await _updateArtifactSyncStatus(item.id, SyncStatusType.failed, isTombstone: isTombstone);
               state = state.copyWith(
-                lastError: 'Permission denied: User does not have active membership in site ${item.siteId}.',
+                lastError: 'Permission denied: User does not own site ${item.siteId}.',
               );
               return;
             case SessionAnomalyResolution.retryable:
@@ -391,13 +420,11 @@ class SyncCoordinator extends StateNotifier<SyncState> with WidgetsBindingObserv
     } on RetryableSyncException catch (e) {
       await _handleRetryableFailure(item, e.message, isTombstone: isTombstone);
     } catch (e) {
-      // Unclassified exceptions are treated as deterministic permanent failures:
-      // the honest local status is 'failed', and the item is suppressed from
-      // automatic cycles so an unexpected error cannot create a hot-loop.
-      // Manual retry explicitly re-evaluates suppressed items.
-      _permanentFailedIds.add(item.id);
-      await _updateArtifactSyncStatus(item.id, SyncStatusType.failed, isTombstone: isTombstone);
-      state = state.copyWith(lastError: e.toString());
+      // R25: an unclassified/unexpected exception carries no evidence of
+      // permanence, so it must remain retryable — routed through the same
+      // bounded exponential backoff / max-attempt policy as any transient
+      // failure. It must never be silently promoted to a permanent failure.
+      await _handleRetryableFailure(item, e.toString(), isTombstone: isTombstone);
     } finally {
       _inFlightMediaIds.remove(item.id);
     }

@@ -5,6 +5,8 @@ import 'router.dart';
 import '../core/services/session_service.dart';
 import '../features/auth/session_router.dart';
 import '../features/sync/services/sync_coordinator.dart';
+import '../features/sync/models/sync_state.dart';
+import '../features/sites/site_controller.dart';
 
 class SiteLensApp extends ConsumerWidget {
   const SiteLensApp({super.key});
@@ -51,6 +53,13 @@ class SyncLifecycleBootstrap extends ConsumerWidget {
     final user = ref.watch(sessionServiceProvider.select((s) => s.user));
     if (user != null) {
       ref.watch(syncCoordinatorProvider);
+      ref.listen<SyncState>(syncCoordinatorProvider, (previous, next) {
+        if ((previous == null || !previous.isOnline) && next.isOnline) {
+          // Network restored: trigger remote site hydration in background.
+          // Active site continuity invariant: hydration preserves current active site.
+          ref.read(siteControllerProvider.notifier).hydrateSites();
+        }
+      });
     }
     return child;
   }

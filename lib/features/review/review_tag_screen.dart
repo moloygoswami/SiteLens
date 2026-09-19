@@ -1,9 +1,12 @@
+import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/theme.dart';
 import '../../domain/models/enums.dart';
 import '../../shared/utils/responsive_layout.dart';
 import '../camera/services/evidence_storage_service.dart';
+import '../gallery/controllers/evidence_video_playback.dart';
 import 'controllers/review_tag_controller.dart';
 import 'models/pending_capture_payload.dart';
 import 'models/review_tag_state.dart';
@@ -32,6 +35,12 @@ class _ReviewTagScreenState extends ConsumerState<ReviewTagScreen> {
   String? _resolvedEvidencePath;
   String? _processingError;
   bool _isPopping = false;
+  bool _isDiscardDialogOpen = false;
+
+  /// Single-owner playback for a just-captured video, so Review & Tag can play
+  /// the evidence immediately and hand the same owner to the gallery. Null for
+  /// photos (R13).
+  EvidenceVideoPlayback? _videoPlayback;
 
   @override
   void initState() {
@@ -86,19 +95,46 @@ class _ReviewTagScreenState extends ConsumerState<ReviewTagScreen> {
     if (path == null || path.isEmpty) return;
     final storage = ref.read(evidenceStorageServiceProvider);
     final abs = await storage.resolveAbsolutePath(path);
-    if (mounted) {
-      setState(() => _resolvedEvidencePath = abs);
+    if (!mounted) return;
+    _syncVideoPlayback(abs);
+    setState(() => _resolvedEvidencePath = abs);
+  }
+
+  /// Establishes the single video playback owner for the just-captured video.
+  /// Reuses the existing owner when the resolved path is unchanged so a rebuild
+  /// never creates a second decoder for the same recording (R13).
+  void _syncVideoPlayback(String? absPath) {
+    if (!_currentPayload.isVideo || absPath == null || absPath.isEmpty) return;
+    final existing = _videoPlayback;
+    if (existing != null &&
+        !existing.isDisposed &&
+        existing.videoFile.path == absPath) {
+      return;
     }
+    existing?.dispose();
+    final playback =
+        ref.read(evidenceVideoPlaybackFactoryProvider)(File(absPath));
+    _videoPlayback = playback;
+    unawaited(playback.initialize());
   }
 
   @override
   void dispose() {
+    _videoPlayback?.dispose();
+    _videoPlayback = null;
     _activityController.dispose();
     _noteController.dispose();
     super.dispose();
   }
 
   Future<void> _handleRetake() async {
+    // R14: back/dismiss must never discard an uncommitted capture while its
+    // save is in flight — the persistence pipeline is committing those files.
+    if (ref.read(reviewTagControllerProvider).isSaving) return;
+    // Re-entrancy guard: a double back gesture must not stack discard dialogs.
+    if (_isDiscardDialogOpen) return;
+    _isDiscardDialogOpen = true;
+
     final confirm = await showDialog<bool>(
       context: context,
       barrierColor: const Color.fromRGBO(0, 0, 0, 0.6),
@@ -166,6 +202,7 @@ class _ReviewTagScreenState extends ConsumerState<ReviewTagScreen> {
         ],
       ),
     );
+    _isDiscardDialogOpen = false;
 
     if (confirm == true && mounted) {
       await ref
@@ -189,6 +226,7 @@ class _ReviewTagScreenState extends ConsumerState<ReviewTagScreen> {
           initialLat: _currentPayload.metadataSnapshot.latitude,
           initialLon: _currentPayload.metadataSnapshot.longitude,
           initialSiteId: _currentPayload.metadataSnapshot.siteId,
+          initialSiteCode: _currentPayload.metadataSnapshot.siteCode,
           isPicker: true,
         ),
       ),
@@ -311,6 +349,7 @@ class _ReviewTagScreenState extends ConsumerState<ReviewTagScreen> {
                             child: ReviewMediaPreview(
                               payload: _currentPayload,
                               absoluteEvidencePath: _resolvedEvidencePath,
+                              videoPlayback: _videoPlayback,
                             ),
                           ),
                         ),
@@ -368,6 +407,7 @@ class _ReviewTagScreenState extends ConsumerState<ReviewTagScreen> {
                             ReviewMediaPreview(
                               payload: _currentPayload,
                               absoluteEvidencePath: _resolvedEvidencePath,
+                              videoPlayback: _videoPlayback,
                             ),
                             const SizedBox(height: 18),
                             _buildFormFields(reviewState),
@@ -616,7 +656,7 @@ class _ReviewTagScreenState extends ConsumerState<ReviewTagScreen> {
                     padding: const EdgeInsets.only(top: 8),
                     child: SmartLinkCard(
                       candidate: reviewState.suggestedBeforeMatch!,
-                      distanceMeters: reviewState.suggestedDistanceMeters ?? 0.0,
+                      distanceMeters: reviewState.suggestedDistanceMeters,
                       isLinked: false,
                       onLink: () {
                         ref

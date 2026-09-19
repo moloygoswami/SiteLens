@@ -41,6 +41,7 @@ import 'package:sitelens/features/sites/site_controller.dart';
 import 'package:sitelens/features/camera/services/media_persistence_coordinator.dart';
 import 'package:image/image.dart' as img;
 import 'package:sitelens/features/camera/models/camera_hardware_state.dart';
+import 'package:sitelens/features/camera/models/gps_hardware_state.dart';
 import 'package:sitelens/features/camera/controllers/map_thumbnail_controller.dart';
 import 'package:sitelens/features/camera/services/evidence_processing_service.dart';
 import 'package:sitelens/features/camera/models/processed_evidence_payload.dart';
@@ -263,7 +264,7 @@ class MockSiteRepository implements SiteRepository {
   Future<List<SiteModel>> getAllSites({String? creatorId}) async => [site];
 
   @override
-  Future<SiteModel?> getSiteById(String id) async => site.id == id ? site : null;
+  Future<SiteModel?> getSiteById(String id, {String? creatorId}) async => site.id == id ? site : null;
 
   @override
   Future<void> saveSite(SiteModel site) async {}
@@ -272,10 +273,13 @@ class MockSiteRepository implements SiteRepository {
   Future<void> deleteSite(String id, {String? creatorId}) async {}
 
   @override
-  Future<bool> hasMediaForSite(String siteId) async => false;
+  Future<bool> hasMediaForSite(String siteId, {String? creatorId}) async => false;
 
   @override
   Future<void> seedDefaultSitesIfEmpty() async {}
+
+  @override
+  Future<List<SiteModel>> hydrateRemoteSites(String userId) async => [];
 }
 
 /// Throws to simulate a persistence failure during "Keep for later".
@@ -369,6 +373,33 @@ class _ReentrancyCameraHardwareNotifier extends CameraHardwareNotifier {
       // immediately upon hardware completion, creating the post-hardware re-entrancy window.
       state = state.copyWith(status: CameraStatus.ready);
     }
+  }
+}
+
+/// Counts video-start dispatches and can hold one start in flight, so tests can
+/// prove the screen-level capture mutex covers the recording-start path (R12).
+class _GatedVideoStartCameraNotifier extends _ReentrancyCameraHardwareNotifier {
+  _GatedVideoStartCameraNotifier(super.service, super.tempDir);
+
+  int startVideoCallCount = 0;
+  Completer<void>? startGate;
+
+  @override
+  Future<bool> startVideoRecording({
+    GpsHardwareState? recordingGpsState,
+    String? recordingSiteId,
+    String? recordingSiteCode,
+    String? recordingSiteName,
+    String? recordingCreatorId,
+  }) async {
+    startVideoCallCount++;
+    final gate = startGate;
+    if (gate != null && !gate.isCompleted) {
+      await gate.future;
+    }
+    if (!mounted) return false;
+    state = state.copyWith(status: CameraStatus.recordingVideo);
+    return true;
   }
 }
 
@@ -1302,6 +1333,58 @@ void main() {
       // Exactly one route pushed on retry
       expect(navObserver.pushedRouteCount, 1);
       expect(find.byType(ReviewTagScreen), findsOneWidget);
+    });
+
+    testWidgets(
+        'R12: rapid shutter re-tap during an in-flight video start dispatches exactly one recording',
+        (tester) async {
+      final tempDir = Directory.systemTemp.createTempSync('sitelens_r12_video_');
+      addTearDown(() {
+        if (tempDir.existsSync()) {
+          tempDir.deleteSync(recursive: true);
+        }
+      });
+
+      final cameraNotifier =
+          _GatedVideoStartCameraNotifier(TestCameraService(), tempDir);
+      final gate = Completer<void>();
+      cameraNotifier.startGate = gate;
+
+      await tester.pumpWidget(createCameraTestWidget(
+        overrides: [
+          cameraHardwareProvider.overrideWith((ref) => cameraNotifier),
+          evidenceStorageServiceProvider
+              .overrideWithValue(_ReentrancyEvidenceStorageService()),
+          evidenceProcessingServiceProvider
+              .overrideWithValue(_ReentrancyEvidenceProcessingService()),
+          authServiceProvider.overrideWithValue(_CameraTestAuthService()),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      // Switch to video capture mode through the mode switcher UI.
+      await tester.tap(find.text('VIDEO'));
+      await tester.pumpAndSettle();
+
+      // First tap dispatches the recording start, held in flight by the gate.
+      await tester.tap(find.byType(ShutterButton));
+      await tester.pump();
+      expect(cameraNotifier.startVideoCallCount, 1);
+
+      // A second tap while the start is still in flight is dropped by the same
+      // authoritative mutex the photo/stop paths use.
+      await tester.tap(find.byType(ShutterButton), warnIfMissed: false);
+      await tester.pump();
+      expect(
+        cameraNotifier.startVideoCallCount,
+        1,
+        reason: 'R12: recording start is under the authoritative capture mutex',
+      );
+
+      gate.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pumpAndSettle();
     });
   });
 

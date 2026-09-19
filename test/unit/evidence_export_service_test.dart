@@ -73,7 +73,7 @@ void main() {
         item: testMediaItem,
         siteCode: 'SL-001',
         siteName: 'Sector Alpha Construction',
-        inspectorEmail: 'inspector@company.com',
+        exporterEmail: 'inspector@company.com',
         imageBytes: Uint8List.fromList([0, 0, 0, 0]),
         mode: EvidenceReportMode.standardInspectionNote,
       );
@@ -91,7 +91,7 @@ void main() {
         item: testMediaItem,
         siteCode: 'SL-001',
         siteName: 'Sector Alpha Construction',
-        inspectorEmail: 'inspector@company.com',
+        exporterEmail: 'inspector@company.com',
         imageBytes: Uint8List.fromList([0, 0, 0, 0]),
         mode: EvidenceReportMode.forensicAudit,
       );
@@ -219,7 +219,7 @@ void main() {
         [testMediaItem],
         siteCode: 'SL-001',
         siteName: 'Sector Alpha Construction',
-        inspectorEmail: 'inspector@company.com',
+        exporterEmail: 'inspector@company.com',
       );
 
       expect(zipPath, isNotNull);

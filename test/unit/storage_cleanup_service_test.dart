@@ -82,10 +82,10 @@ class FakeMediaRepository implements MediaRepository {
   Future<List<MediaItem>> getTombstoneSyncCandidates({String? creatorId}) async => const [];
 
   @override
-  Stream<int> watchTombstoneCandidateCount() => const Stream<int>.empty();
+  Stream<int> watchTombstoneCandidateCount({String? creatorId}) => const Stream<int>.empty();
 
   @override
-  Future<MediaItem?> findSuggestedBeforeMatch({required double centerLat, required double centerLon, required String siteId, required String activityTag, double radiusMeters = 10.0, String? currentMediaId, String? creatorId, bool requireCreator = false}) async => null;
+  Future<MediaItem?> findSuggestedBeforeMatch({required double centerLat, required double centerLon, required String siteId, required String activityTag, required DateTime capturedBefore, double radiusMeters = 10.0, String? currentMediaId, String? creatorId, bool requireCreator = false}) async => null;
 
   @override
   Future<List<NearbyMediaResult>> findNearbyMedia({required double centerLat, required double centerLon, required double radiusMeters, String? siteId, String? activity, ObservationType? observationType, String? excludeMediaId, String? creatorId}) async => [];

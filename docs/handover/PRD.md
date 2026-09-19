@@ -11,36 +11,75 @@ SiteLens Phase 1 provides:
 The application is a **Flutter mobile application** designed for
 field/site engineers.
 
+#### 1.1 Authoritative V1 Product Model: Single-Tenant Creator Ownership (Product/Security Model; R01)
+
+**SiteLens v1 is user-specific, not location-specific.**
+
+- **Independent User Data Domain**: Each authenticated user operates within an independent, isolated personal SiteLens data domain.
+- **Multi-Site Management**: A single user may independently create and manage multiple construction sites.
+- **Physical Construction Site Reality**: Multiple independent users may work at the same physical construction site, project, or location.
+- **Location Independence & Proximity Non-Authorization**: Physical co-location, shared site codes, matching site names, identical addresses, or shared GPS coordinates **never** grant access or authorization between users:
+  $$\text{same physical site} \ne \text{shared data}$$
+  $$\text{same site code} \ne \text{authorization}$$
+  $$\text{same address} \ne \text{authorization}$$
+  $$\text{same GPS} \ne \text{authorization}$$
+- **Zero Cross-User Data Access**: User A must never access User B's SiteLens data under any circumstances. This non-accessibility invariant applies to all application resources:
+  * sites
+  * evidence / media records
+  * original photos and videos
+  * derived evidence photos and thumbnails
+  * local and cloud galleries
+  * local SQLite / Drift database records
+  * active-site selection context
+  * pending captures and uncommitted work
+  * synchronization queues and retry state
+  * soft-delete tombstones
+  * Cloud Firestore records and Cloud Storage media objects
+- **Authorization Boundary**: The v1 authorization boundary is strictly the authenticated user's identity (`creator_id == request.auth.uid`).
+
 Phase 1 includes:
 
--   Firebase Authentication
+-   Firebase Authentication (Email/Password, Google Sign-In)
 -   first-login permission onboarding
--   project/site selection
+-   project/site selection (creator-owned)
 -   GPS-aware photo/video capture
--   visible burned-in geotagging
+-   visible burned-in geotagging (Option B HUD Architecture)
 -   immutable original artifact with derived, privacy-safe evidence artifacts
 -   local-first media storage
 -   local gallery
--   media detail
+-   media detail with chunked technical telemetry
 -   GPS-based nearby-media search
 -   Before/After smart-linking
--   integrity hashing
--   Firebase cloud storage/data synchronization foundation
+-   integrity hashing (capture-time SHA-256 and live byte verification)
+-   Firebase cloud storage/data synchronization foundation (creator-bound)
 -   sync queue and status UI
--   settings
+-   settings and creator-owned account deletion
 
-Explicitly deferred:
+#### 1.2 Non-Goals and Deferred Capabilities (FUTURE SCOPE — NOT IMPLEMENTED IN V1)
 
--   WIR builder
--   NCR builder
--   Excel/compliance export
--   full multi-user collaboration
--   advanced reporting workflows
+The following collaborative, multi-user, and enterprise capabilities are **NOT** implemented in v1 and are explicitly reserved for future product phases:
+
+-   shared sites
+-   site membership
+-   member invitations
+-   member roles and permissions
+-   administrator roles
+-   role-based access control (RBAC)
+-   member-based authorization
+-   member-based evidence access
+-   revoked-member access handling
+-   successor-admin ownership
+-   ownership transfer between users
+-   shared-site account deletion retention
+-   team workspaces
+-   cross-user collaboration
+-   WIR (Work Inspection Request) builder
+-   NCR (Non-Conformance Report) builder
+-   Excel / CSV compliance tabular exports
+-   centralized web management dashboard
 -   server-side spatial search
 -   full per-frame video geotag burn-in
-
-The deferred capabilities can be added later as a
-reporting/collaboration layer on top of the media captured in Phase 1.
+-   automated evidence linking without user confirmation
 
 ------------------------------------------------------------------------
 
@@ -192,6 +231,30 @@ If a user forgets their password:
 -   **Firebase Reset Link**: Submitting calls `sendPasswordResetEmail()` to dispatch a secure password reset link to their email ID, allowing the user to create a new password.
 -   **User Feedback**: Displays confirmation upon dispatch or specific error feedback if the email format is invalid or network request fails.
 
+## 4.5 Authentication vs. Authorization & Multi-User Session Isolation (Session/Local Isolation; R04)
+
+The application strictly distinguishes between authentication and authorization:
+
+- **Authentication**: Establishes user identity via Firebase Authentication (Email/Password or Google Sign-In), yielding the authenticated user's unique identifier (`request.auth.uid`).
+- **Authorization**: Determines whether the authenticated user has permission to access, modify, or delete a specific resource. In SiteLens v1, authorization is strictly **creator-owned**:
+  $$\text{User has access} \iff \text{resource.creator\_id} == \text{request.auth.uid}$$
+  Authorization is never granted by site membership, admin status, site code, site name, street address, GPS coordinates, or physical proximity.
+
+### Multi-User Session Isolation Invariant (Normative Requirement)
+
+When User A signs out and User B signs in on the same physical device:
+- User B **MUST NOT** see or gain access to User A's SiteLens data.
+- This non-accessibility invariant applies to all visible and persisted application state, including:
+  * sites
+  * evidence and media records
+  * gallery content
+  * active site selection
+  * pending captures and uncommitted work
+  * synchronization queues and retry state
+  * soft-delete tombstones
+  * cached files and database records
+- Each user's data domain remains completely isolated across sign-in/sign-out cycles.
+
 ------------------------------------------------------------------------
 
 # 5. Permission Onboarding
@@ -261,7 +324,7 @@ data.
 
 ------------------------------------------------------------------------
 
-# 6. Site Setup
+# 6. Site Setup & Site Context Requirements
 
 After successful authentication and required permission onboarding:
 
@@ -271,12 +334,136 @@ After successful authentication and required permission onboarding:
 -   display registered address
 -   establish the reference point used for geotag stamping
 
-The application should cache site information locally.
+## 6.1 User Identity vs. Site Identity & Physical Construction Site Reality
 
-If the device is offline:
+SiteLens strictly separates **User Identity** from **Site Identity**:
 
--   use cached site data where available
--   allow the specified manual address entry path where necessary
+- **User Identity**: The authenticated user's Firebase Auth UID (`creator_id`). This identity defines the security boundary, ownership, and authorization for all sites, evidence items, files, and tombstones.
+- **Site Identity**: Descriptive attributes of a construction project (`site_code`, `name`, `address`, GPS coordinates). These attributes describe a physical construction project. They do **not** determine authorization.
+- **Physical Construction Site Reality**:
+  * Multiple field engineers or subcontractors may independently work on the same physical construction site.
+  * An individual user may create a local or remote site entry that shares the exact same site code, site name, physical address, or GPS coordinates as a site created by another user.
+  * Shared site attributes describe physical reality; they do **not** create shared data or grant authorization:
+    $$\text{same physical site} \ne \text{shared data}$$
+    $$\text{same site code} \ne \text{authorization}$$
+    $$\text{same address} \ne \text{authorization}$$
+    $$\text{same GPS} \ne \text{authorization}$$
+  * Two users working on the same project remain completely isolated in their respective personal data domains.
+
+## 6.2 Normative Ownership Requirements
+
+1. **Strict Creator Ownership of Sites**: Every v1 site belongs to exactly one creator (`creator_id`).
+2. **Strict Creator Ownership of Evidence**: Every v1 evidence and media record belongs to exactly one creator (`creator_id`).
+3. **Security Boundary Enforcement**: Creator ownership is an integral part of the security boundary across local storage, SQLite/Drift, Cloud Firestore, and Cloud Storage.
+4. **Self-Domain Access Only**: Users can access only their own v1 data.
+5. **Site Identity Non-Substitution**: Site identity (`site_code`, `name`, `address`, GPS) must never be used as a substitute for user identity or authorization.
+6. **Proximity Non-Authorization**: Physical proximity or spatial co-location must never grant authorization.
+7. **Same-Site Isolation**: Users documenting the same physical construction site remain completely isolated.
+8. **Multi-Site Domains**: A single user's personal data domain may contain multiple sites.
+
+## 6.3 Local-First Site Context
+
+SiteLens must always load local site context first from the local Drift database.
+
+Network connectivity must never be required for:
+
+-   loading cached sites;
+-   restoring the active site;
+-   selecting a cached site;
+-   opening the camera;
+-   capturing evidence.
+
+Network availability controls cloud synchronization and remote site hydration, NOT local operational capability.
+
+## 6.4 Active Site Continuity — Critical Invariant
+
+The last selected active site remains active during both online and offline operation.
+
+The active site changes ONLY when the user explicitly selects another site.
+
+Network loss must NOT:
+-   clear the active site;
+-   replace the active site;
+-   create an offline duplicate;
+-   switch the active site.
+
+Network restoration must NOT:
+-   change the active site;
+-   replace it with a remotely returned site;
+-   create a duplicate.
+
+Application restart must restore the last selected active site when that site remains available locally in Drift.
+Lifecycle background/foreground transitions must preserve active-site identity.
+
+## 6.5 Evidence-to-Site Continuity
+
+Evidence captures maintain unbroken association with the active site regardless of network state:
+
+-   **Online capture**: Photo 1 → Site A
+-   **Network lost**: Photo 2 → Site A
+-   **Network restored**: Photo 3 → Site A
+
+All three evidence items must remain associated with the SAME Site A stable identity (`MediaItem.siteId == Site A`).
+Network state must never determine or alter evidence-to-site association.
+The gallery, media detail, and inspection history must therefore continue to show online and offline evidence together under Site A.
+
+## 6.6 Online Firestore → Drift Site Hydration
+
+Cloud Firestore is the authoritative remote source for the authenticated user's sites. Local Drift is the local operational cache.
+
+When authenticated and online:
+-   Retrieve sites owned by the current user (`creator_id == request.auth.uid`);
+-   Reconcile/upsert remote sites into local Drift (`insertOnConflictUpdate`);
+-   Make newly hydrated sites immediately available in the site picker;
+-   Preserve the locally persisted active site when it remains valid;
+-   Do NOT automatically switch or replace the active site merely because remote data was hydrated.
+
+The remote access query is scoped strictly to creator ownership:
+- `sites` collection query scoped strictly by `creator_id == request.auth.uid`.
+- No `members` collection group query or member-based hydration exists in v1.
+
+## 6.7 Offline Site Behavior
+
+If cached sites exist and network is unavailable:
+-   use cached sites automatically;
+-   restore the last selected active site;
+-   allow capture normally;
+-   do not require an "offline mode" action.
+
+## 6.8 Zero Local Sites State
+
+If zero local sites exist:
+-   **ONLINE**: attempt remote Firestore hydration asynchronously; if creator-owned sites are found, cache and display them; if none exist in Firestore, show the site-creation empty state.
+-   **OFFLINE**: provide the manual site creation path immediately.
+
+## 6.9 "Add Offline Site" Semantics
+
+"Add Offline Site" means creation of a brand-new inspection site locally in the Drift database by the current creator (`creator_id = current_user_uid`).
+It does NOT mean:
+-   enter offline mode;
+-   convert an existing site into offline mode;
+-   create an offline copy of an existing site.
+
+## 6.10 Multi-Device Requirement
+
+An existing Firestore site created by the authenticated user must become available locally when that user signs into another device while online.
+This covers:
+-   creator-owned sites created by the same authenticated user across devices;
+-   newly provisioned creator-owned sites.
+Shared-site and membership-based access do not exist in v1.
+
+## 6.11 Site Deletion Safety & Tombstone Lifecycle (Deletion Safety; R23 / Tombstone Retention/Purge; R24)
+
+1. **Active Media Guard (Deletion Safety; R23)**: Site deletion is strictly blocked if the site contains active (non-tombstoned) media records (`hasMediaForSite`). Users must delete or reassign active media prior to site deletion.
+2. **Tombstone Retention During Site Deletion (Tombstone Retention/Purge; R24)**: If a site has soft-deleted media records whose cloud tombstones are pending synchronization (`is_deleted == 1`, `tombstone_reconciled == 0`), those tombstones must be preserved until cloud reconciliation succeeds.
+3. **Atomic Purge (Tombstone Retention/Purge; R24)**: Once all media tombstones for the site are reconciled, or for sites with zero media, the site record and associated reconciled tombstones are atomically purged in the Drift `deleteSite` transaction.
+
+## 6.12 Source-of-Truth Model
+
+-   **Firestore**: authoritative remote repository for the user's creator-owned site and media state.
+-   **Drift**: local operational cache.
+-   **Offline**: Drift remains completely usable without waiting for network.
+-   **Online**: remote creator-owned state reconciles into Drift without displacing active site context.
 
 The active site context must be available to capture, gallery, media
 detail, nearby search, and synchronization.
@@ -402,27 +589,35 @@ Both renderers conform to the canonical layout specifications defined in `HudLay
 - **Automated Verification**: Complete and passing (476/476 tests passing across repository, including targeted minimap provenance tests, geometry tests, evidence processing tests, and 0 `flutter analyze` issues).
 - **Physical-Device Visual Validation (Accepted)**: Verified on physical Motorola edge 50 fusion (`ZA222NBPPV` / Android 16 / API 36). Live camera capture minimap at $T_0$ matched the burned minimap in Photo Evidence Detail and Immersive Viewer across Normal vector and Satellite imagery modes, with 1:1 visual correspondence across base tiles, center viewport, teardrop pin, radar circle, compass heading cone, and Google attribution. Downstream viewer displays burned JPEG without secondary map instantiation.
 
-## 7.5 Capture controls
+## 7.5 Capture controls & State Locks
 
 Photo mode:
 - 72px circular shutter button with orange brand accent ring
 - Gallery shortcut button with unreviewed media badge count
 - Camera flip button
+- **Capture Mutex (Shutter Re-entrancy Mutex; R12)**: The shutter action must be strictly locked during background isolate HUD compositing and persistence to prevent duplicate or overlapping captures.
 
 Video mode:
 - Red recording control with duration badge
 - Elapsed duration indicator during active recording
+- **Video Start-Time Authority ($T_0$) (R07)**: The authoritative video capture timestamp is anchored at the exact moment of recording initiation ($T_0$) and persists immutably throughout recording. It must not be overwritten or usurped by subsequent GNSS satellite fix updates during recording.
+- **Active Recording Camera/Telemetry Lock (R08)**: During active video recording, shutter mode switching, camera flipping, and aspect ratio controls are locked to prevent corrupted video streams or desynchronized telemetry.
+- **Audio Disclosure (Audio Track Availability Disclosure; R09)**: Video evidence records must explicitly record audio track presence/capability (`hasAudioTrack`) in metadata, truthfully disclosing whether audio was captured rather than assuming microphone capture or leaving audio state ambiguous.
 
 Mode switch:
 `PHOTO | VIDEO`
 
-## 7.6 GPS state logic
+## 7.6 GPS State Logic, Freshness & Sensor Provenance
 
-GPS status and geotag information update in real time from the active GNSS stream.
+GPS status and geotag information update in real time from the active GNSS stream:
 - Dedicated GPS status pill in top bar (`GPS: High • ±3m`, `GPS: Weak • ±12m`, etc.)
 - Throttle visual updates approximately every 1–2 seconds to prevent UI jitter.
-- If no GPS fix has ever been obtained: disable shutter and show `Waiting for GPS lock`.
+- **Live GPS Fix / Cached GPS (GPS Fix Freshness & Stream Recovery; R06)**: Shutter readiness strictly requires a live, verified fix (`hasLiveFix => hasValidFix && !isLastKnownSeed`). Stale cached location seeds from prior sessions or lifecycle pauses must never enable the shutter before a live GNSS fix is acquired.
+- If no live GPS fix has been obtained: disable shutter and show `Waiting for GPS lock` (GPS/capture-readiness dependency; R02). Lifecycle synchronization and service initialization states between camera and GPS providers are tracked for architecture and implementation (R03; no direct PRD requirement change).
 - If accuracy is worse than threshold (20m default): allow capture with `DEGRADED` status and store `low_accuracy: true`.
+- **Observed GNSS Coordinates**: Recorded coordinates represent observed GNSS receiver fixes, never synthetic, interpolated, or estimated coordinates.
+- **Unknown Telemetry Semantics & Sensor Fallback (R10)**: Compass heading, altitude, and GNSS satellite telemetry are recorded when available from hardware sensors; when unestablished or unavailable, values remain explicitly null/unknown with graceful UI fallback, without synthetic fabrication.
+- **Minimap Race Guard (R11)**: The shutter-time minimap snapshot uses generational tokens to prevent race conditions (implementation/architecture implication tracked). Cached minimap imagery may serve as fallback only when displacement $\le 20\text{m}$, age $\le 5\text{min}$, and map type matches.
 
 ------------------------------------------------------------------------
 
@@ -473,7 +668,7 @@ Optional free-text field for:
 
 NCR numbering is outside Phase 1.
 
-## 8.4 Smart-link
+## 8.4 Smart-link & Reciprocal Link Invariants
 
 When the user records an observation as `Closed` (silently treated as `After`):
 
@@ -496,19 +691,27 @@ Actions:
 The system MUST NOT automatically link evidence without user
 confirmation.
 
-Links are restricted to the same site and the same creator (creator/site
-isolation), and a `Closed` observation must be linked to an eligible open
-`Non-Conformity` on the same site before it can be saved.
+**Smart-Link Invariants**:
+- **Creator & Site Isolation**: Linking is restricted strictly to evidence within the same site in the authenticated user's own data domain. Evidence from other users or across different sites can never be linked.
+- **Smart-Link Temporal Semantics (R17)**: Candidate "Before" / Non-Conformity evidence must have been captured earlier in time than the "After" / Closed observation.
+- **Smart-Link Non-Destructive/Live-Distance (R18)**: Linking or unlinking Before/After pairs is non-destructive to candidate evidence records, and candidate proximity is evaluated using live distance calculation.
+- **Canonical Identity (R20)**: Review & Tag surfaces display the human-readable canonical site code / name rather than internal database UUIDs.
+- **Strict Closed Observation Rule**: A `Closed` observation must be linked to an eligible open `Non-Conformity` on the same site before it can be saved.
 
-## 8.5 Actions
+## 8.5 Actions, Navigation Confirmation & Video Handoff
 
 Retake:
+-   discard the current capture files safely
+-   return to camera with zero orphaned database rows
 
--   discard the current capture
--   return to camera
+Dismiss / Back Navigation Confirmation (PopScope/Cleanup; R14):
+-   Navigating back from Review & Tag or tapping dismiss with pending uncommitted capture triggers an explicit confirmation prompt ("Discard this capture? Unsaved evidence will be permanently lost").
+-   Prevents accidental evidence destruction from inadvertent back gestures.
+
+Video Handoff & Playback (Video Handoff/Player; R13):
+-   Review & Tag provides immediate video playback preview and seamless player handoff. In-flight video recordings interrupted by app lifecycle transitions are recovered safely (Keep for Later / Discard). Video player controller lifecycle, in-flight reference cleanup, and temporary recording recovery are tracked for implementation/architecture (no direct PRD requirement change).
 
 Save:
-
 -   write media to local file storage
 -   generate thumbnail
 -   calculate SHA-256
@@ -516,19 +719,25 @@ Save:
 -   add to sync queue
 -   show in Gallery
 
+### Export Attribution Truthfulness & Provenance Invariant (Export Attribution; R21)
+
+Every saved evidence record permanently binds the original capturing user's UID as `creator_id`. Downstream viewers, session handovers, PDF report generators, ZIP forensic exporters, and cloud synchronization services **MUST NOT** substitute the current session user for the original capture creator. Attribution is forensic and immutable.
+
 ------------------------------------------------------------------------
 
 # 9. Gallery
 
 The Gallery is a local media library designed for **1,000+ items**.
 
-## 9.1 Rendering
+## 9.1 Rendering & Deterministic Sorting (Deterministic Gallery Sort; R26)
 
 Use virtualized/lazy rendering.
 
 Never decode full-resolution originals for the entire grid.
 
 Generate approximately 200 px thumbnails at capture time.
+
+Gallery sorting is strictly deterministic: ordered by capture timestamp descending, with secondary sorting by record ID to ensure stable pagination.
 
 ## 9.2 Filters
 
@@ -587,7 +796,7 @@ Display:
 -   activity
 -   observation type
 -   note
--   SHA-256 integrity hash
+-   SHA-256 integrity hash (with explicit verification semantics)
 -   file size
 -   synchronization status
 
@@ -601,11 +810,17 @@ Secondary actions:
 -   Share
 -   Delete from Device / Remove from Gallery
 
-### Deletion, Storage Cleanup & Cloud Recovery Policy
+### 10.1 Live SHA-256 Byte Verification Semantics (Hash Semantics; R15)
 
-1. **Synced media — Remove from Gallery**: permanently deletes the local media files (original, evidence, thumbnail; video + thumbnail) and tombstones the local record (hidden from the Gallery). The immutable cloud copy remains intact, and the cloud evidence ledger is reconciled to a deleted state through synchronization.
-2. **Unsynced media — permanent deletion**: because unsynced media has no cloud backup, deletion requires an explicit, prominent destructive warning confirming the media will be permanently lost with no recovery option. After confirmation, local files are deleted and the record is tombstoned.
-3. **Tombstone semantics**: a locally deleted record is retained locally as a hidden tombstone until its cloud ledger state is reconciled. A previously published cloud evidence item is reconciled to a deleted ledger state; an item that was never published produces no cloud deletion claim. A cloud tombstone is a ledger state only — it never deletes or modifies cloud artifacts.
+Media Detail must strictly distinguish between displaying a stored hash record and performing live byte verification:
+- **Stored SHA-256 Hash**: The hash computed at capture time and stored in SQLite/Firestore metadata. It represents the historical integrity assertion.
+- **Live Byte Verification ("Verified" State)**: Requires reading the actual local file bytes from disk storage, recomputing the SHA-256 digest, and comparing it against the stored hash. Only a successful recomputed match qualifies for a "Verified" badge. If file bytes are missing or altered, the state must display as unverified or corrupted.
+
+### 10.2 Deletion, Storage Cleanup & Cloud Recovery Policy
+
+1. **Synced media — Remove from Gallery**: permanently deletes the local media files (original, evidence, thumbnail; video + thumbnail) and tombstones the local record (hidden from the Gallery). The immutable cloud copy remains intact, and the cloud evidence ledger is reconciled to a deleted state through synchronization (`syncTombstone`).
+2. **Unsynced media — permanent deletion**: because unsynced media has no cloud backup, deletion requires an explicit, prominent destructive warning confirming the media will be permanently lost with no recovery option. After confirmation, local files are deleted and the record is tombstoned locally.
+3. **Tombstone Semantics & Remote Propagation (Tombstone Remote Propagation; R22)**: a locally deleted record is retained locally as a hidden tombstone until its cloud ledger state is reconciled. For a previously published cloud evidence item, synchronization propagates `is_deleted: true` to Firestore via `syncTombstone`. An item that was never published produces no cloud deletion claim and is marked reconciled locally. A cloud tombstone is a metadata ledger state only — it never deletes or alters cloud storage artifacts.
 4. **Critical Invariant**: local deletion MUST NEVER delete Firebase Storage objects or Firestore documents. Cloud originals remain write-once immutable.
 5. **Storage Cleanup**: raw originals of already-synchronized photos can be cleared locally on demand to reclaim device space, while the derived evidence, thumbnail, and all metadata are preserved and the original remains recoverable from cloud storage.
 6. **Cloud Recovery**: cloud-backed media whose local files were removed can be recovered on demand via forensically verified (`sha256_hash`) download from Firebase Cloud Storage.
@@ -630,14 +845,16 @@ Provide:
 -   50 m
 -   Custom
 
-## 11.2 Filters
+## 11.2 Filters & User Isolation Invariant
 
 -   same site only --- default ON
 -   activity
 -   observation type
 -   date range
 
-## 11.3 Results
+**User Data Domain Isolation Invariant**: Nearby Media Search operates strictly within the authenticated user's own creator-owned data domain. Media captured by another user at the exact same physical coordinates or construction site is never queried, indexed, or visible.
+
+## 11.3 Results & Spatial Uncertainty (Nearby-Search Spatial Uncertainty; R19)
 
 Group by:
 
@@ -648,14 +865,14 @@ Group by:
 Each row displays:
 
 -   thumbnail
--   distance
+-   distance (exact Haversine refinement accounting for GPS spatial uncertainty)
 -   timestamp
 -   activity badge
 
 Within each group:
 
 1.  sort by distance
-2.  then recency
+2.  then recency (deterministic secondary sort; R26)
 
 ## 11.4 Suggested pair
 
@@ -722,22 +939,16 @@ This supports lifecycle documentation such as:
 The sync UI must be production-ready even when cloud synchronization is
 unavailable.
 
-## Account Deletion
+## Account Deletion (Creator-Owned Lifecycle)
 
 Account deletion is a coordinated lifecycle available directly in
-Settings:
+Settings for the authenticated creator:
 
--   identity re-authentication before deletion is permitted
--   the service classifies every site associated with the account:
-    sites owned solely by the user (including their cloud-stored media)
-    are permanently destroyed, while evidence contributed to shared
-    sites is retained for audit integrity
--   a user who is the sole administrator of a shared site must designate
-    an active successor administrator before deletion can proceed
--   after server-side deletion: local database records, cached media,
-    pending sync queues, and site preferences are purged, the session is
-    terminated, and the user is returned to the unauthenticated start
-    state
+-   **Identity Re-authentication**: Explicit password or OAuth re-authentication is mandatory before deletion is initiated.
+-   **Server-Side Destruction of Creator Data**: All Cloud Firestore documents (sites and media ledgers) and Firebase Cloud Storage objects (originals and thumbnails) where `creator_id == request.auth.uid` are permanently deleted.
+-   **Client-Side Purge**: Local Drift SQLite records, cached media files, pending sync queues, and active site preferences are purged from the device.
+-   **Session Termination**: The authenticated session is terminated, and the user is routed to the unauthenticated welcome screen.
+-   **Future Scope Note**: In SiteLens v1, all sites and media are strictly creator-owned. Shared-site evidence retention policies, organizational workspace retention, and successor administrator designations are **FUTURE SCOPE — NOT IMPLEMENTED IN V1**.
 
 ------------------------------------------------------------------------
 
@@ -823,7 +1034,7 @@ Downstream surfaces conform strictly to this invariant:
 - **Single-Item Share Sheet**: Shares canonical `evid_<id>.jpg` file directly to external apps.
 - **PDF Evidence Export**: Embeds canonical `evid_<id>.jpg` via `pw.BoxFit.contain` wrapped in `pw.Center`, guaranteeing complete burned HUD visibility with zero edge clipping.
 - **ZIP Evidence Export**: Bundles canonical `evid_<id>.jpg` alongside metadata JSON and CSV indexes.
-- **Cloud Synchronization**: Uploads `orig_<id>.jpg` and `thumb_<id>.jpg` with metadata matching `evid_<id>.jpg`.
+- **Cloud Synchronization**: Uploads original and thumbnail artifacts alongside structured metadata matching the evidence artifact. Whether the canonical burned evidence file (`evid_<id>.jpg`) is replicated directly to Cloud Storage as a cloud-authoritative artifact or remains client-derived/reproducible on demand requires an Architecture Decision (evid_ cloud architecture decision; R16) and is not pre-selected at the PRD level (no direct PRD requirement change; implementation/architecture implication tracked).
 
 For video:
 - Provide a static opening-frame stamp.
@@ -864,9 +1075,11 @@ CREATE TABLE sites (
   site_code TEXT,
   name TEXT,
   address TEXT,
-  creator_id TEXT
+  creator_id TEXT NOT NULL
 );
 ```
+
+`creator_id` is mandatory and bound to the authenticated Firebase Auth UID.
 
 ## 15.2 Local media
 
@@ -899,7 +1112,7 @@ CREATE TABLE media (
   sha256_hash TEXT,
   evidence_sha256_hash TEXT,
   captured_address TEXT,
-  creator_id TEXT,
+  creator_id TEXT NOT NULL,
   verification_status TEXT,
   is_altitude_msl INTEGER,
   gnss_satellite_count INTEGER,
@@ -916,34 +1129,27 @@ CREATE INDEX idx_media_obs ON media(observation_type);
 CREATE INDEX idx_media_captured ON media(captured_at);
 ```
 
-`sha256_hash` is the integrity hash of the immutable original artifact;
-`evidence_sha256_hash` is the integrity hash of the derived evidence
-artifact. Nullable metadata columns (`accuracy_m`, `altitude_m`,
-`verification_status`, `is_altitude_msl`, GNSS telemetry) mean the value
-was not established at capture time and must remain unknown rather than
-being filled with synthetic values. Capture is gated on a first valid GPS
-fix, so recorded coordinates are always real observed values.
+`creator_id` is mandatory, immutable, and permanently records the original capturing user UID (Export Attribution; R21). Video evidence records disclose audio capability via metadata (Audio Disclosure; R09). `sha256_hash` is the integrity hash of the immutable original artifact; `evidence_sha256_hash` is the integrity hash of the derived evidence artifact. Nullable metadata columns (`accuracy_m`, `altitude_m`, `verification_status`, `is_altitude_msl`, GNSS telemetry) mean the value was not established at capture time and must remain unknown rather than being filled with synthetic values. Capture is gated on a first valid GPS fix, so recorded coordinates are real observed values.
 
 ------------------------------------------------------------------------
 
-# 16. Firebase Data Model
+# 16. Firebase Data Model & Cloud Authorization
 
 Firebase is the cloud backend.
 
-Recommended conceptual structure:
+Authoritative conceptual structure for v1:
 
 ``` text
 users/{uid}
 
-sites/{siteId}
+sites/{siteId}                  (documents where creator_id == uid)
 
-sites/{siteId}/members/{uid}
-
-sites/{siteId}/media/{mediaId}
+sites/{siteId}/media/{mediaId}  (documents where creator_id == uid)
 ```
 
-Media documents should contain the cloud representation of relevant
-metadata, including:
+> **Scope Clarification**: Subcollections such as `sites/{siteId}/members/{uid}` are **NOT** implemented in v1. Site membership, member roles, and cross-user collection group hydration are **FUTURE SCOPE — NOT IMPLEMENTED IN V1**.
+
+Media documents contain the cloud representation of relevant metadata, including:
 
 -   media ID
 -   site ID
@@ -964,8 +1170,8 @@ metadata, including:
 -   SHA-256 hash of the original artifact
 -   SHA-256 hash of the derived evidence artifact
 -   captured address
--   creator/user ID
--   deletion flag (tombstone state)
+-   creator/user ID (`creator_id`)
+-   deletion flag (`is_deleted` tombstone state)
 
 Cloud Storage conceptual paths:
 
@@ -974,8 +1180,7 @@ sites/{siteId}/media/{mediaId}/original
 sites/{siteId}/media/{mediaId}/thumbnail
 ```
 
-Firebase Security Rules MUST restrict access according to authenticated
-user/site membership.
+Firebase Security Rules MUST restrict read, write, and delete operations strictly according to authenticated creator ownership (`creator_id == request.auth.uid`). Site membership, shared-site authorization, and role-based access control do not exist in v1.
 
 ------------------------------------------------------------------------
 
@@ -1026,9 +1231,7 @@ If synchronization fails:
 
 -   preserve local media
 -   preserve local metadata
--   classify the failure: retryable failures re-attempt automatically
-    with exponential backoff; permanent failures mark the item failed and
-    remain available for explicit manual retry
+-   **Sync Backoff & Error Classification (R25)**: classify the failure: retryable failures re-attempt automatically with exponential backoff; permanent failures mark the item failed and remain available for explicit manual retry
 -   failed attempts must never delete or invalidate the local original
 
 Locally deleted evidence is reconciled with the cloud through tombstone
@@ -1105,15 +1308,32 @@ index or server-side spatial query, but this is not required for Phase
 
 # 21. Security Requirements
 
--   Firebase Authentication must provide identity.
--   Firestore Security Rules must enforce authorized access.
--   Storage Rules must protect media.
--   No Firebase service-account credentials may be embedded in the
-    Flutter application.
--   API keys/configuration must use the appropriate platform
-    configuration and security controls.
--   Local evidence must remain protected by the device/application
-    security model.
+## 21.1 Authentication vs. Authorization
+
+-   **Authentication**: Firebase Authentication establishes user identity and produces the authenticated `request.auth.uid`.
+-   **Authorization**: Strictly creator-owned. An authenticated user is authorized to read, write, or delete resources if and only if `resource.data.creator_id == request.auth.uid`.
+-   **Non-Authorization by Site Identity or Location**: Physical co-location, shared site codes, matching site names, identical addresses, or shared GPS coordinates **never** grant access or authorization between users.
+-   Site membership, admin roles, and RBAC do not exist in v1.
+
+## 21.2 Multi-User Session Isolation
+
+-   When User A signs out and User B signs in on the same device, User B must have zero access to User A's data domain.
+-   Applies to all local SQLite records, cached files, active site context, sync queues, and soft-delete tombstones.
+
+## 21.3 Cloud Security Rules Enforcement (Firebase/Cloud Enforcement; R05)
+
+-   `firestore.rules` and `storage.rules` enforce creator-bound reads, writes, and deletes (`creator_id == request.auth.uid`).
+-   `creator_id` field is immutable after creation.
+-   Storage rules validate paths against creator ownership.
+-   Soft-delete tombstones propagate via metadata without deleting cloud storage objects.
+
+## 21.4 Defensive Hardening & System Hygiene
+
+-   No Firebase service-account credentials may be embedded in the Flutter application.
+-   User account enumeration mitigation: Authentication error messages must remain generic across invalid credentials and non-existent accounts.
+-   Path traversal sanitization: File resolution paths must sanitize sequence characters (`../`, `..\`) to prevent directory traversal.
+-   API keys and configuration must use appropriate platform security controls.
+-   Local evidence files and database records must remain protected by OS application sandbox isolation.
 -   Cloud sync failures must never result in local evidence deletion.
 
 ------------------------------------------------------------------------
@@ -1327,7 +1547,7 @@ Deliver:
 
 Deliver:
 
--   M6-A Security Rules hardening: `firestore.rules` and `storage.rules` validated via Firebase MCP with active membership semantics, secure bootstrap flow, self-join elimination, forensic field immutability, soft-delete authorization, disaggregated original/thumbnail storage paths, UI credential sanitation
+-   M6-A Security Rules hardening: `firestore.rules` and `storage.rules` validated via Firebase MCP with strict creator-ownership authorization (`creator_id == request.auth.uid`), secure bootstrap flow, forensic field immutability, soft-delete authorization, disaggregated original/thumbnail storage paths, and UI credential sanitation. (Note: historical membership-rule artifacts are superseded by the creator-ownership boundary; membership is classified as future scope).
 -   M6-B Asynchronous synchronization queue (`SyncCoordinator`) with exponential backoff and retry
 -   Firebase Cloud Storage uploads (original + thumbnail)
 -   Cloud Firestore metadata synchronization (`CloudSyncService` persisting `creator_id`, `captured_address`, `evidence_sha256_hash`)
@@ -1426,7 +1646,8 @@ Phase 1 is complete only when:
 -   capture, gallery, nearby search, and local storage work completely offline without network
 -   `SyncCoordinator` automatically enqueues and uploads media and metadata when connectivity returns
 -   failed sync items can be retried manually or via exponential backoff
--   Firebase Security Rules strictly restrict unauthorized cloud access
+-   Firebase Security Rules strictly restrict cloud access to creator-owned resources (`creator_id == request.auth.uid`)
+-   cross-user data isolation is maintained across all local and cloud surfaces
 -   local original clearing frees storage space while preserving evidence/thumbnail files
 -   cloud media recovery downloads missing files on demand with forensic SHA-256 verification
 -   local deletion operations never delete write-once immutable Cloud Storage or Firestore records
@@ -1448,12 +1669,20 @@ Phase 1 is complete only when:
 
 # 27. Explicit Non-Goals
 
-Do NOT implement as part of Phase 1:
+The following capabilities are explicitly deferred from Phase 1 and classified as **FUTURE SCOPE — NOT IMPLEMENTED IN V1**:
 
+-   shared sites
+-   site membership and member invitations
+-   member roles and administrator roles
+-   role-based access control (RBAC)
+-   member-based authorization and evidence access
+-   revoked-member access handling
+-   successor-admin ownership and ownership transfers between users
+-   shared-site account deletion retention
+-   team workspaces and cross-user collaboration
 -   WIR (Work Inspection Request) document generator
 -   NCR (Non-Conformance Report) document generator
 -   Excel / CSV compliance tabular exports
--   full enterprise multi-user role-based access control (RBAC)
 -   centralized web management dashboard
 -   server-side spatial search
 -   PostGIS / R-Tree spatial indexing unless measured requirements justify it
@@ -1518,7 +1747,7 @@ The following E2E features are fully implemented, covered by 457/457 passing aut
 | **Gallery & Media Detail** | Virtualized lazy grid (1,000+ items), thumbnail caching, multi-facet filtering (Date Range, Activity, Observation Type, Sync Status, Low GPS), search (site, notes, reference), Grid/Map view toggle, Media Detail chunked telemetry architecture (`GEOGRAPHIC & SPATIAL`, `TIMESTAMP & METADATA`, `FORENSIC INTEGRITY`), full-screen `InteractiveViewer` photo inspector and local video player, soft delete semantics (`is_deleted = 1`). | Complete M4 | **DELIVERED & GATED** |
 | **Forensic Export & Sharing** | Single evidence share + stamped PDF audit report card + SHA-256 clipboard copy, batch multi-select gallery mode + batch file share + multi-page inspection PDF export + structured forensic ZIP package export (`manifest.json` + `inspection_report.pdf` + media files). | Complete M4 | **DELIVERED & GATED** |
 | **Nearby Spatial Search** | Local bounding-box + Haversine search (2m–50m presets / Custom), interactive GoogleMap canvas with azure source pin and color-coded candidate markers, grouped results (Before, After, Progress/Material/General), suggested Before/After pairing card, chronological location lifecycle timeline ("See full history at this point"), filter modal with active filter count badge and dismissible chip strip. | Complete M5 | **DELIVERED & GATED** |
-| **Cloud Sync & Security** | Asynchronous `SyncCoordinator` queue with retry/backoff, Cloud Storage uploads (original + thumbnail), Firestore metadata synchronization (`creator_id`, `captured_address`, `evidence_sha256_hash`), `SyncStatusBadge` UI, declarative security rules (`firestore.rules`, `storage.rules`) with active membership semantics and forensic field immutability. | Complete M6 | **DELIVERED & GATED** |
+| **Cloud Sync & Security** | Asynchronous `SyncCoordinator` queue with retry/backoff, Cloud Storage uploads (original + thumbnail), Firestore metadata synchronization (`creator_id`, `captured_address`, `evidence_sha256_hash`), `SyncStatusBadge` UI, declarative security rules (`firestore.rules`, `storage.rules`) with strict creator-ownership authorization and forensic field immutability. | Complete M6 | **DELIVERED & GATED** |
 | **Settings, Storage Cleanup & Recovery** | Unified `SettingsScreen` hub, GPS accuracy threshold modal (`setting_gps_low_accuracy_threshold`, default 20.0m), watermark settings (`showAddress`, `showMapTile`), nearby search settings (`nearbySettingsProvider` wiring), storage cleanup ("Clear Synced Photo Originals Locally" via `StorageCleanupService`), on-demand cloud media recovery (`CloudMediaRecoveryService`) with deterministic path resolution and forensic SHA-256 verification, sync-aware destructive local deletion warnings. | Complete M7 | **DELIVERED & GATED** |
 | **Google Photos Auto-Sync** | Optional OAuth auto-upload to dedicated `SiteLens Evidence` album (`photoslibrary.appendonly` least-privilege scope), Drift SQLite schema v6 (`google_photos_sync_entries`), background retry/backoff queue, Settings card UI, genuine `mediaItem.id` verification, zero-loss startup un-queued media sweep, strict decoupling from authoritative Firebase sync. | Complete M7 | **DELIVERED & GATED** |
 | **Responsive UI & Security Hardening** | Responsive layout framework (`ResponsiveBreakpoints`, `ResponsiveTwoPane`) supporting phones, tablets, and desktop foldables, path traversal sequence sanitization (`../`, `..\`) in `EvidenceStorageService.resolveAbsolutePath()`, user account enumeration mitigation in `LoginScreen._parseAuthError()`. | Complete Cross-Cutting | **DELIVERED & GATED** |
@@ -1532,7 +1761,7 @@ Building on the verified Phase 1 media capture and forensic evidence foundation:
    - **Automated NCR (Non-Conformance Report) Generator**: Formal construction non-conformance documents linking open Non-Conformity items, severity classifications, root-cause notes, corrective action deadlines, and verified Closed resolution evidence.
    - **Direct Excel / CSV Compliance Export**: Tabular spreadsheet exports with embedded high-resolution thumbnail images, geolocation hyper-links, inspector signatures, and verifiable SHA-256 hash ledgers.
 
-2. **Phase 2.2 — Team Collaboration & Enterprise Multi-User**:
+2. **Phase 2.2 — Team Collaboration & Enterprise Multi-User (FUTURE SCOPE — NOT IMPLEMENTED IN V1)**:
    - **Multi-Inspector Project Synchronization**: Real-time Firestore synchronization of open site observations across multi-disciplinary inspection teams (e.g. Structural, MEP, Geotechnical, Safety).
    - **Role-Based Access Control (RBAC)**: Fine-grained permissions for Field Inspectors (capture and tag), Lead Quality Auditors (approve and close NCRs), Subcontractor Representatives (view assigned tasks and upload resolution proof), and Project Managers (read-only audit dashboard).
    - **Real-Time Team Review & Approval Queues**: In-app workflow for reviewing, approving, or requesting retakes on submitted inspection evidence.

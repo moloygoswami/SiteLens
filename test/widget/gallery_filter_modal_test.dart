@@ -7,6 +7,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqlite3/open.dart';
 
+import 'package:sitelens/core/services/auth_service.dart';
+import 'package:sitelens/core/services/session_service.dart';
 import 'package:sitelens/data/local/database/app_database.dart';
 import 'package:sitelens/data/local/database/database_provider.dart';
 import 'package:sitelens/data/repositories/media_repository.dart';
@@ -16,6 +18,26 @@ import 'package:sitelens/domain/models/site_model.dart';
 import 'package:sitelens/features/gallery/controllers/gallery_controller.dart';
 import 'package:sitelens/features/gallery/widgets/gallery_filter_modal.dart';
 import 'package:sitelens/features/sites/site_controller.dart';
+
+class TestAuthService implements AuthService {
+  @override
+  AuthUser? get currentUser =>
+      const AuthUser(uid: 'test-user', email: 'test@sitelens.local');
+
+  @override
+  Stream<AuthUser?> get authStateChanges => Stream.value(
+      const AuthUser(uid: 'test-user', email: 'test@sitelens.local'));
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class MockSessionService extends StateNotifier<UserSessionState> implements SessionService {
+  MockSessionService(super.state);
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
 
 void main() {
   late AppDatabase db;
@@ -40,6 +62,12 @@ void main() {
       overrides: [
         appDatabaseProvider.overrideWithValue(db),
         mediaRepositoryProvider.overrideWithValue(LocalMediaRepository(db)),
+        sessionServiceProvider.overrideWith((ref) => MockSessionService(
+              const UserSessionState(
+                status: SessionStatus.authenticatedReady,
+                user: AuthUser(uid: 'test-user', email: 'test@sitelens.local'),
+              ),
+            )),
         siteControllerProvider.overrideWith(
           (ref) => SiteController(MockSiteRepository(testSite)),
         ),
@@ -65,6 +93,7 @@ void main() {
             capturedAt: '2026-08-15T09:00:00.000Z',
             lat: 22.56298,
             lon: 88.30085,
+            creatorId: const drift.Value('test-user'),
             synced: const drift.Value(0),
           ),
         );
@@ -79,6 +108,7 @@ void main() {
             capturedAt: '2026-08-15T10:00:00.000Z',
             lat: 22.56298,
             lon: 88.30085,
+            creatorId: const drift.Value('test-user'),
             synced: const drift.Value(1),
           ),
         );
@@ -181,7 +211,7 @@ class MockSiteRepository implements SiteRepository {
   Future<List<SiteModel>> getAllSites({String? creatorId}) async => [site];
 
   @override
-  Future<SiteModel?> getSiteById(String id) async => site.id == id ? site : null;
+  Future<SiteModel?> getSiteById(String id, {String? creatorId}) async => site.id == id ? site : null;
 
   @override
   Future<void> saveSite(SiteModel site) async {}
@@ -190,8 +220,11 @@ class MockSiteRepository implements SiteRepository {
   Future<void> deleteSite(String id, {String? creatorId}) async {}
 
   @override
-  Future<bool> hasMediaForSite(String siteId) async => false;
+  Future<bool> hasMediaForSite(String siteId, {String? creatorId}) async => false;
 
   @override
   Future<void> seedDefaultSitesIfEmpty() async {}
+
+  @override
+  Future<List<SiteModel>> hydrateRemoteSites(String userId) async => [];
 }

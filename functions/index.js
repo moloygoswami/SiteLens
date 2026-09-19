@@ -425,131 +425,42 @@ async function handleDeleteUserAccount(request, options = {}) {
     ? storage.bucket(process.env.STORAGE_BUCKET || 'sitelens-prod-80e7b.firebasestorage.app')
     : null);
 
-  const data = request.data || {};
-  // The backend NEVER trusts a client-supplied target UID. The caller is the ONLY identity processed.
-  const successorAdmins = (data && typeof data.successorAdmins === 'object' && data.successorAdmins !== null)
-    ? data.successorAdmins
-    : {};
+  // R23 (Deletion Safety): every required destructive remote cleanup failure is
+  // tracked. The function must never report a successful account deletion while
+  // any required cleanup remains unresolved, otherwise the client would purge
+  // its local evidence (the last surviving copy) after a falsely successful
+  // remote deletion.
+  const cleanupFailures = [];
+  const recordFailure = (operation, err) => {
+    const reason = err && err.message ? err.message : String(err);
+    cleanupFailures.push({ operation, reason });
+    console.warn(`[deleteUserAccount] ${operation} failed:`, reason);
+  };
 
-  // 3. Authoritative Firestore Discovery of all sites associated with the user
+  // 3. Authoritative Firestore Discovery of all creator-owned sites.
+  // SiteLens v1 is single-tenant creator-owned: the caller is the only identity
+  // processed, and every site they can reach is one where creator_id == callerUid.
+  // Membership, shared-site, and successor-administrator concepts do not exist
+  // in v1, so no collectionGroup/member discovery is performed.
   const siteIds = new Set();
 
   try {
-    // 3a. Find sites via collectionGroup membership
-    const memberSnap = await db.collectionGroup('members').where('user_id', '==', callerUid).get();
-    memberSnap.forEach((doc) => {
-      if (doc.ref.parent && doc.ref.parent.parent) {
-        siteIds.add(doc.ref.parent.parent.id);
-      }
-    });
-  } catch (err) {
-    console.warn('[deleteUserAccount] collectionGroup query error, falling back to direct query:', err.message);
-  }
-
-  try {
-    // 3b. Find sites where user is creator_id
     const createdSitesSnap = await db.collection('sites').where('creator_id', '==', callerUid).get();
     createdSitesSnap.forEach((doc) => siteIds.add(doc.id));
   } catch (err) {
-    console.warn('[deleteUserAccount] created sites query error:', err.message);
+    recordFailure('discover creator-owned sites', err);
   }
 
-  const soleMemberSiteIds = [];
-  const sharedSitesToLeave = [];
-  const sharedSitesToPromote = [];
-  const sitesNeedingSuccessor = [];
-
-  // 4. Site Classification & Sole-Admin Successor Validation
-  for (const siteId of siteIds) {
-    const siteRef = db.collection('sites').doc(siteId);
-    let siteDoc;
-    try {
-      siteDoc = await siteRef.get();
-    } catch (_) {
-      continue;
-    }
-
-    if (!siteDoc || !siteDoc.exists) {
-      continue;
-    }
-
-    const siteData = siteDoc.data() || {};
-    let membersSnap;
-    try {
-      membersSnap = await siteRef.collection('members').get();
-    } catch (_) {
-      membersSnap = { docs: [], forEach: () => {} };
-    }
-
-    const allMemberDocs = membersSnap.docs || [];
-    const activeMembers = allMemberDocs.filter((d) => {
-      const m = d.data() || {};
-      const uid = m.user_id || d.id;
-      return m.status === 'active' || m.status === undefined;
-    });
-
-    // Check if the deleting user is the sole member
-    const otherActiveMembers = activeMembers.filter((d) => {
-      const uid = d.data().user_id || d.id;
-      return uid !== callerUid;
-    });
-
-    if (otherActiveMembers.length === 0) {
-      // Sole-Member Site: Permanently delete site, its media metadata, and its storage files
-      soleMemberSiteIds.push(siteId);
-    } else {
-      // Shared Site: User is leaving; check admin succession rules
-      const otherActiveAdmins = otherActiveMembers.filter((d) => d.data().role === 'admin');
-
-      if (otherActiveAdmins.length === 0) {
-        // Deleting user is the SOLE administrator of this multi-member site
-        const designatedSuccessorUid = successorAdmins[siteId];
-
-        const isSuccessorValid =
-          typeof designatedSuccessorUid === 'string' &&
-          designatedSuccessorUid.trim().length > 0 &&
-          designatedSuccessorUid !== callerUid &&
-          otherActiveMembers.some((d) => (d.data().user_id === designatedSuccessorUid || d.id === designatedSuccessorUid));
-
-        if (!isSuccessorValid) {
-          sitesNeedingSuccessor.push({
-            siteId,
-            siteName: siteData.name || siteData.site_code || siteId,
-            eligibleMembers: otherActiveMembers.map((d) => ({
-              userId: d.data().user_id || d.id,
-              role: d.data().role || 'member',
-              status: d.data().status || 'active',
-            })),
-          });
-        } else {
-          sharedSitesToPromote.push({ siteId, successorUid: designatedSuccessorUid.trim() });
-          sharedSitesToLeave.push(siteId);
-        }
-      } else {
-        // Another active admin already exists; no successor required
-        sharedSitesToLeave.push(siteId);
-      }
-    }
-  }
-
-  // 5. Fail safely if any sole-admin shared site lacks an eligible successor
-  if (sitesNeedingSuccessor.length > 0) {
-    throw new HttpsError(
-      'failed-precondition',
-      'Cannot delete account: You are the sole administrator of one or more shared sites. Please designate an active successor administrator for each shared site before deleting your account.',
-      {
-        requiresSuccessor: true,
-        sitesNeedingSuccessor,
-      }
-    );
-  }
-
-  // 6. Execute Destructive Cleanup Idempotently
+  // 4. Execute Destructive Cleanup Idempotently (creator-owned sites only).
+  // A site document is removed only once every required cleanup for that site
+  // succeeded, so a partial failure stays discoverable for a safe, idempotent
+  // retry instead of stranding unreclaimed Storage artifacts behind a deleted
+  // site document.
   let purgedStorageFilesCount = 0;
 
-  // 6a. Sole-Member Sites: Purge Cloud Storage & Firestore
-  for (const siteId of soleMemberSiteIds) {
+  for (const siteId of siteIds) {
     const siteRef = db.collection('sites').doc(siteId);
+    let siteCleanupSucceeded = true;
 
     // Delete Cloud Storage files
     if (bucket && typeof bucket.deleteFiles === 'function') {
@@ -560,69 +471,92 @@ async function handleDeleteUserAccount(request, options = {}) {
           purgedStorageFilesCount += files.length;
         }
       } catch (storageErr) {
-        console.warn(`[deleteUserAccount] Storage purge error for site ${siteId}:`, storageErr.message);
+        siteCleanupSucceeded = false;
+        recordFailure(`purge Storage for site ${siteId}`, storageErr);
       }
+    } else {
+      siteCleanupSucceeded = false;
+      recordFailure(`purge Storage for site ${siteId}`, new Error('Storage bucket unavailable'));
     }
 
     // Delete Firestore /media subcollection documents
     try {
       const mediaSnap = await siteRef.collection('media').get();
       for (const mDoc of mediaSnap.docs) {
-        await mDoc.ref.delete().catch(() => {});
+        try {
+          await mDoc.ref.delete();
+        } catch (mediaErr) {
+          siteCleanupSucceeded = false;
+          recordFailure(`delete media ${mDoc.id} for site ${siteId}`, mediaErr);
+        }
       }
-    } catch (_) {}
+    } catch (mediaQueryErr) {
+      siteCleanupSucceeded = false;
+      recordFailure(`enumerate media for site ${siteId}`, mediaQueryErr);
+    }
 
-    // Delete Firestore /members subcollection documents
-    try {
-      const membersSnap = await siteRef.collection('members').get();
-      for (const memDoc of membersSnap.docs) {
-        await memDoc.ref.delete().catch(() => {});
+    // Delete the site document only if its own cleanup fully succeeded.
+    if (siteCleanupSucceeded) {
+      try {
+        await siteRef.delete();
+      } catch (siteErr) {
+        recordFailure(`delete site ${siteId}`, siteErr);
       }
-    } catch (_) {}
-
-    // Delete the site document
-    await siteRef.delete().catch(() => {});
+    }
   }
 
-  // 6b. Shared Sites: Promote successor (if needed) and remove deleting user's membership
-  for (const { siteId, successorUid } of sharedSitesToPromote) {
-    const memberRef = db.collection('sites').doc(siteId).collection('members').doc(successorUid);
-    await memberRef.update({ role: 'admin' }).catch((err) => {
-      console.error(`[deleteUserAccount] Failed to promote successor ${successorUid} on site ${siteId}:`, err);
-    });
-  }
-
-  for (const siteId of sharedSitesToLeave) {
-    const memberRef = db.collection('sites').doc(siteId).collection('members').doc(callerUid);
-    await memberRef.delete().catch(() => {});
-  }
-
-  // 6c. User Profile Document: Delete /users/{uid} if present
+  // 5a. User Profile Document: Delete /users/{uid} if present
   try {
-    await db.collection('users').doc(callerUid).delete().catch(() => {});
-  } catch (_) {}
+    await db.collection('users').doc(callerUid).delete();
+  } catch (userErr) {
+    recordFailure(`delete user profile ${callerUid}`, userErr);
+  }
 
-  // 6d. Support / Enquiries Scrubbing: Anonymize personal identifiers
+  // 5b. Support / Enquiries Scrubbing: Anonymize personal identifiers
   try {
     const enquiriesSnap = await db.collection('enquiries').where('userId', '==', callerUid).get();
     for (const enqDoc of enquiriesSnap.docs) {
-      await enqDoc.ref.update({
-        userId: null,
-        email: '[deleted]',
-        name: '[deleted]',
-      }).catch(() => {});
+      try {
+        await enqDoc.ref.update({
+          userId: null,
+          email: '[deleted]',
+          name: '[deleted]',
+        });
+      } catch (enqErr) {
+        recordFailure(`anonymize enquiry ${enqDoc.id}`, enqErr);
+      }
     }
-  } catch (_) {}
+  } catch (enqQueryErr) {
+    recordFailure('enumerate enquiries', enqQueryErr);
+  }
 
-  // 6e. Ephemeral Rate-Limit Records: Clean up user-specific entries
+  // 5c. Ephemeral Rate-Limit Records: Clean up user-specific entries
   try {
     const rateLimitsSnap = await db.collection('_system_rate_limits').get();
     for (const rlDoc of rateLimitsSnap.docs) {
       if (rlDoc.id.includes(`_${callerUid}_`) || rlDoc.id.startsWith(`uid_${callerUid}_`)) {
-        await rlDoc.ref.delete().catch(() => {});
+        try {
+          await rlDoc.ref.delete();
+        } catch (rlErr) {
+          recordFailure(`delete rate-limit record ${rlDoc.id}`, rlErr);
+        }
       }
     }
-  } catch (_) {}
+  } catch (rlQueryErr) {
+    recordFailure('enumerate rate-limit records', rlQueryErr);
+  }
+
+  // 6. R23: Fail closed before deleting the Auth identity. Reporting failure
+  // (instead of success) is what stops the client from purging its local
+  // evidence. The Auth identity is left intact so the caller can safely retry:
+  // every completed step above is idempotent.
+  if (cleanupFailures.length > 0) {
+    const operations = cleanupFailures.map((f) => f.operation).join('; ');
+    throw new HttpsError(
+      'internal',
+      `Account deletion incomplete: ${cleanupFailures.length} required remote cleanup operation(s) failed (${operations}). Nothing was reported deleted; please retry.`
+    );
+  }
 
   // 7. Delete Firebase Authentication Identity
   try {
@@ -637,8 +571,7 @@ async function handleDeleteUserAccount(request, options = {}) {
 
   return {
     success: true,
-    deletedSitesCount: soleMemberSiteIds.length,
-    sharedSitesUpdatedCount: sharedSitesToLeave.length,
+    deletedSitesCount: siteIds.size,
     purgedStorageFilesCount,
     message: 'Account and associated personal data successfully deleted.',
   };

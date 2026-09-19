@@ -2,12 +2,20 @@ import 'package:camera/camera.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sitelens/features/camera/controllers/camera_hardware_controller.dart';
 import 'package:sitelens/features/camera/models/camera_hardware_state.dart';
+import 'package:sitelens/features/camera/models/camera_ui_state.dart';
+import 'package:sitelens/features/camera/models/gps_hardware_state.dart';
 import 'package:sitelens/features/camera/services/camera_hardware_service.dart';
 
 class MockVideoCameraService extends CameraHardwareService {
   bool isRecording = false;
   bool startCalled = false;
   bool stopCalled = false;
+
+  @override
+  Future<double> getMinZoomLevel(CameraController controller) async => 0.5;
+
+  @override
+  Future<double> getMaxZoomLevel(CameraController controller) async => 5.0;
 
   @override
   Future<List<CameraDescription>> getAvailableCameras() async {
@@ -122,6 +130,60 @@ void main() {
 
       expect(service.stopCalled, isTrue);
       expect(notifier.state.status, CameraStatus.unavailable);
+    });
+  });
+
+  group('Wave B — R07/R08/R09 video authority, recording locks, audio disclosure', () {
+    const t0Gps = GpsHardwareState(
+      hasValidFix: true,
+      latitude: 22.5001,
+      longitude: 88.3001,
+      accuracyMeters: 3.0,
+      isLastKnownSeed: false,
+    );
+
+    test('R07: the T0 timestamp and the T0 GPS snapshot survive the stop unchanged', () async {
+      await notifier.startVideoRecording(recordingGpsState: t0Gps);
+      final t0 = notifier.state.recordingStartedAtUtc;
+      expect(t0, isNotNull);
+
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await notifier.stopVideoRecording();
+
+      // T0 (and the GPS snapshot frozen at T0) remain the authority — a stop
+      // timestamp never usurps them.
+      expect(notifier.state.recordingStartedAtUtc, t0);
+      expect(notifier.state.recordingGpsState, same(t0Gps));
+      expect(notifier.state.recordingGpsState!.latitude, 22.5001);
+      expect(notifier.state.recordingGpsState!.longitude, 88.3001);
+    });
+
+    test('R08: lens switching and zoom are locked while recording and apply otherwise', () async {
+      // Not recording: the control applies.
+      await notifier.setZoomPreset(CameraLensZoom.tele);
+      expect(notifier.state.lensZoom, CameraLensZoom.tele);
+      expect(notifier.state.currentZoomLevel, 2.0);
+
+      await notifier.startVideoRecording();
+      expect(notifier.state.isRecordingVideo, isTrue);
+
+      // Recording: lens switching and digital zoom are inert.
+      await notifier.setZoomPreset(CameraLensZoom.wide);
+      await notifier.setPinchZoom(4.5);
+      expect(notifier.state.lensZoom, CameraLensZoom.tele);
+      expect(notifier.state.currentZoomLevel, 2.0);
+    });
+
+    test('R09: audio presence is established at init and frozen at T0', () async {
+      // The initializing preset (max, audio enabled) established audio.
+      expect(notifier.state.isAudioEnabled, isTrue);
+
+      await notifier.startVideoRecording(recordingGpsState: t0Gps);
+      expect(notifier.state.recordingHasAudioTrack, isTrue);
+
+      await notifier.stopVideoRecording();
+      // The T0 audio snapshot is not re-derived or lost on stop.
+      expect(notifier.state.recordingHasAudioTrack, isTrue);
     });
   });
 }

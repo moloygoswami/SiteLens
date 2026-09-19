@@ -21,6 +21,33 @@ final gpsHardwareProvider =
   return GpsHardwareNotifier(service, geocodingService: geocodingService);
 });
 
+/// A buffered position together with its capture provenance and the altitude
+/// the device actually established for it.
+///
+/// Provenance exists so a cached last-known seed can never be selected as a
+/// live fix (R06). The resolved altitude/datum exists so an altitude the
+/// device never established is never substituted by the raw, non-nullable
+/// `Position.altitude` (which reads 0.0 when unavailable) — R10.
+@immutable
+class BufferedGpsPosition {
+  final Position position;
+  final bool isLive;
+  final double? resolvedAltitudeMeters;
+  final bool resolvedIsMsl;
+
+  const BufferedGpsPosition({
+    required this.position,
+    required this.isLive,
+    required this.resolvedAltitudeMeters,
+    required this.resolvedIsMsl,
+  });
+
+  double get latitude => position.latitude;
+  double get longitude => position.longitude;
+  double get accuracy => position.accuracy;
+  DateTime get timestamp => position.timestamp;
+}
+
 class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
   final LocationHardwareService _service;
   final GeocodingService? _geocodingService;
@@ -29,7 +56,7 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
   DateTime? _lastEmitTime;
   double? _activeSiteLat;
   double? _activeSiteLon;
-  final List<Position> _recentPositions = [];
+  final List<BufferedGpsPosition> _recentPositions = [];
 
   /// True while the position subscription is paused because the app left the
   /// foreground. A subscription paused for lifecycle reasons must not be relied
@@ -176,9 +203,46 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
     if (!mounted) return;
 
     final now = clock.now();
-    _recentPositions.add(position);
+
+    // Resolve the truthful altitude/datum BEFORE buffering, so every buffered
+    // entry carries the altitude the device actually established. An altitude
+    // the device did not establish stays null — the raw, non-nullable
+    // `Position.altitude` (0.0 when unavailable) is never substituted (R10).
+    double? altitudeMeters;
+    bool isAltitudeMsl;
+    if (defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.macOS) {
+      altitudeMeters = position.altitude;
+      isAltitudeMsl = true;
+    } else {
+      final telemetry = await _service.getAltitudeTelemetry();
+      if (telemetry.hasMslAltitude && telemetry.mslAltitudeMeters != null) {
+        altitudeMeters = telemetry.mslAltitudeMeters;
+        isAltitudeMsl = true;
+      } else if (telemetry.wgs84AltitudeMeters != null) {
+        altitudeMeters = telemetry.wgs84AltitudeMeters;
+        isAltitudeMsl = false;
+      } else {
+        altitudeMeters = null;
+        isAltitudeMsl = false;
+      }
+    }
+
+    if (!mounted) return;
+
+    _recentPositions.add(BufferedGpsPosition(
+      position: position,
+      isLive: !isInitial,
+      resolvedAltitudeMeters: altitudeMeters,
+      resolvedIsMsl: isAltitudeMsl,
+    ));
+    if (!isInitial) {
+      // A genuine stream emission supersedes any cached seed: once live
+      // provenance exists a seed must never remain selectable (R06).
+      _recentPositions.removeWhere((entry) => !entry.isLive);
+    }
     final cutoff = now.subtract(bufferRetention);
-    _recentPositions.removeWhere((p) => p.timestamp.isBefore(cutoff));
+    _recentPositions.removeWhere((entry) => entry.position.timestamp.isBefore(cutoff));
 
     // 1-second throttle before Riverpod state updates
     if (!isInitial && _lastEmitTime != null) {
@@ -191,6 +255,17 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
 
     final fixStatus = GPSUtils.evaluateAccuracy(position.accuracy, hasFix: true);
 
+    // Bearing 0.0 is the plugin's "unavailable" sentinel, not an established
+    // north: geolocator_android's LocationMapper only puts `heading` into the
+    // result when `Location.hasBearing()` is true, and Position.fromMap maps
+    // the absent key to 0.0. A stationary device (no course over ground) is
+    // therefore indistinguishable at this layer from a genuine due-north
+    // course, so 0.0 stays unknown rather than being disclosed as 0° (R10).
+    final double? headingDegrees =
+        (position.heading > 0.0 && position.heading <= 360.0)
+            ? position.heading
+            : null;
+
     double? distance;
     if (_activeSiteLat != null && _activeSiteLon != null) {
       distance = SpatialMathUtils.haversineDistanceMeters(
@@ -201,35 +276,17 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
       );
     }
 
-    // Determine truthful altitude and datum
-    double altitudeMeters = position.altitude;
-    bool isAltitudeMsl = false;
-
-    if (defaultTargetPlatform == TargetPlatform.iOS ||
-        defaultTargetPlatform == TargetPlatform.macOS) {
-      isAltitudeMsl = true;
-    } else {
-      final telemetry = await _service.getAltitudeTelemetry();
-      if (telemetry.hasMslAltitude && telemetry.mslAltitudeMeters != null) {
-        altitudeMeters = telemetry.mslAltitudeMeters!;
-        isAltitudeMsl = true;
-      } else {
-        altitudeMeters = telemetry.wgs84AltitudeMeters ?? position.altitude;
-        isAltitudeMsl = false;
-      }
-    }
-
-    if (!mounted) return;
-
     state = state.copyWith(
       fixStatus: fixStatus,
       hasValidFix: true,
       latitude: position.latitude,
       longitude: position.longitude,
       altitudeMeters: altitudeMeters,
+      clearAltitude: altitudeMeters == null,
       isAltitudeMsl: isAltitudeMsl,
       accuracyMeters: position.accuracy,
-      headingDegrees: (position.heading >= 0.0 && position.heading <= 360.0) ? position.heading : null,
+      headingDegrees: headingDegrees,
+      clearHeading: headingDegrees == null,
       timestampUtc: position.timestamp.toUtc(),
       distanceToSiteMeters: distance,
       clearError: true,
@@ -241,26 +298,29 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
     refreshGnssStatus();
   }
 
-  /// Returns the raw position with the best (lowest) reported horizontal accuracy
-  /// among recent valid positions within [window] (default: 5 seconds).
-  /// If multiple positions have the same best accuracy, the newest position is preferred.
+  /// Returns the buffered position with the best (lowest) reported horizontal
+  /// accuracy among recent LIVE positions within [window] (default: 5 seconds).
+  /// If multiple positions share the best accuracy, the newest is preferred.
   ///
-  /// Returns null when no raw position is available in the window — even if a
+  /// Only genuinely live positions are eligible: a cached last-known seed is
+  /// display-only and must never enter the live-fix selection path (R06).
+  ///
+  /// Returns null when no live position is available in the window — even if a
   /// valid fix is still latched. Callers must then keep the current GPS state
   /// as-is so unknown accuracy/altitude/fix-timestamp remain unknown
   /// (Cross-Cutting Audit A, F-A2: never synthesize concrete values).
-  Position? getBestRecentPosition({Duration window = const Duration(seconds: 5)}) {
+  BufferedGpsPosition? getBestRecentPosition({Duration window = const Duration(seconds: 5)}) {
     final now = clock.now();
     final cutoff = now.subtract(window);
     final candidates = _recentPositions
-        .where((p) => !p.timestamp.isBefore(cutoff))
+        .where((entry) => entry.isLive && !entry.position.timestamp.isBefore(cutoff))
         .toList();
 
     if (candidates.isNotEmpty) {
       candidates.sort((a, b) {
-        final accComp = a.accuracy.compareTo(b.accuracy);
+        final accComp = a.position.accuracy.compareTo(b.position.accuracy);
         if (accComp != 0) return accComp;
-        return b.timestamp.compareTo(a.timestamp);
+        return b.position.timestamp.compareTo(a.position.timestamp);
       });
       return candidates.first;
     }
@@ -268,29 +328,49 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
     return null;
   }
 
-  /// Applies the best recent raw position to a capture GPS state.
+  /// Applies the best recent live position to a capture GPS state.
   ///
-  /// Production seam shared by both shutter paths (photo capture and video
-  /// stop). When [bestPosition] is null — no raw position available in the
-  /// capture window — the incoming state is returned unchanged so unknown
-  /// accuracy/altitude/fix-timestamp stay unknown instead of being upgraded to
-  /// 0.0/now (Cross-Cutting Audit A, F-A2).
+  /// Production seam shared by the shutter paths. When [best] is null — no live
+  /// position available in the capture window — the incoming state is returned
+  /// unchanged so unknown accuracy/altitude/fix-timestamp stay unknown instead
+  /// of being upgraded to 0.0/now (Cross-Cutting Audit A, F-A2).
+  ///
+  /// Altitude authority: an established MSL altitude on the state always wins;
+  /// otherwise the selected position's *resolved* altitude/datum is adopted when
+  /// the device established one, and the state's value is kept when it did not.
+  /// The raw `Position.altitude` sentinel is never substituted (R10).
   static GpsHardwareState applyBestRecentPosition(
     GpsHardwareState gpsState,
-    Position? bestPosition,
+    BufferedGpsPosition? best,
   ) {
-    if (bestPosition == null || !gpsState.hasValidFix) {
+    if (best == null || !gpsState.hasValidFix) {
       return gpsState;
     }
+
+    final bool hasEstablishedMsl =
+        gpsState.isAltitudeMsl && gpsState.altitudeMeters != null;
+
+    final double? altitudeMeters;
+    final bool isAltitudeMsl;
+    if (hasEstablishedMsl) {
+      altitudeMeters = gpsState.altitudeMeters;
+      isAltitudeMsl = true;
+    } else if (best.resolvedAltitudeMeters != null) {
+      altitudeMeters = best.resolvedAltitudeMeters;
+      isAltitudeMsl = best.resolvedIsMsl;
+    } else {
+      altitudeMeters = gpsState.altitudeMeters;
+      isAltitudeMsl = gpsState.isAltitudeMsl;
+    }
+
     return gpsState.copyWith(
-      latitude: bestPosition.latitude,
-      longitude: bestPosition.longitude,
-      altitudeMeters:
-          (gpsState.isAltitudeMsl && gpsState.altitudeMeters != null)
-              ? gpsState.altitudeMeters
-              : bestPosition.altitude,
-      accuracyMeters: bestPosition.accuracy,
-      timestampUtc: bestPosition.timestamp.toUtc(),
+      latitude: best.latitude,
+      longitude: best.longitude,
+      altitudeMeters: altitudeMeters,
+      clearAltitude: altitudeMeters == null,
+      isAltitudeMsl: isAltitudeMsl,
+      accuracyMeters: best.accuracy,
+      timestampUtc: best.timestamp.toUtc(),
     );
   }
 

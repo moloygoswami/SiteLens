@@ -22,7 +22,7 @@ class FailingSiteRepository implements SiteRepository {
   }
 
   @override
-  Future<SiteModel?> getSiteById(String id) async => null;
+  Future<SiteModel?> getSiteById(String id, {String? creatorId}) async => null;
 
   @override
   Future<void> saveSite(SiteModel site) async {
@@ -35,10 +35,46 @@ class FailingSiteRepository implements SiteRepository {
   Future<void> deleteSite(String id, {String? creatorId}) async {}
 
   @override
-  Future<bool> hasMediaForSite(String siteId) async => false;
+  Future<bool> hasMediaForSite(String siteId, {String? creatorId}) async => false;
 
   @override
   Future<void> seedDefaultSitesIfEmpty() async {}
+
+  @override
+  Future<List<SiteModel>> hydrateRemoteSites(String userId) async => [];
+}
+
+class HydratableMockSiteRepository implements SiteRepository {
+  final SiteRepository _inner;
+  List<SiteModel> remoteSitesToHydrate;
+
+  HydratableMockSiteRepository(this._inner, {this.remoteSitesToHydrate = const []});
+
+  @override
+  Future<List<SiteModel>> getAllSites({String? creatorId}) => _inner.getAllSites(creatorId: creatorId);
+
+  @override
+  Future<SiteModel?> getSiteById(String id, {String? creatorId}) => _inner.getSiteById(id, creatorId: creatorId);
+
+  @override
+  Future<void> saveSite(SiteModel site) => _inner.saveSite(site);
+
+  @override
+  Future<void> deleteSite(String id, {String? creatorId}) => _inner.deleteSite(id, creatorId: creatorId);
+
+  @override
+  Future<bool> hasMediaForSite(String siteId, {String? creatorId}) => _inner.hasMediaForSite(siteId, creatorId: creatorId);
+
+  @override
+  Future<void> seedDefaultSitesIfEmpty() => _inner.seedDefaultSitesIfEmpty();
+
+  @override
+  Future<List<SiteModel>> hydrateRemoteSites(String userId) async {
+    for (final s in remoteSitesToHydrate) {
+      await _inner.saveSite(s);
+    }
+    return remoteSitesToHydrate;
+  }
 }
 
 void main() {
@@ -48,6 +84,7 @@ void main() {
   const testUserId = 'test-user-001';
 
   setUpAll(() {
+    driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
     open.overrideFor(OperatingSystem.linux, () => DynamicLibrary.open('libsqlite3.so.0'));
   });
 
@@ -377,7 +414,7 @@ void main() {
       );
 
       // Verify hasMediaForSite returns true
-      expect(await siteRepo.hasMediaForSite('site-4092'), isTrue);
+      expect(await siteRepo.hasMediaForSite('site-4092', creatorId: testUserId), isTrue);
 
       // Attempting to delete site-4092 must throw SiteReferencedByMediaException
       expect(
@@ -408,7 +445,7 @@ void main() {
       );
 
       // Pending tombstone blocks deletion
-      expect(await siteRepo.hasMediaForSite('site-4092'), isTrue);
+      expect(await siteRepo.hasMediaForSite('site-4092', creatorId: testUserId), isTrue);
 
       expect(
         () => siteController.deleteSite('site-4092'),
@@ -419,7 +456,7 @@ void main() {
       expect(siteController.state.availableSites.any((s) => s.id == 'site-4092'), isTrue);
     });
 
-    test('Can delete site when only never-published tombstones remain', () async {
+    test('Cannot delete site while an unreconciled never-published tombstone remains (R24)', () async {
       // Never-published tombstone (isDeleted = 1, synced = 0, tombstoneReconciled = 0)
       await db.into(db.media).insert(
         MediaCompanion.insert(
@@ -432,22 +469,24 @@ void main() {
           creatorId: const Value(testUserId),
           isDeleted: const Value(1),
           synced: const Value(0), // Never published
-          tombstoneReconciled: const Value(0),
+          tombstoneReconciled: const Value(0), // Not yet settled
         ),
       );
 
-      // Never-published tombstone does NOT block deletion
-      expect(await siteRepo.hasMediaForSite('site-4092'), isFalse);
+      // R24: an unreconciled tombstone is retained -> deletion is blocked.
+      expect(await siteRepo.hasMediaForSite('site-4092', creatorId: testUserId), isTrue);
 
-      // Deletion succeeds without FK violation
-      await siteController.deleteSite('site-4092');
+      expect(
+        () => siteController.deleteSite('site-4092'),
+        throwsA(isA<SiteReferencedByMediaException>()),
+      );
 
       await siteController.loadSitesAndActiveContext();
-      expect(siteController.state.availableSites.any((s) => s.id == 'site-4092'), isFalse);
+      expect(siteController.state.availableSites.any((s) => s.id == 'site-4092'), isTrue);
 
-      // Tombstone row was atomically removed from DB
+      // Tombstone row is retained (never purged).
       final remainingMedia = await (db.select(db.media)..where((tbl) => tbl.siteId.equals('site-4092'))).get();
-      expect(remainingMedia, isEmpty);
+      expect(remainingMedia.single.id, equals('media-never-published-tombstone'));
     });
 
     test('Can delete site when only fully reconciled tombstones remain', () async {
@@ -468,7 +507,7 @@ void main() {
       );
 
       // Fully reconciled tombstone does NOT block deletion
-      expect(await siteRepo.hasMediaForSite('site-4092'), isFalse);
+      expect(await siteRepo.hasMediaForSite('site-4092', creatorId: testUserId), isFalse);
 
       // Deletion succeeds without FK violation
       await siteController.deleteSite('site-4092');
@@ -511,12 +550,12 @@ void main() {
           linkedMediaId: const Value('tombstone-parent'),
           isDeleted: const Value(1),
           synced: const Value(0), // never published
-          tombstoneReconciled: const Value(0),
+          tombstoneReconciled: const Value(1), // reconciled so both rows are purge-eligible
         ),
       );
 
       // Has media check must allow deletion
-      expect(await siteRepo.hasMediaForSite('site-4092'), isFalse);
+      expect(await siteRepo.hasMediaForSite('site-4092', creatorId: testUserId), isFalse);
 
       // Must delete cleanly under strict PRAGMA foreign_keys = ON
       await siteRepo.deleteSite('site-4092', creatorId: testUserId);
@@ -535,6 +574,166 @@ void main() {
 
       await siteController.loadSitesAndActiveContext();
       expect(siteController.state.availableSites.any((s) => s.id == 'site-7721'), isFalse);
+    });
+  });
+
+  group('Site Context Requirements & Firestore → Drift Hydration', () {
+    test(
+      'Site A selected → online capture → network unavailable → offline capture → network restored → online capture (all reference SAME Site A stable ID)',
+      () async {
+        await siteController.loadSitesAndActiveContext();
+
+        final siteA = siteController.state.availableSites.firstWhere((s) => s.id == 'site-4092');
+        await siteController.setActiveSite(siteA);
+        expect(siteController.state.activeSite?.id, equals('site-4092'));
+
+        // 1. Online capture
+        // Evidence is captured with activeSite's ID
+        final onlineCapture1SiteId = siteController.state.activeSite?.id;
+        expect(onlineCapture1SiteId, equals('site-4092'));
+
+        // 2. Network loss / offline transition
+        // Invariant: Network loss must NOT clear, replace, or duplicate active site
+        // (Active-site continuity invariant)
+        expect(siteController.state.activeSite?.id, equals('site-4092'));
+
+        // 3. Offline capture
+        // Evidence captured offline uses the exact same stable site ID
+        final offlineCaptureSiteId = siteController.state.activeSite?.id;
+        expect(offlineCaptureSiteId, equals('site-4092'));
+
+        // 4. Network restored / online transition
+        // Remote hydration runs in background
+        await siteController.hydrateSites();
+
+        // Invariant: Network restoration must NOT change or displace the active site
+        expect(siteController.state.activeSite?.id, equals('site-4092'));
+
+        // 5. Online capture after restoration
+        final onlineCapture2SiteId = siteController.state.activeSite?.id;
+        expect(onlineCapture2SiteId, equals('site-4092'));
+
+        // All captures across online -> offline -> online transitions reference the exact same Site A stable ID
+        expect(onlineCapture1SiteId, equals(offlineCaptureSiteId));
+        expect(offlineCaptureSiteId, equals(onlineCapture2SiteId));
+        expect(onlineCapture1SiteId, equals('site-4092'));
+      },
+    );
+
+    test(
+      'Fresh device → authenticated online → existing authorized Firestore Site A → Site A hydrated into local Drift → Site A appears in site selection',
+      () async {
+        final freshDb = AppDatabase(NativeDatabase.memory(setup: (rawDb) {
+          rawDb.execute('PRAGMA foreign_keys = ON;');
+        }));
+        addTearDown(() => freshDb.close());
+
+        const freshUserId = 'fresh-user-777';
+        final baseRepo = LocalSiteRepository(freshDb);
+
+        // Before hydration, local Drift has 0 sites for fresh user
+        expect(await baseRepo.getAllSites(creatorId: freshUserId), isEmpty);
+
+        const remoteAuthorizedSiteA = SiteModel(
+          id: 'firestore-site-alpha-1',
+          siteCode: 'FA01',
+          name: 'Authorized Remote Pier Alpha',
+          address: 'Metro Corridor Pier 12, Kolkata',
+          creatorId: freshUserId,
+        );
+
+        final hydratingRepo = HydratableMockSiteRepository(
+          baseRepo,
+          remoteSitesToHydrate: [remoteAuthorizedSiteA],
+        );
+
+        final freshController = SiteController(hydratingRepo, initialUserId: freshUserId);
+
+        // Load sites (triggers local Drift load, then remote hydration)
+        await freshController.loadSitesAndActiveContext();
+        await freshController.hydrateSites();
+
+        // Site A has been hydrated into local Drift
+        final dbSites = await baseRepo.getAllSites(creatorId: freshUserId);
+        expect(dbSites.length, equals(1));
+        expect(dbSites.first.id, equals('firestore-site-alpha-1'));
+        expect(dbSites.first.siteCode, equals('FA01'));
+
+        // Site A appears in site selection and is set as active
+        expect(freshController.state.availableSites.length, equals(1));
+        expect(freshController.state.availableSites.first.id, equals('firestore-site-alpha-1'));
+        expect(freshController.state.activeSite?.id, equals('firestore-site-alpha-1'));
+      },
+    );
+
+    test('Hydration does NOT replace a valid currently active site', () async {
+      await siteController.loadSitesAndActiveContext();
+
+      // Explicitly set Site B ('site-1088') as active
+      final siteB = siteController.state.availableSites.firstWhere((s) => s.id == 'site-1088');
+      await siteController.setActiveSite(siteB);
+      expect(siteController.state.activeSite?.id, equals('site-1088'));
+
+      // Remote hydration returns Site A and a newly discovered Site C
+      const remoteSiteC = SiteModel(
+        id: 'site-remote-pier-c',
+        siteCode: 'RC99',
+        name: 'Remote Pier C Station',
+        address: 'Harbour Approach Road',
+        creatorId: testUserId,
+      );
+
+      final hydratableRepo = HydratableMockSiteRepository(
+        siteRepo,
+        remoteSitesToHydrate: [remoteSiteC],
+      );
+
+      final testController = SiteController(hydratableRepo, initialUserId: testUserId);
+      await testController.loadSitesAndActiveContext();
+      await testController.setActiveSite(siteB);
+      expect(testController.state.activeSite?.id, equals('site-1088'));
+
+      // Run hydration
+      await testController.hydrateSites();
+
+      // Available sites now includes the newly hydrated Site C
+      expect(testController.state.availableSites.any((s) => s.id == 'site-remote-pier-c'), isTrue);
+
+      // Active site is STILL Site B ('site-1088'), NOT replaced by Site A or Site C
+      expect(testController.state.activeSite?.id, equals('site-1088'));
+    });
+
+    test('Only an explicit user selection can change the active site', () async {
+      await siteController.loadSitesAndActiveContext();
+
+      final site1 = siteController.state.availableSites.firstWhere((s) => s.id == 'site-4092');
+      final site2 = siteController.state.availableSites.firstWhere((s) => s.id == 'site-7721');
+
+      await siteController.setActiveSite(site1);
+      expect(siteController.state.activeSite?.id, equals('site-4092'));
+
+      // Hydration runs -> active site does not change
+      await siteController.hydrateSites();
+      expect(siteController.state.activeSite?.id, equals('site-4092'));
+
+      // Reloading sites -> active site does not change
+      await siteController.loadSitesAndActiveContext();
+      expect(siteController.state.activeSite?.id, equals('site-4092'));
+
+      // Explicit user selection changes the active site
+      await siteController.setActiveSite(site2);
+      expect(siteController.state.activeSite?.id, equals('site-7721'));
+    });
+
+    test('Local cached sites remain immediately usable without waiting for remote hydration', () async {
+      final hydratableRepo = HydratableMockSiteRepository(siteRepo);
+      final testController = SiteController(hydratableRepo, initialUserId: testUserId);
+
+      // Local sites load immediately
+      await testController.loadSitesAndActiveContext();
+      expect(testController.state.availableSites.length, equals(3));
+      expect(testController.state.activeSite, isNotNull);
+      expect(testController.state.isLoading, isFalse);
     });
   });
 }

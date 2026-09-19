@@ -79,9 +79,9 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
   Future<void> _handleBatchExportPdf(List<MediaItem> selectedItems) async {
     final exportService = ref.read(evidenceExportServiceProvider);
     final activeSite = ref.read(siteControllerProvider).activeSite;
-    String? inspectorEmail;
+    AuthUser? exporter;
     try {
-      inspectorEmail = ref.read(authServiceProvider).currentUser?.email;
+      exporter = ref.read(authServiceProvider).currentUser;
     } catch (_) {}
 
     try {
@@ -89,7 +89,8 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
         selectedItems,
         siteCode: activeSite?.siteCode,
         siteName: activeSite?.name,
-        inspectorEmail: inspectorEmail,
+        exporterEmail: exporter?.email,
+        exporterUid: exporter?.uid,
       );
     } catch (e) {
       if (mounted) {
@@ -106,9 +107,9 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
   Future<void> _handleBatchExportZip(List<MediaItem> selectedItems) async {
     final exportService = ref.read(evidenceExportServiceProvider);
     final activeSite = ref.read(siteControllerProvider).activeSite;
-    String? inspectorEmail;
+    AuthUser? exporter;
     try {
-      inspectorEmail = ref.read(authServiceProvider).currentUser?.email;
+      exporter = ref.read(authServiceProvider).currentUser;
     } catch (_) {}
 
     try {
@@ -116,7 +117,8 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
         selectedItems,
         siteCode: activeSite?.siteCode,
         siteName: activeSite?.name,
-        inspectorEmail: inspectorEmail,
+        exporterEmail: exporter?.email,
+        exporterUid: exporter?.uid,
       );
     } catch (e) {
       if (mounted) {

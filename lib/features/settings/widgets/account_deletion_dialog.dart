@@ -12,11 +12,10 @@ import '../../../data/local/database/app_database.dart';
 /// Interactive modal dialog guiding the user through the account deletion workflow.
 ///
 /// Flow:
-/// 1. Destructive Warning & Identity Re-authentication
+/// 1. Destructive Warning & Identity Re-Authentication
 /// 2. Authoritative Server-Side Deletion via 2nd-gen Cloud Function
-/// 3. Successor Selection (if backend returns failed-precondition with requiresSuccessor)
-/// 4. Local SQLite & Media Purge on Server Success
-/// 5. Sign-out and Route Navigation to login
+/// 3. Local SQLite & Media Purge on Server Success
+/// 4. Sign-out and Route Navigation to login
 class AccountDeletionDialog extends StatefulWidget {
   final AuthService authService;
   final AppDatabase appDatabase;
@@ -25,7 +24,7 @@ class AccountDeletionDialog extends StatefulWidget {
   final bool? isPasswordProvider;
   final Future<void> Function(String password)? onReauthenticateWithPassword;
   final Future<void> Function()? onReauthenticateWithGoogle;
-  final Future<Map<String, dynamic>> Function({Map<String, String>? successorAdmins})? onDeleteAccount;
+  final Future<Map<String, dynamic>> Function()? onDeleteAccount;
 
   const AccountDeletionDialog({
     super.key,
@@ -70,10 +69,6 @@ class _AccountDeletionDialogState extends State<AccountDeletionDialog> {
   bool _isLoading = false;
   String? _statusMessage;
   String? _errorMessage;
-
-  // Populated when the backend requires successor admins for sole-admin shared sites
-  List<SuccessorSiteRequirement>? _sitesNeedingSuccessor;
-  final Map<String, String> _selectedSuccessors = {};
 
   @override
   void dispose() {
@@ -135,7 +130,7 @@ class _AccountDeletionDialogState extends State<AccountDeletionDialog> {
     }
   }
 
-  Future<void> _executeBackendDeletion({Map<String, String>? successorAdmins}) async {
+  Future<void> _executeBackendDeletion() async {
     setState(() {
       _isLoading = true;
       _statusMessage = 'Purging account & cloud data...';
@@ -144,10 +139,9 @@ class _AccountDeletionDialogState extends State<AccountDeletionDialog> {
 
     try {
       if (widget.onDeleteAccount != null) {
-        await widget.onDeleteAccount!(successorAdmins: successorAdmins);
+        await widget.onDeleteAccount!();
       } else {
         await widget.authService.deleteAccount(
-          successorAdmins: successorAdmins,
           functions: widget.functions,
         );
       }
@@ -191,29 +185,6 @@ class _AccountDeletionDialogState extends State<AccountDeletionDialog> {
         ),
       );
     } on FirebaseFunctionsException catch (e) {
-      if (e.code == 'failed-precondition' &&
-          e.details is Map &&
-          e.details['requiresSuccessor'] == true) {
-        final rawSites = e.details['sitesNeedingSuccessor'];
-        final sitesList = rawSites is List ? rawSites : [];
-        final parsedRequirements = sitesList
-            .map((s) => SuccessorSiteRequirement.fromMap(Map<dynamic, dynamic>.from(s as Map)))
-            .toList();
-
-        setState(() {
-          _isLoading = false;
-          _statusMessage = null;
-          _sitesNeedingSuccessor = parsedRequirements;
-          // Pre-select first eligible member for each site if available
-          for (final req in parsedRequirements) {
-            if (req.eligibleMembers.isNotEmpty) {
-              _selectedSuccessors[req.siteId] = req.eligibleMembers.first.userId;
-            }
-          }
-        });
-        return;
-      }
-
       setState(() {
         _isLoading = false;
         _statusMessage = null;
@@ -238,11 +209,7 @@ class _AccountDeletionDialogState extends State<AccountDeletionDialog> {
         constraints: const BoxConstraints(maxWidth: 420),
         child: Padding(
           padding: const EdgeInsets.all(24),
-          child: _isLoading
-              ? _buildLoadingView()
-              : _sitesNeedingSuccessor != null
-                  ? _buildSuccessorView()
-                  : _buildConfirmationView(),
+          child: _isLoading ? _buildLoadingView() : _buildConfirmationView(),
         ),
       ),
     );
@@ -317,8 +284,7 @@ class _AccountDeletionDialogState extends State<AccountDeletionDialog> {
           ),
           const SizedBox(height: 10),
           _buildBulletPoint('Your authentication credentials and user profile will be permanently deleted.'),
-          _buildBulletPoint('Sole-member project sites and their cloud-stored photos will be permanently destroyed.'),
-          _buildBulletPoint('Evidence contributed to shared sites is retained for audit integrity with your author identity pseudonymized.'),
+          _buildBulletPoint('All sites you own, together with their cloud-stored originals, thumbnails, and evidence metadata, will be permanently destroyed.'),
           _buildBulletPoint('All local database records, cached media, and pending sync queues on this device will be purged.'),
           const SizedBox(height: 16),
           if (_errorMessage != null) ...[
@@ -439,160 +405,6 @@ class _AccountDeletionDialogState extends State<AccountDeletionDialog> {
                     child: const Text(
                       'DELETE',
                       style: TextStyle(fontWeight: FontWeight.w700, letterSpacing: 0.5),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSuccessorView() {
-    final sites = _sitesNeedingSuccessor!;
-
-    return SingleChildScrollView(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withAlpha(25),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.supervisor_account_rounded,
-                  color: Colors.orange,
-                  size: 26,
-                ),
-              ),
-              const SizedBox(width: 12),
-              const Expanded(
-                child: Text(
-                  'Admin Succession Required',
-                  style: TextStyle(
-                    color: Color(0xFF1E1E1E),
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          const Text(
-            'You are the sole administrator of one or more shared sites. Please designate an active team member to succeed you as administrator:',
-            style: TextStyle(fontSize: 12, color: Color(0xFF444444)),
-          ),
-          const SizedBox(height: 14),
-          ...sites.map((siteReq) {
-            final currentSelection = _selectedSuccessors[siteReq.siteId];
-
-            return Container(
-              margin: const EdgeInsets.only(bottom: 12),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.border),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    siteReq.siteName,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  DropdownButtonFormField<String>(
-                    initialValue: currentSelection,
-                    isExpanded: true,
-                    decoration: InputDecoration(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(color: AppColors.border),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(color: AppColors.border),
-                      ),
-                    ),
-                    items: siteReq.eligibleMembers.map((member) {
-                      return DropdownMenuItem<String>(
-                        value: member.userId,
-                        child: Text(
-                          '${member.userId} (${member.role})',
-                          style: const TextStyle(fontSize: 12),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      );
-                    }).toList(),
-                    onChanged: (val) {
-                      if (val != null) {
-                        setState(() {
-                          _selectedSuccessors[siteReq.siteId] = val;
-                        });
-                      }
-                    },
-                  ),
-                ],
-              ),
-            );
-          }),
-          if (_errorMessage != null) ...[
-            Text(
-              _errorMessage!,
-              style: const TextStyle(color: AppColors.statusRed, fontSize: 12),
-            ),
-            const SizedBox(height: 10),
-          ],
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: SizedBox(
-                  height: 46,
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    style: OutlinedButton.styleFrom(
-                      backgroundColor: const Color(0xFFE5E3DF),
-                      foregroundColor: const Color(0xFF333333),
-                      side: BorderSide.none,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-                    ),
-                    child: const Text('Cancel', style: TextStyle(fontWeight: FontWeight.w600)),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: SizedBox(
-                  height: 46,
-                  child: ElevatedButton(
-                    onPressed: () {
-                      _executeBackendDeletion(successorAdmins: _selectedSuccessors);
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.statusRed,
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-                    ),
-                    child: const Text(
-                      'CONFIRM DELETION',
-                      style: TextStyle(fontWeight: FontWeight.w700, fontSize: 11, letterSpacing: 0.5),
                     ),
                   ),
                 ),

@@ -23,6 +23,7 @@ class _FakeVideoPlayerController extends VideoPlayerController {
   int initializeCalls = 0;
   int disposeCalls = 0;
   bool loopRequested = false;
+  Duration? lastSeekTo;
   bool _disposed = false;
 
   bool get wasDisposed => _disposed;
@@ -52,6 +53,13 @@ class _FakeVideoPlayerController extends VideoPlayerController {
     loopRequested = looping;
     if (_disposed) return;
     value = value.copyWith(isLooping: looping);
+  }
+
+  @override
+  Future<void> seekTo(Duration position) async {
+    lastSeekTo = position;
+    if (_disposed) return;
+    value = value.copyWith(position: position, isCompleted: false);
   }
 
   @override
@@ -115,7 +123,7 @@ void main() {
       expect(playback.status, EvidenceVideoStatus.ready);
       expect(playback.controller, same(created.single));
       expect(playback.isReady, isTrue);
-      expect(created.single.loopRequested, isTrue);
+      expect(created.single.loopRequested, isFalse);
 
       playback.dispose();
     });
@@ -286,6 +294,35 @@ void main() {
       expect(playback.controller!.value.isPlaying, isFalse);
 
       expect(notifications, greaterThanOrEqualTo(2));
+
+      playback.dispose();
+    });
+
+    test('R13: a completed video replays only on an explicit toggle (no loop)',
+        () async {
+      final fake = _FakeVideoPlayerController();
+      final playback = EvidenceVideoPlayback(
+        videoFile: realVideoFile(),
+        createController: (_) => fake,
+      );
+
+      await playback.initialize();
+
+      // Parked on the final frame: playback completed, not looping.
+      fake.value = fake.value.copyWith(
+        isPlaying: false,
+        isCompleted: true,
+        position: const Duration(seconds: 3),
+        isLooping: false,
+      );
+
+      await playback.togglePlayPause();
+
+      // The explicit replay seeks to the start and plays.
+      expect(fake.lastSeekTo, Duration.zero);
+      expect(playback.controller!.value.isPlaying, isTrue);
+      expect(playback.controller!.value.isCompleted, isFalse);
+      expect(fake.loopRequested, isFalse);
 
       playback.dispose();
     });

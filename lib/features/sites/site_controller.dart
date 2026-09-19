@@ -74,8 +74,13 @@ class SiteController extends StateNotifier<SiteState> {
       final key = '${_activeSiteKey}_$effectiveUserId';
       final savedSiteId = prefs.getString(key);
 
+      if (!mounted) return;
+
       SiteModel? selected;
-      if (savedSiteId != null && savedSiteId.isNotEmpty) {
+      // Active-site continuity invariant: if state.activeSite is currently set and valid, preserve it!
+      if (state.activeSite != null && sites.any((s) => s.id == state.activeSite!.id)) {
+        selected = sites.firstWhere((s) => s.id == state.activeSite!.id);
+      } else if (savedSiteId != null && savedSiteId.isNotEmpty) {
         selected = sites.where((s) => s.id == savedSiteId).firstOrNull;
       }
       // If none saved or invalid, default to first available site if available
@@ -88,6 +93,9 @@ class SiteController extends StateNotifier<SiteState> {
         isLoading: false,
         errorMessage: null,
       );
+
+      // Asynchronously trigger remote site hydration in background without blocking local-first startup
+      hydrateSites(currentUserId: effectiveUserId);
     } catch (e) {
       debugPrint('Error loading sites: $e');
       if (!mounted) return;
@@ -100,13 +108,61 @@ class SiteController extends StateNotifier<SiteState> {
     }
   }
 
+  /// Asynchronously hydrates authorized sites from Firestore into local Drift cache.
+  /// Enforces the Active Site Continuity Invariant:
+  /// Remote hydration NEVER overrides, clears, or replaces an already active valid site.
+  Future<void> hydrateSites({String? currentUserId}) async {
+    final effectiveUserId = currentUserId ?? _currentUserId;
+    if (effectiveUserId == null || effectiveUserId.isEmpty) return;
+
+    try {
+      final hydrated = await _siteRepository.hydrateRemoteSites(effectiveUserId);
+      if (!mounted) return;
+      if (hydrated.isNotEmpty) {
+        final sites = await _siteRepository.getAllSites(creatorId: effectiveUserId);
+        if (!mounted) return;
+
+        SiteModel? selected = state.activeSite;
+        if (selected != null && sites.any((s) => s.id == selected!.id)) {
+          // Active site is still valid; keep it! NEVER displace valid active site.
+          selected = sites.firstWhere((s) => s.id == selected!.id);
+        } else if (selected == null) {
+          // If no site was currently active (e.g. fresh device/login), check saved preference or first hydrated site
+          final prefs = await SharedPreferences.getInstance();
+          if (!mounted) return;
+          final key = '${_activeSiteKey}_$effectiveUserId';
+          final savedSiteId = prefs.getString(key);
+          if (savedSiteId != null && savedSiteId.isNotEmpty) {
+            selected = sites.where((s) => s.id == savedSiteId).firstOrNull;
+          }
+          selected ??= sites.isNotEmpty ? sites.first : null;
+          if (selected != null) {
+            await prefs.setString(key, selected.id);
+          }
+        }
+
+        if (!mounted) return;
+        state = state.copyWith(
+          activeSite: selected,
+          availableSites: sites,
+        );
+      }
+    } catch (e) {
+      debugPrint('Background site hydration error: $e');
+    }
+  }
+
   Future<void> setActiveSite(SiteModel site, {String? currentUserId}) async {
     final effectiveUserId = currentUserId ?? _currentUserId;
     state = state.copyWith(activeSite: site);
     if (effectiveUserId != null && effectiveUserId.isNotEmpty) {
-      final prefs = await SharedPreferences.getInstance();
-      final key = '${_activeSiteKey}_$effectiveUserId';
-      await prefs.setString(key, site.id);
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final key = '${_activeSiteKey}_$effectiveUserId';
+        await prefs.setString(key, site.id);
+      } catch (e) {
+        debugPrint('Failed to persist active site ID: $e');
+      }
     }
   }
 
@@ -118,7 +174,7 @@ class SiteController extends StateNotifier<SiteState> {
   }) async {
     final effectiveUserId = currentUserId ?? _currentUserId;
     if (effectiveUserId == null || effectiveUserId.isEmpty) {
-      throw StateError('Cannot add site: user is not authenticated');
+      throw StateError('Cannot create site without authenticated user session');
     }
 
     final trimmedCode = siteCode.trim();
@@ -132,27 +188,31 @@ class SiteController extends StateNotifier<SiteState> {
       throw ArgumentError('Site name cannot be empty');
     }
 
-    // Check duplicate site code within current user's scope
     final existingSites = await _siteRepository.getAllSites(creatorId: effectiveUserId);
-    if (existingSites.any((s) => s.siteCode.trim().toLowerCase() == trimmedCode.toLowerCase())) {
-      throw DuplicateSiteCodeException('Site code "$trimmedCode" already exists');
+    final isDuplicate = existingSites.any(
+      (s) => s.siteCode.toLowerCase() == trimmedCode.toLowerCase(),
+    );
+    if (isDuplicate) {
+      throw DuplicateSiteCodeException('Site code "$trimmedCode" already exists.');
     }
 
-    try {
-      final newSite = SiteModel(
-        id: CryptoUtils.generateFirestoreId(),
-        siteCode: trimmedCode,
-        name: trimmedName,
-        address: trimmedAddress,
-        creatorId: effectiveUserId,
-      );
+    final autoId = CryptoUtils.generateFirestoreId();
 
+    final newSite = SiteModel(
+      id: autoId,
+      siteCode: trimmedCode,
+      name: trimmedName,
+      address: trimmedAddress,
+      creatorId: effectiveUserId,
+    );
+
+    try {
       await _siteRepository.saveSite(newSite);
       await loadSitesAndActiveContext(shouldSeed: false, currentUserId: effectiveUserId);
       await setActiveSite(newSite, currentUserId: effectiveUserId);
       return newSite;
     } catch (e) {
-      debugPrint('Error adding custom site: $e');
+      debugPrint('Error creating custom offline site: $e');
       state = state.copyWith(errorMessage: 'Failed to add site: $e');
       rethrow;
     }
@@ -160,15 +220,22 @@ class SiteController extends StateNotifier<SiteState> {
 
   Future<void> deleteSite(String id, {String? currentUserId}) async {
     final effectiveUserId = currentUserId ?? _currentUserId;
+    if (effectiveUserId == null || effectiveUserId.isEmpty) {
+      throw StateError('Cannot delete site without authenticated user session');
+    }
+
+    final hasMedia = await _siteRepository.hasMediaForSite(id, creatorId: effectiveUserId);
+    if (hasMedia) {
+      throw const SiteReferencedByMediaException('Cannot delete site because captured media references this site.');
+    }
+
     try {
       await _siteRepository.deleteSite(id, creatorId: effectiveUserId);
-      if (effectiveUserId != null && effectiveUserId.isNotEmpty) {
+      if (state.activeSite?.id == id) {
+        state = state.copyWith(activeSite: null);
         final prefs = await SharedPreferences.getInstance();
         final key = '${_activeSiteKey}_$effectiveUserId';
-        final savedSiteId = prefs.getString(key);
-        if (savedSiteId == id) {
-          await prefs.remove(key);
-        }
+        await prefs.remove(key);
       }
       await loadSitesAndActiveContext(shouldSeed: false, currentUserId: effectiveUserId);
     } catch (e) {

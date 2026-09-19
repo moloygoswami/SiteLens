@@ -156,6 +156,24 @@ class GPSUtils {
     return 'UTC: $utcFormatted UTC • Local: $localFormatted ($timeZoneStr)';
   }
 
+  /// Canonical distance + GNSS uncertainty formatting (R19).
+  ///
+  /// A distance is never presented as more spatially precise than the captured
+  /// GPS accuracy supports. An unknown accuracy is disclosed as unknown rather
+  /// than silently treated as exact; a null distance is not established and
+  /// yields null (callers must render a truthful unknown state).
+  static String? formatDistanceWithUncertainty(
+    double? distanceMeters, {
+    double? accuracyMeters,
+  }) {
+    if (distanceMeters == null) return null;
+    final distance = '${distanceMeters.toStringAsFixed(1)}m';
+    final uncertainty = accuracyMeters == null
+        ? '±—'
+        : '±${accuracyMeters.toStringAsFixed(1)}m';
+    return '$distance ($uncertainty)';
+  }
+
   /// Resolves country flag emoji for an address string.
   static String countryFlagForAddress(String? address) {
     if (address == null || address.isEmpty) return '';

@@ -1,751 +1,533 @@
-# SiteLens — Session Handover Document
+# SiteLens — Session Handover (Fast-Start Operational Context)
 
-**Generated**: 2026-09-14T01:51:26+05:30
-**Current Milestone**: Physical Release Finding Remediation (Android 16 / SDK 36) — **A1 Video Fullscreen Player Ownership** (ACCEPTED), **A2 CameraX Route Lifecycle** (ACCEPTED), **B1 GPS State Semantics & Recovery** (ACCEPTED), **C1 Video HUD Identifier Semantics** (ACCEPTED), **Canonical Photo/Video Metadata-Card Unification** (COMPLETED & VERIFIED; physical re-verification pending) — layered on the Post-v1.0.0 E2E Reliability Audit & Remediation Program (Modules A–J; Cross-Cutting Audits A–D all Remediated & Verified, incl. D-SPAT-001/D-SPAT-002/LAT-001; Full-Journey / Settings & Legal / Account-Deletion E2E Audits Passed; `PRD.md` & `architecture.md` Synchronized to Verified Semantics)
-**Protected Baseline**: Commit `f868a17` on `main` (Tag `v1.0.0` frozen at `a17e8c3580c157ba629bfc8fe39fa2fd75da923c`)
-**Active Test Device**: Motorola edge 50 fusion (`ZA222NBPPV` / Android 16 / API 36)
-**Governing Mandate**: Governing Rule 5 (Evidence Integrity) — Truthful temporal, spatial, optical, and provenance claims
+**Last updated**: 2026-09-19T16:55:00+05:30 (supersedes 2026-09-19T06:30:00+05:30)
+**HEAD**: `f648779` on `main` (with uncommitted Phase 2.3 Wave A + Wave A.1 + Phase 2.4 Wave B + Waves B.1/C/D [R11–R16] + Wave E [R17–R20] + Wave F [R21] remediation)
+**Database schema**: Drift **v10**
+**Frozen release tag `v1.0.0`**: `a17e8c3580c157ba629bfc8fe39fa2fd75da923c` (UNMOVED)
+**Active test device**: Motorola edge 50 fusion `ZA222NBPPV` (Android 16 / API 36)
+**Governing mandate**: Rule 5 — Evidence Integrity (truthful temporal, spatial, optical and provenance claims)
 
----
+> This file is the **fast-start operational context**. Detailed historical and project knowledge lives in
+> the documents below — load them only when relevant.
 
-## 1. Executive Summary & Current State
-
-```text
-========================================================================================
-                                CURRENT SESSION & VERIFICATION STATUS
-========================================================================================
- PROTECTED HEAD COMMIT:    f868a17 (main) — UNCOMMITTED WORKING TREE
- RELEASE TAG v1.0.0:       a17e8c3580c157ba629bfc8fe39fa2fd75da923c (UNMOVED & FROZEN)
- ZERO COMMIT POLICY:       PASS (No commits created during audit/remediation session)
- DATABASE SCHEMA:          DRIFT SCHEMA VERSION 8 (app_database.g.dart generated)
- REVIEW & SMART-LINK #8:   COMPLETED & VERIFIED (F1: Smart-Link dismissal & fallback;
-                                                 F2: Candidate consistency & divergence guard;
-                                                 F3: Evid_ID / link invariant & persistence sanitization;
-                                                 F4: Edit-modal Haversine distance;
-                                                 F5: Creator & site isolation)
- SMART-LINK #9:            COMPLETED & VERIFIED (F-1 modal A→B divergence corrected to non-destructive
-                                                 B→A lifecycle: existing link survives edits/suggestions;
-                                                 only explicit Select-as-BEFORE / Unlink / type-switch
-                                                 replaces or removes the relationship)
- EVIDENCE LIST #10:        COMPLETED & VERIFIED (F1: deterministic History ordering captured_at DESC, id ASC;
-                                                 F2: Sync Status filter made selectable in GalleryFilterModal)
- OFFLINE CAPTURE #11:      COMPLETED & VERIFIED (F1: online capture auto-sync via unsynced-count edge trigger;
-                                                 F2: v8 forensic metadata — altitude, is_altitude_msl,
-                                                 verification_status, GNSS counts & fix timestamp — persisted
-                                                 to Firestore create/reconcile + rules allowlist)
- SYNC E2E #12:             COMPLETED & VERIFIED (F-1: foreground resume triggers sync via WidgetsBindingObserver;
-                                                 F-2: unexpected exceptions permanently suppressed, manual
-                                                 retry re-evaluates; F-3: SyncLifecycleBootstrap at app root —
-                                                 session-gated crash recovery independent of Gallery, single
-                                                 coordinator instance per authenticated lifecycle)
- CROSS-CUTTING AUDIT A:    COMPLETED & VERIFIED (F-A1: derived evidence JPEG/thumbnail strip all camera
-                                                 EXIF after orientation bake — original retains camera EXIF;
-                                                 F-A2: getBestRecentPosition returns null for stale/absent raw
-                                                 positions — unknown capture-window data stays unknown, never
-                                                 synthesized 0.0/now; applyBestRecentPosition seam added;
-                                                 regression tests added. F-A3–F-A7 observations remain
-                                                 documented, non-blocking)
- CROSS-CUTTING AUDIT B:    COMPLETED & VERIFIED (Evidence Artifact Cloud Synchronization E2E audit:
-                                                 PASS-with-findings. B-1 remediated: local tombstone propagation —
-                                                 getTombstoneSyncCandidates/watchTombstoneCandidateCount discovery,
-                                                 CloudSyncService.syncTombstone reusing canonical reconcile, count
-                                                 edge-trigger; deleted published items reconcile is_deleted=true,
-                                                 never-published items are verified no-ops, Storage artifacts
-                                                 write-once untouched. B-2..B-7 observations documented,
-                                                 non-blocking)
- CROSS-CUTTING AUDIT C:    COMPLETED & VERIFIED (Capture ↔ Sync Lifecycle audit: no BLOCKERs.
-                                                 C-1 remediated: stale _inFlightVideoFile cleared on normal video
-                                                 handoff — no false interrupted-recording recovery. C-2 remediated:
-                                                 deletePermanently tombstones the row instead of destroying it —
-                                                 a permanently deleted published item can never strand a live
-                                                 cloud ledger. C-3..C-6 observations documented, non-blocking)
- CROSS-CUTTING AUDIT D:    COMPLETED & VERIFIED (Capture Position Provenance & Spatial
-                                                 Search Integrity: D-SPAT-001 lastKnown cached-seed shutter gating —
-                                                 autoDispose churn re-seeded falsified coordinates into VERIFIED
-                                                 evidence (6 rows @ bit-identical 20.6km-off position, smart-link
-                                                 graph contaminated); provenance flag + hasLiveFix gates on photo/
-                                                 video shutters; D-SPAT-002 photo shutter valid-fix gate (0,0
-                                                 persistence asymmetry vs video); LAT-001 nearby NULL-creator
-                                                 visibility parity with sync ownership queries. Read-only data
-                                                 confirmation on device + Firestore mirror)
- E2E JOURNEY AUDITS:       PASS (Full user-journey install→deletion audit; Settings & Legal
-                                                 workflow audit; Account-Deletion workflow audit incl. sole-member/
-                                                 shared-member/successor paths — all traced to implementation with
-                                                 passing tests)
- REFERENCE DOCS:           SYNCHRONIZED (PRD.md & architecture.md updated to verified v8
-                                                 semantics: capture-time metadata authority, EXIF policy, sync
-                                                 lifecycle order, tombstone/deletion semantics, account deletion)
- PHOTO EVIDENCE F1–F3:     COMPLETED & VERIFIED (F1: Original preserved on DB failure;
-                                                 F2: Crash-safe atomic writes & temp cleanup;
-                                                 F3: Closed-evidence integrity on edit & detail guard)
- METADATA OVERLAY F1–F5:   COMPLETED & VERIFIED (Status parity, Drift v8 persistence, pre-v8 fallback,
-                                                 canonical GNSS telemetry, video metadata, altitude datum)
- VIDEO PERSISTENCE & GPS:  COMPLETED & VERIFIED (Atomic writes, no 0,0 coords, recording-time fix,
-                                                 keepForLater DB failure cleanup, PopScope discard)
- MINIMAP & GPS WORKFLOW:   COMPLETED & VERIFIED (Background staleness watchdog, canonical cache key,
-                                                 shutter re-entrancy lock, generation guards)
- CAMERA PERMISSION RECOVERY: COMPLETED & VERIFIED (Single PermissionService authority, restricted status,
-                                                 Settings return navigation, retry-safe lifecycle)
- CLOSED EVIDENCE WORKFLOW: COMPLETED & VERIFIED (Nearby candidate selection, Evid_ID note insertion,
-                                                 smart-link race invalidation)
- AUTH SESSION RECOVERY:    COMPLETED & VERIFIED (Centralized SessionService, cold start / resume reload,
-                                                 contextual permission-denied vs unauthenticated, race/disposal-safe,
-                                                 root navigator stack wipe to WelcomeScreen)
- ONBOARDING & PERMISSIONS: COMPLETED & VERIFIED (Permission recovery persistence in PermissionRecoveryScreen,
-                                                 app-level sign-out authority in SiteLensApp, declarative
-                                                 SessionRouter onboarding completion without duplicate navigation)
- RELEASE FINDING AUDIT:    COMPLETED (READ-ONLY FORENSIC AUDIT — Android 16 / SDK 36 physical release
-                                   finding on Motorola edge 50 fusion): fullscreen video evidence crash,
-                                   post-crash camera state (GPS: Denied / ACC: ACQUIRING / shutter
-                                   locked), and the video forensic HUD. Confirmed the video pipeline
-                                   does NOT write GPS permission state (post-crash GPS is an independent
-                                   state/initialization concern) and the video HUD is viewer-rendered
-                                   from persisted capture-time metadata, never burned into the MP4.
-                                   Scoped remediation modules A1 / A2 / B1.
- A1 VIDEO PLAYER OWNERSHIP: IMPLEMENTED & VERIFIED (ACCEPTED) — single `EvidenceVideoPlayback` owner
-                                   shared by the inline detail surface and the fullscreen viewer;
-                                   exactly ONE VideoPlayerController/ExoPlayer per video; inline
-                                   surface parked while fullscreen is on top; async init/dispose race
-                                   safe; idempotent disposal; truthful failed state; 13 focused tests.
- A2 CAMERAX ROUTE LIFECYCLE: IMPLEMENTED & VERIFIED (ACCEPTED) — `appRouteObserver`
-                                   (`RouteObserver<PageRoute<dynamic>>`) registered on the root
-                                   MaterialApp; `CameraScreen` implements RouteAware; CameraX released
-                                   while covered by a page route and safely reacquired on reveal;
-                                   dialogs/bottom sheets excluded; no duplicate init or leak;
-                                   idempotent callbacks; 7 focused tests.
- B1 GPS STATE SEMANTICS:   IMPLEMENTED & VERIFIED (ACCEPTED) — distinct Permission Denied / Permission Unknown /
-                                   Location Services Off / Acquiring / Last-Known Only / Live Fix /
-                                   Live Fix Lost-Stale states; Unknown ≠ Denied and Service Off ≠
-                                   Denied; `hasLiveFix` is the sole capture-readiness provenance
-                                   (`hasValidFix && !isLastKnownSeed`); `resumeLocationStream()`
-                                   revalidates permission + service and drops stale/cached fixes;
-                                   cleanup idempotent; 17 focused tests.
- C1 VIDEO HUD IDENTIFIER:  IMPLEMENTED & VERIFIED (ACCEPTED) — the fullscreen video HUD now renders the
-                                   canonical persisted `SiteModel.siteCode` (uppercased) instead of the
-                                   internal Firestore-style site document id, with the established neutral
-                                   `SITE` fallback when the code is missing / blank / `UNASSIGNED`.
- METADATA CARD UNIFICATION: COMPLETED & VERIFIED — ONE canonical runtime metadata card
-                                   (`StandaloneMetadataWidget`, `HudData`-driven) now serves BOTH Photo and
-                                   Video fullscreen/immersive viewing, adapted from the persisted
-                                   `MediaItem` via `HudFormatter.fromMediaItem`; the bespoke 3-row video
-                                   strip is removed and the Photo immersive viewer mounts the same card;
-                                   optional media-agnostic accuracy/satellite telemetry was added to
-                                   `HudData`; the burned Photo JPEG HUD (`WatermarkDrawer` /
-                                   `EvidenceProcessingService`) is untouched and the removed Detail
-                                   "EVIDENCE MINIMAP & METADATA" section remains removed.
- PERFORMANCE AUDIT:        READ-ONLY — NO CHANGE (Photo Capture → Review & Tag → Save is already lean:
-                                   no hashing, image codec, HUD render, or file writes occur on the Save
-                                   click; CPU work is already off-isolate and DB work runs on Drift's
-                                   background isolate; atomic write→verify→commit ordering preserved.
-                                   Recommendation: DO NOT OPTIMIZE NOW — no low-risk localized Save
-                                   optimization exists.)
- PHYSICAL RE-VERIFICATION: PENDING (Android 16 device verification required after all remediation
-                                   modules complete — fullscreen video enter/play/replay/exit; CameraX
-                                   release/resume across video + evidence routes; GPS Denied vs Unknown
-                                   vs Service-Off; last-known-only shutter lock; Photo AND Video
-                                   fullscreen metadata-card visual parity with canonical siteCode)
- AUTOMATED VERIFICATION:   PASS (All 737 tests pass across unit and widget suites; `flutter analyze`
-                                   reports 0 issues; account-deletion cloud function suite 43/43;
-                                   Firebase rules/emulator JS suites 7/19 with the 12 failures
-                                   root-caused as test-harness/emulator environment drift, not
-                                   production defects)
- KNOWLEDGE GRAPH:          STALE (graphify-out predates the Audit A–C remediations; refresh with
-                                  `graphify update .` recommended before graph-assisted navigation)
- TASK OBSERVER PROTOCOL:   PASS (Formalized in CLAUDE.md)
- GIT HYGIENE:              PASS (git diff --check is clean; no whitespace or syntax errors)
-========================================================================================
-```
+### Documentation Map
+- `docs/handover/PRD.md` — canonical product requirements (aligned to approved v1 creator-owned/user-specific product boundary).
+- `docs/handover/architecture.md` — architecture specification (aligned to approved v1 non-collaborative / creator-owned model).
+- `docs/handover/PROJECT_STATUS.md` — pre-v1.0.0 milestone & toolchain ledger (dated 2026-09-14, HEAD `f868a17`; partially superseded).
+- `docs/handover/E2E_RELIABILITY_AUDIT.md` — original read-only E2E reliability audit (F1/F2/F3).
+- `docs/handover/REMEDIATION_DESIGN_REVIEW.md` — F1/F2/F3 remediation specification.
+- `docs/ALL_TESTS.md` — authoritative test inventory (refresh pending; still states 539).
+- `strix-sitelens-instructions.md` — authoritative repository & security instructions (8/8 closed-findings baseline).
+- **Detailed Module A–J and Cross-Cutting Audit A–D findings/remediations** — retained in git history
+  (`git show f76ef67:docs/handover/SESSION_HANDOVER.md`, 751 lines); this file keeps only their accepted outcomes.
 
 ---
 
-## 2. Status of Audit Findings & Completed Remediation Modules
+## 1. CURRENT STATE
 
-### Module A: Metadata Overlay Workflow Audit (F1–F5)
-* **Classification**: **CONFIRMED ARCHITECTURAL INCONSISTENCIES (REMEDIATED & VERIFIED)**
-* **Architectural Authority**: `EvidenceMetadataSnapshot` is the capture-time authority. Canonical evidence metadata semantics are established at capture and preserved through persistence and reload.
-* **Findings & Remediations**:
-  1. **F1 (Verification Status Unification)**:
-     - Unified verification status logic in `EvidenceMetadataSnapshot.evaluateVerificationStatus(hasValidFix, lat, lon, accuracyM, threshold)`.
-     - Eliminated live HUD vs baked evidence divergence. Wired configurable `lowAccuracyThresholdMeters` from `GpsSettings` through `GpsUiFixture` to `HudFormatter.fromLive` and `EvidenceMetadataSnapshot.capture`.
-     - Live HUD and baked evidence watermark now achieve 100% status parity for identical GPS evidence and custom thresholds.
-  2. **F2 (Canonical Status Persistence & Pre-v8 Migration Fallback)**:
-     - Upgraded Drift database schema to **Version 8**, adding `verification_status` column to `Media` table.
-     - Updated `MediaItem` and `MediaRepository` to persist and reload `verificationStatus`. Persisted status remains invariant across subsequent settings changes.
-     - Implemented weakest defensible fallback for legacy pre-v8 records (`verification_status` null):
-       - If `(lat == 0.0 && lon == 0.0)` or `accuracyM == null` -> `HudStatus.pending`.
-       - If `lowAccuracy == 1` or `accuracyM > 20.0` -> `HudStatus.degraded`.
-       - Only if non-zero coordinates and `accuracyM <= 20.0` -> `HudStatus.verified`.
-       - Historical records never gain stronger verification certainty merely because the column is null.
-  3. **F3 (Canonical GNSS Telemetry Persistence)**:
-     - Added `gnss_satellite_count`, `gnss_satellites_used_in_fix`, and `gnss_fix_timestamp` to Drift schema v8 and `MediaItem`.
-     - Persisted and reloaded canonical satellite metrics across SQLite and detail/viewer surfaces; excluded transient diagnostic-only fields (`gnssSnapshot`, `gnssConstellations`).
-  4. **F4 (Video Evidence Metadata on Detail & Immersive Surfaces)**:
-     - **Architectural Inspection**: Inspected `LocalVideoPlayerWidget`, playback lifecycle, touch handling, and video containers. `LocalVideoPlayerWidget` intercepts touch events via its own `GestureDetector` (play/pause) and scrubber progress bar. Burning watermarks into `.mp4` video files would alter file bytes, break SHA-256 integrity, and be computationally prohibitive.
-     - **Detail Surface**: Added a structured `CAPTURE & GEOSPATIAL TELEMETRY` section to `MediaDetailScreen` showing captured UTC/local timestamps, labeled coordinates, altitude with datum, canonical verification status badge, and satellite counts.
-     - **Immersive / Fullscreen Surface**: Added `Fullscreen Zoom` button to the video player container in `MediaDetailScreen`. In `_openFullScreenViewer`, when `_item.type == MediaItemType.video`, renders `LocalVideoPlayerWidget` and overlays a clean bottom metadata strip wrapped with `IgnorePointer` so video playback and scrubber controls remain completely responsive.
-     - **Raw Video Artifact Preservation**: Raw `.mp4` video files and their SHA-256 hashes remain 100% untouched.
-  5. **F5 (Truthful Altitude Datum Handling)**:
-     - Updated `GPSUtils.formatAltitude` to support `bool? isMsl`: `true` -> `'m ASL'`, `false` -> `'m (WGS84)'`, and `null` -> `'m'` (unspecified datum, never defaulting to MSL).
-     - Preserved `is_altitude_msl` column in Drift schema v8 and connected it to `EvidenceExportService` for PDF report generation.
-  6. **Timestamp Semantics**:
-     - Preserved capture/shutter timestamp vs GPS fix timestamp vs display time.
-     - In `CameraScreen`, both normal video stop and interrupted recording recovery preserve `recordingStartedAtUtc` as the capture timestamp rather than substituting the stop/recovery time.
-* **Verification**:
-  - 9 tests in `test/unit/metadata_overlay_workflow_test.dart` pass (F1 threshold parity, F2 persistence invariance, all 5 pre-v8 migration fallback branches, F3 GNSS telemetry reload, F4 video hash preservation, F5 truthful altitude datum).
-  - 14 tests in `test/widget/media_detail_screen_test.dart` pass (telemetry section, video fullscreen route, metadata overlay strip).
+- **Repository**: `main` at `f648779`. Uncommitted controlled remediation for **Phase 2.3 Wave A**, **Wave A.1**
+  and **Phase 2.4 Wave B**.
+- **Phase 2 Progression**:
+  - **Phase 1**: Approved R01–R26 normalized remediation ledger established.
+  - **Phase 2.1A**: PRD specification revised and approved for v1 creator-owned, user-specific, location-independent, non-collaborative boundary.
+  - **Phase 2.1B**: Architecture specification revised and approved for v1 model.
+  - **Phase 2.2**: Concrete remediation implementation plan established for R01–R26 across Waves A–G.
+  - **Phase 2.3 Wave A (Security / User Data Domain — R01, R04, R05) COMPLETED**:
+    - **R01**: Purged membership/RBAC/sharing/invitation access from the app and security rules. Direct creator-bound hydration only (`creator_id == userId`).
+    - **R04**: Enforced strict fail-closed boundary across all local Drift repositories and gallery streams when UID is null/empty. Session teardown decouples active site per user UID (`sitelens_active_site_id_<uid>`) and invalidates cached filters and streams.
+    - **R05**: Enforced strict creator binding (`creator_id == request.auth.uid`) across Firestore and Cloud Storage rules, with immutable forensic metadata.
+  - **Wave A.1 (follow-up corrections) COMPLETED**:
+    - **R01 closure**: removed the remaining active sharing/RBAC paths — the `collectionGroup('members')` discovery, shared-site/sole-member classification and successor-admin logic in the `deleteUserAccount` Cloud Function, plus `successorAdmins` / `SuccessorSiteRequirement` / `EligibleMember` / the "Admin Succession" dialog flow in the client. Corrected the false "shared sites" retention copy.
+    - **R04 closure**: `getTombstoneSyncCandidates(null)` was returning **every** user's tombstones — now fail-closed; `watchTombstoneCandidateCount` and `getResolvedMediaIds` scoped and fail-closed; the `SyncCoordinator` count-stream subscription re-bound to the authenticated UID (restoring the F1 new-capture auto-sync trigger).
+  - **Phase 2.4 Wave B (GPS / Capture Authority — R02, R03, R06, R07, R08, R09, R10) COMPLETED**:
+    - **R02**: Shutter readiness strictly gated on `hasLiveFix` (camera hardware readiness kept distinct from evidence-capture readiness).
+    - **R03**: Countdown re-gated on a live fix at every tick; GPS loss aborts the countdown; capture reads the current GPS authority, never a press-time snapshot.
+    - **R06**: Position buffer now carries provenance; a cached last-known seed can never enter the live-fix selection path; the single `applyBestRecentPosition` authority replaced three duplicated inline splices.
+    - **R07**: Video T₀ is the immutable spatial/telemetry authority — the recording-start GPS snapshot governs persisted coordinates/altitude/GNSS; stop-time fixes never usurp it.
+    - **R08**: Lens switching, digital zoom, aspect-ratio and capture-timer controls locked while recording (UI + controller).
+    - **R09**: Audio-track disclosure implemented — effective `enableAudio` captured from the initializing preset, frozen at T₀, persisted (`has_audio_track`, Drift v10) and disclosed in Media Detail.
+    - **R10**: Unknown telemetry semantics — unestablished altitude stays `null` (no `0.0` substitution), compass heading persisted nullably (`heading_degrees`, Drift v10), HUD no longer zero-fills altitude.
+  - **Waves B.1/C/D (R11–R16) — Capture Workflow / Integrity / Replication — COMPLETED**:
+    - **R11**: Minimap race guard — monotonic generational tokens prevent stale map tiles burning into evidence on fast shutter; offline fallback is a neutral status, never fabricated map graphics.
+    - **R12**: Single-flight capture mutex (`_isCapturing`) wraps the shutter trigger; re-entrant taps during an in-flight video start dispatch exactly one recording.
+    - **R13**: Single video playback owner (`EvidenceVideoPlayback`); Review & Tag previews through the shared owner and hands it to the gallery, so there is never a second decoder for one recording. In-flight recording recovery (Keep for Later / Discard) on app restart.
+    - **R14**: Review & Tag back/dismiss guarded by `PopScope` — an in-flight save can never be discarded by an accidental back gesture; re-entrance guard prevents stacked discard dialogs.
+    - **R15**: Two-tier SHA-256 (`sha256_hash` original, `evidence_sha256_hash` burned evidence); `verifyBytes()` distinguishes stored hash from live-byte verification; published bytes are re-verified against their digest.
+    - **R16**: Cloud evidence artifact replication **Option A** — `evid_<id>.jpg` replicated to `users/{uid}/evidence/{siteId}/{mediaId}.jpg` as the cloud-authoritative artifact; path is creator-bound and immutable in rules.
+  - **Wave E (R17–R20) — Smart-Link / Spatial / Identity — COMPLETED**:
+    - **R17**: Smart-link temporal semantics — a BEFORE Non-Conformity must be captured strictly earlier than the observation; enforced at the repository query, `isEligibleCandidate`, and both persistence boundaries. A missing/unparseable timestamp is not temporal authority.
+    - **R18**: Smart-link non-destructive/live-distance — unlinking nulls `linked_media_id` without modifying the candidate record; candidate proximity is dynamic live distance (`null` → "distance unknown", never `0`).
+    - **R19**: Nearby-search spatial uncertainty — a candidate's own GNSS accuracy widens the radius bound and synthetic `(0,0)` coordinates are rejected; distance displays disclose the GNSS uncertainty margin (e.g. `X.Xm (±Y.Ym)`) so sub-meter overclaiming is prohibited.
+    - **R20**: Canonical site identity — Review & Tag, the Nearby picker, and export metadata resolve the human-facing canonical site code/name via `HudFormatter.resolveSiteIdentifier`; the internal database site id is never rendered as an identifier.
+  - **Wave F (R21) — Export Attribution — COMPLETED**:
+    - **R21**: Exporter identity is strictly decoupled from the persisted evidence creator. The ZIP `manifest.json` attributes each record to its authentic `creator_id` (top-level `evidence_creator_ids`) and records the exporter separately (`exporter_uid`, `exporter_email`); absent human identity stays `null`, never fabricated (`Field Inspector` removed). The PDF report renders `Evidence Creator (UID)` and `Exported By` as distinct rows (plus `Exported By (UID)` in the forensic chain-of-custody block). A shared `ExportAttribution` value object binds creator = persisted `media.creator_id`, exporter = authenticated session.
+- **Verification Baseline**:
+  - Flutter test suite: **805/805 passed** (0 failed). `flutter analyze`: **0 issues**.
+  - Security gate (`test/security`): **89/89** (node:test 75/75 + Jest 19/19, 0 failed suites, 0 skipped).
+   - Backend (`functions/`): **39/39**.
+- **Wave G in-progress totals (R22 + R23)**: Flutter **809/809** · `flutter analyze` **0 issues** · backend **43/43**
+  (39 baseline + 4 R23 cases). Security gate unchanged — node:test **75/75** · Jest **19/19**
+  (Firestore/Storage rules untouched by R22/R23).
+- **Last installed build**: Phase 1 release APK `sha256 1656855954d780a21c3353fb8f5aa1a2a2dafac78bf9e2af1229df98dc1f5d0a`
+  (75,545,189 bytes, ABIs arm64-v8a/armeabi-v7a/x86_64) — physically exercised on device.
+- **Device data**: app data was cleared and re-authenticated (Google) during the Phase 1 onboarding
+  verification; the device currently holds **0 sites / 0 media**.
+- **Knowledge graph**: `graphify-out/` **refreshed** via `graphify update .` (4849 nodes, 7215 edges, 256 communities).
+  Community labels are hub-renamed from the previous graph; run `graphify label` to re-label with an LLM if needed.
 
----
+## 2. ACTIVE TASK
 
-### Module B: Video Persistence & GPS Integrity Remediation (R1–R3)
-* **Classification**: **CONFIRMED PERSISTENCE DEFECTS (REMEDIATED & VERIFIED)**
-* **Findings & Remediations**:
-  1. **Safe Video File Writes**: Normal video stop does not delete the temporary recording file until the destination write and verification succeed. Catches filesystem exceptions and prevents unhandled crashes.
-  2. **Atomic Thumbnail Writes**: Thumbnail generation and writes are failure-safe; artifact paths are only recorded in `MediaItem` after verified disk writes.
-  3. **Prevention of 0,0 Coordinates**: Prohibited invalid/missing GPS from being persisted as `0.0, 0.0`. Valid fix status is checked consistently across normal stop and interrupted recording recovery.
-  4. **Interrupted Recording Recovery**: Preserves recording-time GPS fix and metadata (`recordingGps`) rather than substituting the newly resumed GPS state.
-  5. **Orphan Cleanup on DB Failure**: `keepForLater()` deletes physical artifacts if SQLite insertion fails.
-  6. **PopScope Navigation Safety**: System Back from `ReviewTagScreen` prevents orphaned artifacts; cancellation preserves current screen; confirmed discard uses explicit cleanup path.
-* **Verification**: 40 unit and widget tests across `media_persistence_coordinator_test.dart`, `camera_screen_test.dart`, and `review_tag_screen_test.dart` pass.
+- **Waves A (R01, R04, R05), A.1, B (R02, R03, R06–R10), B.1/C/D (R11–R16), E (R17–R20) and F (R21) Execution Complete and Verified.**
+- **Wave G — Rule-by-rule remediation in progress (R23 only, per latest scope):**
+  - **R22 — Tombstone Remote Propagation: COMPLETED & VERIFIED.** Defect D1: never-published tombstones probed the cloud before any state check, hitting Firestore permission-denied on non-existent docs → spurious "Permission denied", `tombstone_reconciled` stuck at 0, perpetual retry. Fix: `SyncStatusType.pending` early return before the cloud read; published-tombstone permission-denied preserved as a real failure. Focus: `cloud_sync_service_test` + `sync_coordinator_test` = 74/74; 4 R22 cases confirmed executing.
+  - **R23 — Deletion Safety: COMPLETED & VERIFIED.** Defect D2: `handleDeleteUserAccount` swallowed every required destructive cleanup failure and returned `{success:true}`, letting the client purge local evidence after a false remote success. Fix: all required cleanups (site discovery, Storage, media, site doc, user profile, enquiries anonymization, rate-limits) tracked; throws `HttpsError('internal')` before `auth.deleteUser`; Auth identity left intact for safe idempotent retry; a site doc is retained while any of its own cleanup is unresolved. Focus: backend 43/43; new client widget test.
+  - **R24–R26 — NOT STARTED.** Awaiting scope authorization.
+- **DO NOT implement R24–R26 without explicit user authorization.**
+- **Post-Remediation Audits**:
+  - **M1 (GPS & Capture Readiness)**: **PASS** (F7 defensive hardening, F5 countdown test gap noted).
+  - **M2 (Camera & Capture Workflow)**: **FAIL** — Independent verification confirmed reachable defects NF-M2-01 (site-less / wrong-site video recovery) and NF-M2-03 (Android Back dismisses recovery dialog leaving orphaned media). NF-M2-02 is defensive hardening; NF-M2-04 is benign dead code / semantic inconsistency. Minimum remediation set identified.
+  - **Local Jev Integration**: Operational and verified via `~/.local/bin/typesafe-jev` (model `jev-1.13.0`).
+- **This change**: M2 post-remediation independent verification + handover documentation.
 
----
+## 3. REPOSITORY STATE
 
-### Module C: Minimap & GPS Workflow Remediation (F1–F4)
-* **Classification**: **CONFIRMED DEFECTS (REMEDIATED & VERIFIED)**
-* **Findings & Remediations**:
-  1. **F1 (GPS Background/Foreground Staleness)**: In `GpsHardwareNotifier`, re-evaluates fix age on app resume. If elapsed time exceeds `stalenessTimeout`, immediately drops to searching state; otherwise re-arms the staleness watchdog.
-  2. **F2 (Map Thumbnail Cache-Key Consistency)**: Standardized one canonical cache key definition across static API writes, disk cache reads, live snapshot updates, and evidence fallback.
-  3. **F3 (Shutter Button Re-Entrancy Hazard)**: Implemented shutter capture lock in `CameraScreen` that remains engaged throughout post-hardware processing and releases cleanly after capture success or failure, preventing concurrent overlapping captures.
-  4. **F4 (Minimap Live Snapshot Timeout & Generation Guard)**: Isolated map types in cache keys, discarded out-of-order background responses from superseded layer generations, and prevented fallback tile poisoning.
-* **Verification**: 24 tests in `minimap_evidence_provenance_test.dart`, 27 tests in `gps_hardware_controller_test.dart`, and 21 tests in `camera_screen_test.dart` pass.
+- **HEAD**: `f648779` (`main`). **Tag `v1.0.0`** `a17e8c3…` frozen.
+- **Schema**: Drift **v10**. Version history: v2 `original_uri`; v3 `evidence_sha256_hash`; v4 `captured_address`;
+  v5 `creator_id`; v6 Google Photos sync table + index; v7 `altitude_m` + `sites.creator_id`; v8
+  `verification_status`, `is_altitude_msl`, `gnss_satellite_count`, `gnss_satellites_used_in_fix`,
+  `gnss_fix_timestamp`; v9 `tombstone_reconciled` (`0=pending, 1=reconciled`); **v10 `has_audio_track` (R09) and
+  `heading_degrees` (R10)** — both **nullable with NO default**, so historical rows stay explicitly unknown.
+  New columns must follow the `AppDatabase.onUpgrade` pattern, bump `schemaVersion`, and regenerate
+  `app_database.g.dart` via `dart run build_runner build --delete-conflicting-outputs`.
+- **FK enforcement**: the app never sets `PRAGMA foreign_keys = ON`, so SQLite FK enforcement is OFF on device;
+  application queries and the atomic `deleteSite` cleanup are authoritative. Unit tests enable FK enforcement.
 
----
+### Commit Ledger (chronological)
+| Commit | Subject |
+| :--- | :--- |
+| `f648779` | test(security): harden Firebase rules test harness |
+| `0680664` | Remove unused media permissions (Phase 1) |
+| `edb6d82` | Fix safe deletion of sites with media tombstones (v9) |
+| `cc16ff0` | Fix GPS stream recovery after lifecycle resume |
+| `d02ae8e` | Remove redundant photo fullscreen metadata |
+| `f76ef67` | Stabilize SiteLens evidence workflow |
+| `f868a17` | fix(android): remove unnecessary battery optimization permission |
+| `68a6263` | feat(account): implement secure account deletion |
+| `596e936` | fix(camera): F1 capture timestamp authority, F2 minimap stale-result protection, F3 shutter re-entrancy guard |
+| `6a02f91` | security: remediate enquiry rate limiting and qs vulnerabilities |
+| `a17e8c3` | release: freeze SiteLens v1.0.0 verified baseline (tag `v1.0.0`) |
 
-### Module D: Camera Permission Recovery & Lifecycle Hardening
-* **Classification**: **CONFIRMED PERMISSION & HARDWARE DEFECTS (REMEDIATED & VERIFIED)**
-* **Findings & Remediations**:
-  1. **Single Permission Subsystem**: Reused `PermissionService` as the single authoritative abstraction; prevented competing permission implementations.
-  2. **Restricted Status Semantics**: Distinguished `PermissionStatus.restricted` (system/parental policy) from temporary or recoverable denial.
-  3. **Settings Return Navigation**: Returning from system settings triggers re-evaluation and smoothly routes the user back to the camera.
-  4. **Camera Hardware Mutex**: FIFO synchronization mutex in `CameraHardwareNotifier` eliminates handle leaks and race conditions during rapid app minimize/resume.
-* **Verification**: 21 tests in `camera_hardware_controller_test.dart` and 12 tests in `camera_permission_recovery_test.dart` pass.
+> No new commits exist for Waves A / A.1 / B — all three waves are **uncommitted working-tree changes**.
 
----
+### Release Artifacts & Signing
+- **Current (Phase 1)** APK `sha256 1656855954d780a21c3353fb8f5aa1a2a2dafac78bf9e2af1229df98dc1f5d0a`
+  (75,545,189 bytes; full fat APK with all three ABIs — larger than the earlier arm64-engine artifacts).
+  **This artifact predates Waves A/A.1/B and does not contain them.**
+- `edb6d82` APK `sha256 84ec35f1…5717a8a` (30,980,555 bytes); `cc16ff0` APK `sha256 f7fa8f8d…487df3a`
+  (30,980,555 bytes, reproducible byte-identically; preserved on disk incl. `build/gps_audit/installed_base.apk`).
+- `v1.0.0` baseline APK `sha256 3a98caec498e93fc32852592bccce7c618d0a3b4673fec3cde27ef063f3ba655`; physical-finding
+  APK (1.0.0 / 2001) `sha256 265195037f9a7f5ec0af0148440f57fdd2c14ebee2524511a1ad62d7436ffb22`.
+- **Signed, not debug-signed**: `CN=SiteLens Release, OU=Mobile Engineering, O=SiteLens, L=Howrah, ST=West Bengal,
+  C=IN`, cert SHA-256 `e6b4adb081090f989a5909c87eb832a132afbc7bc1bdc151fea4e02f8d0bbfee`; keystore outside the repo
+  (`~/.android/sitelens/release-keystore.jks`, alias `sitelens-release`, valid 2026-09-01 → 2054-01-17). Production
+  signing SHA-1 `D8:22:85:B2:0D:1E:11:F4:D2:6C:F0:2F:D1:F7:DF:61:EB:79:2A:69`. **READY FOR PRODUCTION SIGNING**.
+- **Secret hygiene**: `android/key.properties`, `android/local.properties`, `android/app/google-services.json`,
+  `firebase.json`, `lib/firebase_options.dart` are untracked + gitignored; no `*.jks`/`*.keystore`/`*.p12`/`*.pem` tracked.
+- **Permissions shipped (release APK)**: CAMERA, ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION, RECORD_AUDIO,
+  POST_NOTIFICATIONS, INTERNET, ACCESS_NETWORK_STATE (plus library-injected WAKE_LOCK / C2DM RECEIVE / READ_GSERVICES).
 
-### Module E: Photo Evidence Remediation (SiteLens #7 F1–F3)
-* **Classification**: **CONFIRMED DEFECTS & INTEGRITY GAPS (REMEDIATED & VERIFIED)**
-* **Architectural Authority**: Immutable original JPEG (`orig_<id>.jpg`) preserved on DB failure; crash-safe atomic publication with zero-byte rejection; single authoritative pure integrity rule (`ClosedEvidenceIntegrity`) governing Closed evidence links, `Evid_ID` note references, repository operations, and detail surfaces.
-* **Findings & Remediations**:
-  1. **F1 (Preserve Original on DB Failure — BLOCKER)**:
-     - In `MediaPersistenceCoordinator.persistPendingCapture` and `keepForLater`, updated failure handling for photo payloads to invoke `cleanupPartialArtifacts(payload.mediaId)`.
-     - Ensures immutable camera capture `orig_<id>.jpg` is **never deleted** due to a Drift SQLite transaction failure, while purging derived artifacts (`evid_<id>.jpg`, `thumb_<id>.jpg`) and temporary files.
-     - `ReviewTagNotifier.retake` explicitly calls `deleteLocalMediaFiles` to guarantee user-cancelled or retaken captures cleanly purge both original and derived artifacts.
-  2. **F2 (Crash-Safe Evidence Writes — BLOCKER)**:
-     - In `EvidenceStorageService`, implemented `_atomicWriteFile`: writes output first to sibling temporary file `.tmp_<timestamp>_<filename>` with OS-flush, then atomically renames to final destination path.
-     - Automatically cleans up temporary files on write/publish failure.
-     - Updated `cleanupPartialArtifacts(mediaId)` to purge any dangling `.tmp_*` files for that media ID.
-     - Hardened `hasLocalArtifacts` to verify `file.lengthSync() > 0`, refusing to accept empty or 0-byte corrupted files.
-  3. **F3 (Enforce Linked-Evidence Integrity During Editing — GAP)**:
-     - Extracted pure utility `ClosedEvidenceIntegrity` (`enforceIntegrity`, `updateNoteWithEvidId`, `removeEvidIdFromNote`, `removeAllEvidIdsFromNote`).
-     - Delegated ReviewTagNotifier static helpers to `ClosedEvidenceIntegrity`.
-     - In `MediaRepository.updateTags`, accept optional `linkedMediaId` and automatically enforce `ClosedEvidenceIntegrity.enforceIntegrity`: if observation is non-Closed, clears `linkedMediaId` in SQLite and strips `Evid_ID` from notes.
-     - In `MediaRepository.linkMedia`, guarded against linking to non-Closed records.
-     - In `MediaTagEditModal`, preloads candidate on init, clears candidate and note `Evid_ID` on type switch away from Closed or link dismissal, and enforces clean save path.
-     - In `MediaDetailScreen`, guarded `_loadContextualData` and widget build tree to only load/render `_buildLinkedEvidenceCard` when `observationType == ObservationType.closed`.
-* **Verification**:
-  - `test/unit/media_persistence_coordinator_test.dart` (24/24 tests pass, including original preservation on DB failure and retake cleanup).
-  - `test/unit/storage_service_test.dart` (11/11 tests pass, including atomic publication, temp failure cleanup, 0-byte rejection).
-  - `test/unit/closed_evidence_integrity_test.dart` (7/7 tests pass, covering pure logic, note stripping, DB persistence invariant, and `linkMedia` guard).
-  - `test/widget/media_detail_screen_test.dart` (16/16 tests pass, covering Detail non-Closed guard and `MediaTagEditModal` type switch / note cleanup).
+## 4. ACCEPTED MODULES
 
----
+- **Modules A–J (SiteLens #7–#12)** — metadata overlay F1–F5; video persistence & GPS R1–R3; minimap & GPS F1–F4;
+  camera permission recovery; photo evidence F1–F3; review tag & smart-link #8 F1–F5; smart-link E2E #9 F-1
+  (non-destructive B→A link lifecycle); evidence list #10 F1–F2; offline capture & cloud metadata #11 F1–F2;
+  synchronization E2E #12 F-1–F-3.
+  - **Waves B.1/C/D (R11–R16)** — minimap race guard (R11); capture mutex (R12); single video playback owner + interrupted-recording recovery (R13); Review & Tag `PopScope`/discard guard (R14); two-tier SHA-256 + live-byte verification (R15); cloud evidence artifact replication Option A (R16).
+  - **Wave E (R17–R20)** — smart-link temporal semantics (R17); non-destructive unlinking + live distance (R18); nearby-search spatial uncertainty disclosure (R19); canonical site identity resolver (R20).
+  - **Wave F (R21)** — export attribution: persisted evidence creator and authenticated exporter recorded separately; fabricated `Field Inspector` default removed; `ExportAttribution` value object binds creator ≠ exporter.
+- **Cross-Cutting Audit A** — F-A1 derived-artifact EXIF strip (original keeps camera EXIF); F-A2 no synthesized GPS
+  fallback. **Audit B** — B-1 tombstone propagation (`syncTombstone`; never-published = verified no-op).
+  **Audit C** — C-1 video handoff invariant; C-2 `deletePermanently` tombstones rows. **Audit D** — D-SPAT-001
+  cached-seed shutter gating (`hasLiveFix`), D-SPAT-002 photo valid-fix gate, LAT-001 NULL-creator parity.
+- **E2E Audit Program** — full user journey, Settings & Legal, Account Deletion: all PASS. Backend `functions/`
+  suite **39/39** (the `deleteUserAccount` suite is now 5 tests after Wave A.1 removed the 4 obsolete
+  shared-site/successor tests; the previous "43/43" was the whole `functions/` total); dialog tests **4/4** (was 5/5).
+- **Security hardening (Modules 1–7 + Module 4 local-isolation follow-up)** — 8/8 findings closed; baseline
+  documented in `strix-sitelens-instructions.md`.
+- **A1** single `EvidenceVideoPlayback` owner (inline + fullscreen share one controller). **A2** `appRouteObserver`
+  releases/reacquires CameraX across page routes. **B1** GPS state semantics (Unknown ≠ Denied, Service-Off ≠ Denied,
+  Last-Known ≠ Live Fix). **C1** fullscreen video HUD renders canonical `siteCode` (never internal `siteId`).
+- **Photo/Video metadata-card unification** — one canonical runtime card for **Video** only; **Photo fullscreen**
+  (`d02ae8e`) shows only the burned evidence JPEG (`showHud && isVideo`).
+- **B1 GPS lifecycle recovery (`cc16ff0`)** — lifecycle resume cancels the paused subscription and creates a NEW
+  native stream (never `Subscription.resume()`).
+- **Onboarding/permissions, auth session recovery, closed-evidence workflow, true MSL altitude, fixed portrait
+  orientation, HUD geometry/scaling** — accepted (see `PROJECT_STATUS.md`).
+- **Save-path performance audit** — read-only; **DO NOT OPTIMIZE**.
+- **v9 safe site deletion (`edb6d82`)** — `hasMediaForSite` blocks active media + published-but-unreconciled
+  tombstones; `deleteSite` atomically removes eligible tombstones before deleting the site; `markTombstoneReconciled`
+  is applied on tombstone sync success.
+- **Phase 1 unused-media-permission removal (`0680664`)** — SiteLens never reads/imports the device media library;
+  camera capture, evidence storage, video, export/share and Google Photos all operate on app-private files, so the
+  four media/storage permissions and the onboarding "Photos & Storage" prompt were removed.
+- **Security test-harness remediation (`f648779`)** — authenticated contexts now carry `email_verified`, media
+  fixtures aligned to the canonical rules, and the gate runs node:test + Jest with a zero-test guard.
+- **Phase 2.3 Wave A (R01, R04, R05)** — purged membership/sharing/RBAC from app + rules; creator-only Firestore &
+  Storage rules (`request.auth.uid == resource.data.creator_id`); strict fail-closed repository queries on
+  null/empty creatorId; per-user active-site decoupling; multi-user session isolation (User A sign out → User B
+  sign in).
+- **Wave A.1 (R01/R04 follow-up)** — removed the residual `collectionGroup('members')`, shared-site and
+  successor-admin logic from the `deleteUserAccount` Cloud Function and the account-deletion client path (incl. the
+  false "shared sites" retention copy); closed the `getTombstoneSyncCandidates` null leak; scoped
+  `watchTombstoneCandidateCount` and `getResolvedMediaIds`; restored the UID-scoped sync count subscription.
+- **Phase 2.4 Wave B (R02, R03, R06–R10)** — GPS/capture authority: live-fix provenance is now carried on every
+  buffered position (a cached seed can never be baked into evidence); countdown aborts on GPS loss; video T₀ is the
+  spatial/telemetry authority; recording locks cover lens/zoom/aspect/timer; audio-track presence is captured,
+  frozen at T₀, persisted and disclosed; unestablished altitude/heading stay `null` (no synthetic fabrication).
+- **Physical verification** — pre-v1.0.0 10/10 matrix PASS (Satellite/Roadmap captures, burst/alternation, Detail/
+  Viewer match, MSL altitude, PDF export). A1/A2/B1/C1/Photo-fullscreen re-verified PASS on `f7fa8f8d`. Phase 1
+  verified on `1656855954`: no Photos dialog/tile, camera+location onboarding flow progresses, photo + video
+  captured with live GPS, gallery/detail/fullscreen correct, SHA present, PDF export share sheet opens, single PID
+  (no crash/ANR). **Waves A/A.1/B are NOT physically verified (see §6).**
 
-### Module F: Review Tag & Smart-Link Workflow Remediation (SiteLens #8 F1–F5)
-* **Classification**: **CONFIRMED INTEGRITY & USABILITY DEFECTS (REMEDIATED & VERIFIED)**
-* **Architectural Authority**: Single authoritative candidate evaluation and link lifecycle in `ReviewTagNotifier`, strict candidate-to-link binding in `ReviewTagState`, comprehensive defense-in-depth isolation in `MediaRepository` and `MediaPersistenceCoordinator`, and truthful geospatial distance computation in `MediaTagEditModal`.
-* **Findings & Remediations**:
-  1. **F1 (Smart-Link Dismissal & Fallback UI)**:
-     - In `ReviewTagNotifier`, implemented `dismissSuggestedMatch()`: clears `suggestedBeforeMatch`, `linkedMediaId`, and removes the system-generated `Evid_ID: <id>` line from notes while strictly preserving user inspection remarks.
-     - In `ReviewTagScreen`, wired `SmartLinkCard.onDismiss` ("Not now" button) to `dismissSuggestedMatch()`. When dismissed, renders clean fallback prompt guiding user to "Find Nearby Evidence" without showing misleading error state.
-     - In `MediaTagEditModal`, candidate dismissal similarly clears candidate, distance, and linked ID, and sanitizes note text via `ClosedEvidenceIntegrity`.
-  2. **F2 (Candidate Consistency & Divergence Guard)**:
-     - In `ReviewTagNotifier.searchSmartLink`, when a new candidate search resolves to Candidate B while previously linked to Candidate A, automatically reconciles state: clears stale link and removes Candidate A's `Evid_ID` from the note.
-     - Hardened `ReviewTagState.isLinked` getter: returns `true` if and only if `linkedMediaId != null && suggestedBeforeMatch != null && linkedMediaId == suggestedBeforeMatch!.id`.
-     - In `ReviewTagNotifier.saveEvidence`, implemented defensive check: if `linkedMediaId` diverges from `suggestedBeforeMatch?.id`, clears the link, strips `Evid_ID`, and halts save with validation error. Candidate A is never persisted when B is presented.
-  3. **F3 (Evid_ID / Link Invariant on Search Miss or Error)**:
-     - In `ReviewTagNotifier.searchSmartLink`, if spatial search yields no candidate (or throws an unexpected exception), system `Evid_ID` lines are purged from the note while preserving inspector remarks.
-     - In `ReviewTagNotifier.setObservationType`, switching away from Closed removes all system `Evid_ID` references.
-     - Enforced at persistence boundaries: `MediaPersistenceCoordinator.persistPendingCapture`, `LocalMediaRepository.insertMedia`, and `LocalMediaRepository.updateTags` automatically apply `ClosedEvidenceIntegrity.enforceIntegrity`, stripping leaked `Evid_ID` lines from non-Closed or unlinked records.
-  4. **F4 (Truthful Haversine Distance in MediaTagEditModal)**:
-     - In `MediaTagEditModal`, replaced hardcoded/fallback `0.0m` distance with live `SpatialMathUtils.haversineDistanceMeters` calculation between the editing media item and the loaded linked candidate (`_loadLinkedCandidate`) or newly discovered candidate (`_searchCandidate`).
-     - Resets `_suggestedDistance` to null upon type switch or candidate dismissal.
-  5. **F5 (Creator and Site Isolation)**:
-     - In `LocalMediaRepository._findSpatialCandidatesInternal`, added SQL filter criteria matching `creatorId` and `siteId`.
-     - At all database entry points (`LocalMediaRepository.insertMedia`, `LocalMediaRepository.linkMedia`, `LocalMediaRepository.updateTags`, and `MediaPersistenceCoordinator.persistPendingCapture`), added strict checks verifying that the linked candidate belongs to the same `creatorId` and `siteId`, throwing `MediaPersistenceException` if cross-user or cross-site linking is attempted.
-* **Verification**:
-  - `test/unit/review_tag_remediation_test.dart`: 9/9 tests pass (F1 dismissal note preservation, F2 candidate divergence reconciliation & save defense, F3 search miss note preservation & persistence invariants, F5 cross-user/cross-site rejection across repository and coordinator).
-  - `test/widget/review_tag_remediation_widget_test.dart`: 3/3 tests pass (F1 "Not now" button dismissal & fallback text, F4 loaded candidate Haversine distance, F4 searched candidate Haversine distance).
+## 5. CRITICAL INVARIANTS
 
----
+1. **Evidence authority**: `EvidenceMetadataSnapshot` is the capture-time authority; UI never re-derives or invents
+   metadata. Unavailable values stay unknown — never synthesized.
+2. **EXIF policy**: derived evidence (`evid_*`, `thumb_*`) carries no camera EXIF; the immutable original retains it.
+3. **Tombstone lifecycle**: never physically destroy a `media` row on user deletion; never write artifact-sync status
+   for tombstone rows; never create cloud records for never-published items. Storage artifacts are write-once.
+4. **v9 site deletion**: block on active media and on published-but-unreconciled tombstones; remove only eligible
+   (never-published or reconciled) tombstones, atomically with the site, inside one transaction.
+5. **Video handoff**: a normal successful stop clears `_inFlightVideoFile`; only a genuine interruption raises recovery.
+6. **A1**: exactly one `EvidenceVideoPlayback` owns a video's player; views are stateless borrowers.
+7. **A2**: `appRouteObserver` stays registered; CameraX is released while `CameraScreen` is covered, reacquired on reveal.
+8. **B1 / R06**: `hasLiveFix` (`hasValidFix && !isLastKnownSeed`) is the sole capture-readiness provenance; cached/last-known
+   never unlocks capture; resume revalidates permission **and** service state.
+9. **C1**: `HudFormatter.resolveSiteIdentifier` is the single site-identifier implementation; never use `MediaItem.siteId`
+   as a user-facing identifier.
+10. **Metadata card scope**: runtime card is Video-fullscreen only (`showHud && isVideo`); Photo shows the burned JPEG.
+11. **GPS stream lifecycle**: never `Subscription.resume()` a lifecycle-paused subscription; cancel and recreate.
+12. **Save path**: do not defer the DB commit, move persistence off the critical path, or alter atomic
+    write→verify→commit.
+13. **Media permissions**: the app must not declare `READ_MEDIA_IMAGES`, `READ_MEDIA_VIDEO`,
+    `READ_EXTERNAL_STORAGE` or `WRITE_EXTERNAL_STORAGE` (the latter two only as `tools:node="remove"` merger
+    suppressions against camera-plugin injection). Camera + location are the only core capture permissions.
+14. **Security gate runners**: `test/security/firestore_rules.test.js` stays on `node:test` and is executed by
+    `node-test-gate.mjs`; Jest must keep excluding it via `jest.config.js`. Do not convert it to Jest.
+15. **v1 Creator Ownership & Local Isolation (R01, R04, R05)**: SiteLens v1 is creator-owned, user-specific,
+    location-independent, and non-collaborative. Same site code, name, address, or GPS never implies cross-user access.
+    All repository queries must fail closed (`[]` or `null`) when UID is null or empty. Active site selection is
+    strictly keyed by user UID. `creator_id` and all capture-time forensic fields are immutable in cloud rules
+    and local databases.
+16. **R06 position-buffer provenance**: every buffered position carries `isLive` + its resolved altitude/datum; only
+    live entries are selectable by `getBestRecentPosition()`; a live emission purges cached entries. The single
+    production selection authority is `GpsHardwareNotifier.applyBestRecentPosition` — never re-inline the splice.
+17. **R03 countdown gate**: the self-timer re-gates on `hasLiveFix` every tick and aborts on GPS loss; capture reads
+    the **current** GPS authority (never a press-time snapshot).
+18. **R07 video T₀ authority**: the recording-start timestamp **and** the recording-start GPS snapshot govern video
+    evidence; stop-time GPS must never be persisted as the video's spatial/telemetry authority.
+19. **R08 recording lock**: lens switching, digital zoom gestures, aspect-ratio and capture-timer controls are inert
+    while `isRecordingVideo` (enforced in the UI and in `setZoomPreset`/`setPinchZoom`).
+20. **R09 audio disclosure**: `has_audio_track` records the **effective** `enableAudio` of the preset that actually
+    initialized, frozen at T₀. Unknown/not-applicable is `null` — never assumed `true` or `false`.
+21. **R10 unknown telemetry**: unestablished altitude/heading/satellite telemetry stays `null`. Never substitute
+    `0`, `0.0`, or `DateTime.now()`. Nullable columns carry **no default** (historical rows read as unknown).
+22. **R11 minimap race**: shutter-time minimap snapshot is guarded by a monotonic generational token; a mismatched
+    token rejects the snapshot (no stale tile burns into evidence).
+23. **R12 capture mutex**: a single-flight `_isCapturing` lock wraps the shutter trigger; concurrent/re-entrant taps
+    while persistence is in flight are ignored (exactly one record per intentional capture).
+24. **R13 video playback ownership**: exactly one `EvidenceVideoPlayback` owns a recording's player across Review & Tag
+    and the gallery (A1); an interrupted in-flight recording is recovered on restart (Keep for Later / Discard).
+25. **R14 Review & Tag discard guard**: `PopScope` back/dismiss while a save is in flight can never silently discard the
+    uncommitted capture; a re-entrance guard prevents stacked discard dialogs.
+26. **R15 hash semantics**: two-tier SHA-256 — `sha256_hash` (original) and `evidence_sha256_hash` (burned evidence);
+    `verifyBytes()` re-verifies published bytes against their recorded digest (live-byte vs. stored-hash).
+27. **R16 cloud evidence replication (Option A)**: `evid_<id>.jpg` is the cloud-authoritative artifact, replicated to
+    a creator-bound, path-immutable location in Cloud Storage.
+28. **R17 smart-link temporal precedence**: a BEFORE candidate must be captured strictly earlier than the observation
+    it precedes; enforced at query, eligibility, and both persistence boundaries.
+29. **R18 smart-link non-destructive unlinking**: unlinking restores candidate status without touching the record;
+    proximity is dynamic live distance (`null` is "distance unknown", never `0`).
+30. **R19 spatial uncertainty**: a candidate's GNSS accuracy widens the nearby radius bound; synthetic `(0,0)` is not a
+    valid location; displayed distances carry the uncertainty margin (sub-meter overclaiming prohibited).
+31. **R20 canonical site identity**: all UI/export surfaces resolve the human-facing site code/name via
+    `HudFormatter.resolveSiteIdentifier`; the internal site id is never rendered as an identifier.
+32. **R21 export attribution**: exported artifacts attribute each record to its persisted `creator_id` and record the
+    authenticated exporter separately; absent human identity stays unknown (never a fabricated default).
 
-### Module G: Smart-Link E2E Correction (SiteLens #9 F-1)
-* **Classification**: **CONFIRMED SEMANTIC DEFECT IN PRIOR REMEDIATION (CORRECTED & VERIFIED)**
-* **Authoritative Product Semantics**: Linking is relationship metadata, never a destructive transition. Closed B → Non-Conformity A is a link only; A and B remain independently persisted and gallery-visible. An existing B→A relationship may be changed or removed only through explicit user action ("Select as BEFORE" on a new suggestion, "Unlink", or explicit observation-type switch). Editing activity/details and refreshed Smart-Link suggestions must never silently displace or destroy the existing link.
-* **Corrections**:
-  1. **MediaTagEditModal** (`lib/features/gallery/widgets/media_tag_edit_modal.dart`): split `_linkedCandidate`/`_linkedDistance` (authoritative existing link) from `_suggestedBeforeCandidate`/`_suggestedDistance` (new suggestion). `_searchCandidate` and `_loadLinkedCandidate` only ever update the suggestion; `_reconcileSuggestedCandidate` (auto-unlink) was removed. Dual-card UI shows "SELECTED BEFORE EVIDENCE" (A) plus a separate "SMART-LINK SUGGESTION" card (C). Explicit handlers: `_handleLinkSuggestion` (replaces A→C, updates Evid_ID via `ClosedEvidenceIntegrity.updateNoteWithEvidId`), `_handleUnlink` (removes relationship + Evid_ID), `_handleDismissSuggestion` (suggestion only). Save persists `_linkedMediaId`; strict `_isLinked` gates the save button.
-  2. **ReviewTagNotifier / ReviewTagState / ReviewTagScreen** aligned to the same non-destructive semantics: `ReviewTagState` gained `linkedCandidate`; `isLinked` is strict against it; `searchSmartLink` no longer clears an established link on a differing match or a search miss (suggestion-only); `dismissSuggestedMatch` clears the suggestion only; `saveEvidence` refuses an unrepresented link without destroying it; the review screen renders the linked panel and a separate suggestion card.
-* **Verification**:
-  - `test/unit/review_tag_remediation_test.dart`: rewritten F1/F2/F3 + new "Non-Destructive Smart-Link Lifecycle (Test 5)" — saving B→A leaves A and B persisted and gallery-visible; link survives suggestion changes and search misses; explicit actions only mutate the relationship. 12/12 pass.
-  - `test/widget/review_tag_remediation_widget_test.dart`: new "Modal Non-Destructive B→A Lifecycle (SiteLens #9 Correction)" group — Test 1 existing link survives edit (A stays selected, save persists A, A/B gallery-visible), Test 2 explicit replacement (A→C via Select as BEFORE, A/C intact), Test 3 explicit unlink (relationship + Evid_ID removed via Unlink + General switch, A/B intact), Test 4 search-race request guard retained. 6/6 pass.
+## 6. KNOWN ISSUES / OPEN ITEMS
 
----
+- **RESOLVED (`f648779`) — `test/security` "7/19"**: was a harness defect, not rule drift. Root causes were
+  (a) missing `email_verified` claims in the M6-A/M6-B contexts, (b) `firestore_rules.test.js` being a `node:test`
+  suite run under Jest (invisible to it and falsely "failed"), and (c) pre-existing fixture defects the claim
+  error had masked. Gate now reports **89/89** (node:test 75 + Jest 19).
+- **Residual harness concerns**: `node-test-gate.mjs` uses `passed >= 57` (a floor, not an exact count — current
+  node:test count is 75); a stale emulator on port 8080 yields a misleading "port taken" failure (no port pre-check).
+- **Pending-tombstone block not reproducible on-device**: a previously-synced tombstone reconciles almost immediately
+  even offline — Firestore caches the doc so `syncTombstone`'s `docRef.get()` resolves from cache and the queued
+  `update()` succeeds (plain get/set/update, no transaction). The pending state only persists on a genuine sync
+  failure (no cached doc / permission-denied / creator mismatch). Deterministic coverage exists in unit tests.
+- **Site Setup trash icon is not gated**: the delete `IconButton` is always enabled; impossibility is only revealed
+  after opening the dialog and tapping Delete. A read-only audit recommends disabling it when `hasMediaForSite` is
+  true (reuse that method; no schema/API change). **Not implemented.**
+- **Wave B residual telemetry ambiguities (documented, not fixed)**:
+  - `LocalMediaRepository._entryToModel` still substitutes `DateTime.now()` when a stored `captured_at` cannot be
+    parsed (corruption-only path; not a sensor value).
+  - `GnssSnapshot.fromMap` defaults absent satellite counts to `0` when `isAvailable` is true (over-the-wire ambiguity).
+  - Compass heading is accepted for `0.0 ≤ heading ≤ 360.0`, so a device reporting `heading == 0.0` for
+    "unavailable" is persisted as `0°` rather than `null` (no reliable availability signal without `headingAccuracy`
+    semantics).
+  - The live-HUD coordinates retain the established `0.0` "no fix" sentinel (the HUD card rejects a `0.0` pair as a
+    fix); only altitude is genuinely nullable in `GpsUiFixture`.
+- **`docs/ALL_TESTS.md` refresh pending**: post-v1.0.0 audit-remediation tests are not cataloged (still states 539;
+  actual Flutter total is 776). Wave A.1 also removed 4 obsolete successor/shared-site tests still listed there.
+- **`PROJECT_STATUS.md` partially superseded**: dated 2026-09-14 (HEAD `f868a17`); counts and the account-deletion
+  description (sole-member / shared / successor paths) predate Wave A.1.
+- **Documented non-blocking audit observations** (Audit A F-A3–F-A7, Audit B B-2–B-7, Audit C C-3–C-6) remain
+  open-by-design and non-blocking; full text retained in git history.
+- **Physical re-verification scope**: the Phase 1 build covered the permission/onboarding + capture/evidence/export
+  paths only; A1/A2/B1/C1/Photo-fullscreen were last verified on `f7fa8f8d`. **Waves A/A.1/B are unverified on
+  hardware** — the installed APK predates them. Google Photos remains unverifiable on-device (not connected), and the
+  Detail screen shows only a truncated SHA prefix.
+- **Play Store readiness (from the final audit)**: no AAB yet, no hosted privacy-policy URL, Data Safety /
+  content rating / app access not supplied, store assets still SVG + one screenshot, and the removed media
+  permissions must not be reintroduced.
 
-### Module H: Evidence List Remediation (SiteLens #10 F1–F2)
-* **Classification**: **CONFIRMED DEFECTS (REMEDIATED & VERIFIED)**
-* **F1 (Deterministic History ordering)**: `LocalMediaRepository.watchAllMedia` (`lib/data/repositories/media_repository.dart`) now orders `captured_at DESC, id ASC` — newest-first preserved, stable tiebreaker for identical timestamps. Regression test in `test/unit/gallery_controller_test.dart` proves identical-`capturedAt` rows order by id and remain stable across stream re-emissions.
-* **F2 (Unreachable Sync Status filter)**: the existing sync-status filter pipeline was completed rather than removed — a "SYNC STATUS" dropdown (All Sync States / Pending / Syncing / Synced / Failed) was added to `GalleryFilterModal` (`lib/features/gallery/widgets/gallery_filter_modal.dart`), wired to the pre-existing `setSyncStatus` path and `activeFilterCount`. Regression tests in new `test/widget/gallery_filter_modal_test.dart` prove selection filters the gallery and "All Sync States" clears it.
-* **Verification**: `test/unit/gallery_controller_test.dart` 10/10; `test/widget/gallery_filter_modal_test.dart` 2/2; `gallery_screen_test.dart` green.
+## 7. TEST / BUILD BASELINE
 
----
+- **`flutter test`**: **805/805 passed** (0 failed); `flutter analyze`: **0 issues**.
+- **Security gate (`test/security`)**: **89/89** — node:test **75/75** (`firestore_rules.test.js`, incl. the Wave A
+  User A vs User B collision suite and the Wave B R09/R10 rules schema suite) + Jest **19/19**
+  (`security_rules.test.js`, `m6b_sync_emulator.test.js`); 0 failed suites, 0 skipped.
+- Backend (`functions/`): **39/39** (8 suites) — includes the creator-owned-only `deleteUserAccount` suite after
+  Wave A.1.
+- Test-count progression (full Flutter suite incl. the root smoke test): 663 → … → 742 (`cc16ff0`) → 754
+  (`edb6d82`) → 758 (`0680664`/`f648779`) → **767** (Wave A) → **765** (Wave A.1: −3 unit + −1 widget obsolete,
+  +2 R04 unit) → **776** (Wave B: +11 unit; widget unchanged) → **805** (Waves B.1/C/D [R11–R16] + Wave E [R17–R20] + Wave F [R21], all uncommitted in the working tree).
+- **Build**: `flutter build apk --release` → `build/app/outputs/flutter-apk/app-release.apk`. Current artifact =
+  `1656855954…` (75,545,189 bytes, **pre-Waves A/A.1/B**); `edb6d82` = `84ec35f1…5717a8a`; `cc16ff0` = `f7fa8f8d…487df3a`.
+  `versionName 1.0.0` / `versionCode 1`.
+- **Schema/codegen**: a schema change requires bumping `schemaVersion`, adding an `onUpgrade` branch, and running
+  `dart run build_runner build --delete-conflicting-outputs` (v10 added `has_audio_track` + `heading_degrees`).
+- **Security gate invocation** (emulator required):
+  `firebase emulators:exec --only firestore,storage --project sitelens-prod-80e7b "cd test/security && npm test"`.
+  The node:test half alone: `firebase emulators:exec --only firestore,storage "node --test test/security/firestore_rules.test.js"`.
 
-### Module I: Offline Capture & Cloud Metadata Remediation (SiteLens #11 F1–F2)
-* **Classification**: **CONFIRMED DEFECTS (REMEDIATED & VERIFIED)**
-* **F1 (Online capture auto-sync)**: the unsynced-count listener in `SyncCoordinator` (`lib/features/sync/services/sync_coordinator.dart`) now edge-triggers `triggerSync(isManual: false)` when the pending count increases and the session is online; mid-cycle triggers defer via `_pendingAutoSync` through the existing single-flight chain. The Drift-backed stream emits only after the local insert transaction commits, so nothing uploads before persistence/artifact validation. Offline captures stay queued and sync on reconnect as before.
-* **F2 (v8 forensic metadata in cloud)**: `CloudSyncService._ensureFirestoreDocSynced` create payload and reconcile now carry `altitude`, `is_altitude_msl`, `verification_status`, `gnss_satellite_count`, `gnss_satellites_used_in_fix`, `gnss_fix_timestamp` (sourced from the persisted `MediaItem` — capture-time, never re-derived). Immutable-field conflict detection extended for each. `firestore.rules` create allowlist + optional validation extended (bool datum, verification enum, GNSS numeric bounds, fix timestamp ≤40 chars).
-* **Verification**: `test/unit/sync_coordinator_test.dart` F1 auto-sync group 2/2; `test/unit/cloud_sync_service_test.dart` F2 v8 group 5/5 (create persists all fields; matching passes without re-upload; conflicts on altitude / verification_status / GNSS throw).
+## 8. WORKFLOW RULES
 
----
+- Do not commit, push, rewrite history, rebuild for release, or deploy Firebase without explicit instruction.
+- Gradle/APK builds require explicit authorization; the `cc16ff0` artifact reproduces byte-identically.
+- Run the full security gate (both runners) after any rules or harness change; never treat a single-runner result
+  as the gate. Kill/avoid stale emulators before running (ports 8080/9199).
+- Bump `versionCode` in `pubspec.yaml` for every Play upload after the first; verify a keystore backup exists before
+  Play App Signing enrolment (an upload key cannot be regenerated).
+- Never print keystore passwords, key material, Firebase keys or tokens; comparisons/indirection only.
+- **On-device verification discipline**: release builds emit no Dart GPS instrumentation and the Detail screen shows
+  only a truncated SHA prefix — report observed UI + code facts + native logs separately; never infer Dart state from
+  logcat silence, and never claim a full-hash verification from a screenshot.
+- `graphify update .` after code changes; schema changes follow the `onUpgrade` + `build_runner` pattern.
+- **Task Observer Protocol** is formalized in `CLAUDE.md` (mandatory session-start protocol, pre-skill observation
+  queries, pinned workspace root).
 
-### Module J: Synchronization E2E Remediation (SiteLens #12 F1–F3)
-* **Classification**: **CONFIRMED DEFECTS (REMEDIATED & VERIFIED)**
-* **F-1 (Foreground resume triggers sync)**: `SyncCoordinator` now mixes `WidgetsBindingObserver`; `didChangeAppLifecycleState(resumed)` triggers `triggerSync(isManual: false)` for an authenticated session only, reusing the existing single-flight/session-generation pipeline. Observer registered in `_init`, removed in `dispose`.
-* **F-2 (Unexpected exceptions suppressed)**: the generic catch in `_processSingleItem` now adds the id to `_permanentFailedIds` before marking `failed` — deterministic permanent suppression with honest local status; manual retry re-evaluates; retryable/backoff behavior unchanged.
-* **F-3 (Session-scoped eager crash recovery)**: new `SyncLifecycleBootstrap` in `lib/app/app.dart` watches `sessionServiceProvider.select((s) => s.user)` and only then watches `syncCoordinatorProvider` — the coordinator (crash recovery `resetStuckSyncingMedia`, connectivity subscription, resume observer) initializes exactly once per authenticated application lifecycle, independently of Gallery. Unauthenticated startup never creates it; `resetStuckSyncingMedia` is gated on an authenticated session at init and re-runs on the auth sign-in branch. Sign-out leaves the instance dormant (auth guards prevent further synchronization); no duplicate instances/subscriptions.
-* **Verification**: `test/unit/sync_coordinator_test.dart` F1 resume group 4/4 + F2 suppression group 2/2; new `test/unit/sync_lifecycle_bootstrap_test.dart` 4/4 (authenticated init resets stuck rows without Gallery; unauthenticated startup does nothing; logout prevents sync; repeated transitions reuse one coordinator). Integration helper `fake_sync_coordinator.dart` updated for the lifecycle interface.
+## 9. DO-NOT-TOUCH / PRESERVE
 
----
+- **Burned Photo JPEG pipeline** (`WatermarkDrawer` / `EvidenceProcessingService`), EXIF stripping, and SHA-256
+  semantics — do not reintroduce EXIF passthrough or mutate artifacts.
+- **Photo fullscreen gating** (`showHud && isVideo`) — never mount a runtime card/minimap/overlay over Photo.
+- **`EvidenceVideoPlayback` ownership** (A1) and **`appRouteObserver`** registration (A2) — do not add a second
+  player or a second coverage mechanism.
+- **GPS semantics** (B1/R06) — Unknown/Denied/Service-Off distinctions, `hasLiveFix` capture gate, last-known block,
+  and the provenance-carrying position buffer.
+- **Capture authority** (R03/R07) — countdown live-fix re-gate; video T₀ timestamp **and** T₀ GPS snapshot authority.
+- **Recording lock** (R08) — lens/zoom/aspect/timer inert while recording.
+- **Audio disclosure** (R09) — `hasAudioTrack` records the effective controller audio at T₀; unknown is `null`.
+- **Unknown telemetry** (R10) — nullable altitude/heading with no migration default; never zero-fill or `now()`-fill.
+- **Minimap race** (R11) — generational token must guard the shutter-time snapshot; never burn an unguarded tile.
+- **Capture mutex** (R12) — single-flight shutter lock; never allow concurrent/re-entrant captures.
+- **Video playback ownership** (R13/A1) — exactly one player per recording across Review & Tag and gallery.
+- **Review & Tag discard guard** (R14) — `PopScope`/re-entrance guard must protect in-flight saves from accidental discard.
+- **Hash semantics** (R15) — two-tier SHA-256 with live-byte re-verification; never trust a stored digest unchecked.
+- **Cloud evidence replication** (R16) — `evid_<id>.jpg` is the cloud-authoritative artifact (Option A).
+- **Smart-link temporal precedence** (R17) — BEFORE must be strictly earlier; never relax to ≤.
+- **Smart-link non-destructive unlinking** (R18) — unlinking must not mutate the candidate record; `null` distance is "unknown".
+- **Spatial uncertainty** (R19) — candidate GNSS accuracy widens the bound; `(0,0)` is invalid; uncertainty must be disclosed.
+- **Canonical site identity** (R20) — resolve via `HudFormatter.resolveSiteIdentifier`; never emit the internal site id.
+- **Export attribution** (R21) — creator and exporter are distinct; never fabricate a default human identity on export.
+- **Tombstone lifecycle** (v9) — no physical row destruction on user deletion; no cloud records for never-published items.
+- **Media permissions** (Phase 1) — do not reintroduce the four removed permissions or the onboarding photos prompt;
+  keep the `tools:node="remove"` suppressions; keep the security gate on both runners.
+- **Active-site/creator scoping** and fail-closed unauthenticated behaviour.
+- **Secrets/signing**: keep `key.properties`, `local.properties`, `google-services.json`, `firebase.json`,
+  `lib/firebase_options.dart` untracked; never fall back to the debug signing config for release.
+- **No membership/sharing/successor-admin paths** (R01/A.1) — do not reintroduce `collectionGroup('members')`,
+  member hydration, RBAC, invitations, shared-site classification or successor-admin logic in any layer (app, rules,
+  Cloud Functions, tests).
+- **Explicitly rejected approaches (do not reintroduce)**: consuming camera EXIF as truth; synthesized GPS fallbacks
+  (`accuracy ?? 0.0`, `timestamp ?? now`); `Subscription.resume()` lifecycle recovery; save-path optimization;
+  runtime metadata card over Photo; physical row deletion on user deletion; using `MediaItem.siteId` as a user-facing id;
+  selecting a cached/last-known seed for capture; stop-time GPS as video spatial authority; zero-filled telemetry.
 
-### Cross-Cutting Audit A: EXIF / Metadata Semantics (REMEDIATED & VERIFIED)
-* **Classification**: **CONFIRMED GAPS (REMEDIATED & VERIFIED)**
-* **Verdict**: `EvidenceMetadataSnapshot` + Drift + burned HUD are correctly authoritative; EXIF is never read back as truth.
-* **F-A1 (Derived-artifact EXIF stripping)**: in `EvidenceProcessingService._processImageWorker` (`lib/features/camera/services/evidence_processing_service.dart`), after `bakeOrientation` the worker now resets `orientedImage.exif = img.ExifData()` before crop/HUD compositing/encoding — derived evidence JPEG and thumbnail carry no camera EXIF (device GPS, device-clock timestamps, Make/Model), while the immutable original keeps its capture-time EXIF. Policy verified against `image` 4.3.0 sources (encoder writes EXIF from the image; empty EXIF → no APP1 segment).
-* **F-A2 (No synthesized GPS fallback)**: `GpsHardwareNotifier.getBestRecentPosition` (`lib/features/camera/controllers/gps_hardware_controller.dart`) no longer synthesizes a fallback `Position` (`accuracy ?? 0.0`, `timestamp ?? now`) when the raw-position buffer is stale — it returns null and the capture paths keep unknown accuracy/altitude/fix-timestamp unknown. New static `applyBestRecentPosition` seam is the canonical merge policy (MSL altitude authority preserved).
-* **F-A3–F-A7 (observations, non-blocking)**: reload `capturedAt ?? DateTime.now()` fallback; no SiteLens-authored EXIF writer (design boundary); read-only `JpegMetadataExtractor`; dead UI verification fallback; export manifest completeness.
-* **Verification**: `test/unit/evidence_processing_service_test.dart` F-A1 test (original keeps device EXIF; derived evidence + thumbnail stripped; orientation-6 baked to pixels; encoder control proves non-vacuous) + 5 F-A2 tests in `test/unit/gps_hardware_controller_test.dart`. Focused run 64/64; related suites 87/87; full suite 663/663; analyzer 0 issues.
+## 10. NEXT ACTION
 
----
-
-### Cross-Cutting Audit B: Evidence Artifact Cloud Synchronization (AUDITED; B-1 REMEDIATED & VERIFIED)
-* **Classification**: **AUDIT PASS-WITH-FINDINGS; B-1 CONFIRMED GAP (REMEDIATED & VERIFIED)**
-* **Audit verdict**: artifact identity, hash binding, idempotent uploads, write-once enforcement, and recovery integrity are coherent; failed uploads cannot become `synced`; no artifact corruption or spoofing path found.
-* **B-1 (Local tombstones never propagated — GAP)**: `getPendingOrFailedMedia` excluded deleted rows, so a locally soft-deleted synced item never reached the existing `is_deleted` reconcile; the cloud ledger stayed `is_deleted: false`.
-* **Remediation**: `MediaRepository.getTombstoneSyncCandidates` / `watchTombstoneCandidateCount` (deleted rows not mid-sync, creator-scoped); `CloudSyncService.syncTombstone` (creator guard → doc-exists check → reuses `_ensureFirestoreDocSynced` reconcile; missing document = verified no-op) with error mapping extracted into `_runMappedSyncOperation`; `SyncCoordinator` merges tombstone candidates into the cycle (same mutex/backoff/session-generation machinery, count edge-trigger mirrors the unsynced trigger) and never writes the artifact-sync status of a deleted row. Deleted published items reconcile `is_deleted: true`; never-published items are verified no-ops; Storage artifacts are never read, modified, or deleted by propagation.
-* **B-2..B-7 (observations, non-blocking)**: ledger-before-upload dangling-doc window (required by Storage rules creator binding; fail-safe consumers); evidence JPEG is local-only (recovery restores original); Google Photos parallel upload path (opt-in, creator-gated, sha-verified); export manifest can reference omitted files; pre-v8 cloud docs lack v8 backfill; JS rules/emulator suites 12/19 failures root-caused as harness/emulator environment drift (missing `email_verified` claims in test contexts, `node:test` file under jest, emulator evaluation drift — canonical v8 media-create rule verified PASS by probe).
-* **Verification**: focused tombstone suites 104/104 (cloud_sync 25, sync_coordinator, media_persistence, sync_lifecycle_bootstrap, auth_session_invalidation, storage_cleanup); related suites 91/91; full suite 676/676; analyzer 0 issues.
-
----
-
-### Cross-Cutting Audit C: Capture ↔ Sync Lifecycle / Dead-Path Cleanup (AUDITED; C-1/C-2 REMEDIATED & VERIFIED)
-* **Classification**: **AUDIT GAP (no BLOCKERs); C-1/C-2 CONFIRMED GAPS (REMEDIATED & VERIFIED)**
-* **C-1 (Stale `_inFlightVideoFile` — GAP)**: `stopVideoRecording` never cleared the in-flight reference, so every later `pauseCamera` raised a false `hasInterruptedRecording` (self-silencing only because the temp file was already deleted). **Remediation**: `camera_screen.dart` clears the reference via `clearInterruptedRecording()` exactly at handoff completion (storage copy written + camera temp deleted); genuine interruptions and Keep/Discard semantics unchanged; failure paths before handoff keep recovery.
-* **C-2 (Permanent deletion stranding a live cloud ledger — GAP)**: `deletePermanently` physically destroyed the row, so a partially published (failed) item's Firestore ledger stayed live forever. **Remediation**: `LocalMediaRepository.deletePermanently` now deletes local files and tombstones the row (`softDeleteMedia`) — the hidden tombstone rides the B-1 lifecycle (published → `is_deleted: true`; never-published → verified no-op; failure → deferred, recoverable row; idempotent; session/backoff preserved). Physical row removal remains an account-deletion concern. No schema change; `syncTombstone` reused, no second mechanism.
-* **C-3..C-6 (observations, non-blocking)**: production-dead helpers (`persistCapturedEvidence`, `getUnsyncedMedia`, `computeSha256String`, audit-PDF aliases, unused `activeSyncingIds`); orphan-artifact edges (kill-app on review, keepForLater failure, video temp leak); non-atomic video original write; permanently failed item with locally corrupted evidence JPEG strands the row (original remains intact and exportable).
-* **Verification**: focused C-1/C-2 suites 108/108 (camera_screen 22, sync_coordinator, cloud_sync, media_persistence); related suites 115/115; full suite 682/682; analyzer 0 issues.
-
----
-
-### Cross-Cutting Audit D: Capture Position Provenance & Spatial Search Integrity (AUDITED; D-SPAT-001/D-SPAT-002/LAT-001 REMEDIATED & VERIFIED)
-* **Classification**: **AUDIT PASS-WITH-FINDINGS (Nearby Search feature PASS); D-SPAT-001 CONFIRMED DEFECT (REMEDIATED & VERIFIED); D-SPAT-002 CONFIRMED GAP (REMEDIATED & VERIFIED); LAT-001 CONFIRMED GAP (REMEDIATED & VERIFIED)**
-* **Reproduction case**: 8 same-location photos within the configured 25 m radius; per-source "Find Nearby Evidence" returned only 1 instead of 7. Nearby Search audited end-to-end (source→navigation handoff, search origin, radius calculation, haversine/bbox distance, site/creator/sync filtering, pagination, source exclusion, grouped/timeline/map rendering) — feature verdict **PASS**; the exclusion was geometrically correct on the stored data.
-* **Data confirmation (read-only; device + Firestore mirror, release build lacks `allowBackup`/debuggable so the mirror was used — value-equivalent for the audited fields, anchored by SHA-256)**: the 8 rows split into two recorded locations — 6 rows at a bit-identical frozen coordinate `22.5650104, 88.3167979` (accuracy bit-identical `4.107 m`, reverse-geocoded Shibpur/Howrah; no GNSS telemetry fields) and the 2 SHA-anchored rows `5f1bb230…`/`fcb2ba46…` at `22.5653, 88.5173` (live fixes ~7.5 m apart, New Town) — **~20.6 km apart**. Creator/site/deleted predicates were identical across all rows (ruled out). The 25 m search from either SHA-matched source returns exactly 1 (its partner) — the reported symptom reproduced exactly. Falsified coordinates propagated into the smart-link graph (`c79ac732` closed → `5ee978b8` BEFORE at 0.0 m computed distance, permanently resolving it).
-* **D-SPAT-001 root cause (CONFIRMED DEFECT)**: `gpsHardwareProvider` is autoDispose, so every capture → Review → Camera cycle destroyed the GNSS notifier and re-seeded state from the OS last-known location in `initialize()`; the cached seed latched as a normal fix and `EvidenceMetadataSnapshot.capture` derives status from accuracy alone (`evaluateVerificationStatus`) — a wrong cached position was burned VERIFIED ±4.1 m into 6 artifacts, their watermarks, and the cloud ledger. Audit A F-A2 covered raw-buffer staleness (null → unknown) but never position *provenance*; no continuity/jump guard existed.
-* **D-SPAT-001 remediation**: `GpsHardwareState.isLastKnownSeed` provenance flag — set for the `getLastKnownPosition` seed (display-only: map pin/HUD behavior unchanged, 5 existing seeding tests untouched), cleared by any live stream emission or fix-clear; new `hasLiveFix` getter; both shutter paths (`camera_screen.dart` photo + video) now require `hasLiveFix` and block capture with a truthful snackbar when only a cached seed or no fix exists — enforcing the documented "captures are locked until a verified GPS fix is obtained" contract.
-* **D-SPAT-002 (CONFIRMED GAP)**: the video stop path rejected `!hasValidCoordinates` captures but the photo path had no equivalent — a fix-less shutter press persisted `0,0` coordinates (the "no 0,0 coords" remediation was video-scoped). **Remediation**: the new photo gate covers the same condition, placed before map-snapshot/hardware work.
-* **LAT-001 (CONFIRMED GAP)**: `_findSpatialCandidatesInternal` hard-filtered `creator_id = ?` while every sync/ownership query tolerates legacy `NULL`-creator rows; pre-attribution rows were invisible to spatial search. **Remediation**: `creatorId.equals(?) | creatorId.isNull()` ownership parity; cross-creator isolation unchanged (tests 16/18 still enforce it).
-* **Verification**: `test/unit/gps_hardware_controller_test.dart` D-SPAT-001 group 3/3 (seed flagged cached, live emission supersedes provenance, stale-clear drops flag with the fix); `test/unit/nearby_search_controller_test.dart` test 19 (NULL-creator legacy row visible to authenticated search, other-creator row excluded, source excluded); camera_screen suite 24/24; full suite **686/686** (682 + 4 new regressions); analyzer 0 issues.
-
----
-
-### E2E Audit Program: Journey, Settings & Legal, Account Deletion (READ-ONLY, ALL PASS)
-* **Full user journey (install → onboarding → auth → site setup → camera → capture → review → sync → history → logout/relaunch → deletion)**: **PASS** — no broken handoff, state inconsistency, persistence gap, or unreachable path; journey-edge suites 52/52; full suite 682/682.
-* **Settings & Legal workflow**: **PASS** — every visible action (GPS/watermark/nearby/storage/GPhotos/account/support/legal) traces to a real handler with correct resulting state and error states; legal docs are inline content; support enquiry chain (client validation → HTTPS callable envelope with App Check + ID token → server validation/rate-limit/idempotency/Resend) fully traced; suites 70/70.
-* **Account deletion workflow**: **PASS** — Settings entry → re-auth → `deleteUserAccount` (App Check, caller-only identity, sole-member/shared/sole-admin-successor classification, Storage prefix purge via Admin SDK, Firestore cascade, enquiries anonymized, Auth deletion, rate-limit cleanup) → local Drift/files/prefs purge → sign-out → stack-wiped unauthenticated routing. All four site paths covered; `functions/test/account_deletion.test.js` 43/43; dialog widget tests 5/5.
-
----
-
-### Reference Documentation Synchronization (PRD.md & architecture.md)
-* **Classification**: **COMPLETED & VERIFIED (documentation only)**
-* Both documents were inspected in full and synchronized to the verified v8 semantics: capture-time metadata authority and unknown-value semantics; EXIF original/derived boundary (derived artifacts carry no camera EXIF); corrected synchronization flow order (ledger document published before artifact uploads); retry/backoff/suppression and session-generation lifecycle; tombstone propagation and deletion semantics (no physical row destruction on user deletion); v8 media/sites schema; ledger field list; account-deletion lifecycle; write-once idempotent Storage semantics; atomicity/failure-consistency guarantees.
-* Inaccurate statements corrected: "EXIF GPS metadata for photos" / "preserved EXIF geotagging" / "photo EXIF GPS metadata is written" (contradicted the verified EXIF policy); "Write Firestore metadata" ordered after uploads; "Delete from Device preserves `is_deleted = 0`" (no such operation exists); "unsynced media ... hard-deletes SQLite" (now tombstones); `queued` sync state → `pending`; v1 media schema (missing `original_uri`, altitude/datum, verification status, GNSS telemetry, `captured_address`, `creator_id`, `evidence_sha256_hash`, `is_deleted`) replaced with the verified v8 model; `'non-conformity'` → `'nonConformity'`.
-* Editorial constraints honored: no audit history, test counts, or commit hashes added; historical milestone counts preserved; version identifiers (`v1.0` baseline) untouched; only `docs/handover/PRD.md` and `docs/handover/architecture.md` modified.
-
----
-
-### Physical Release Finding Remediation — A1 / A2 / B1 (IMPLEMENTED & VERIFIED; PHYSICAL RE-VERIFICATION PENDING)
-* **Origin (read-only forensic audit)**: physical release-APK observation on the Motorola edge 50 fusion (Android 16 / SDK 36; `com.sitelens.app` 1.0.0 / 2001; release APK SHA-256 `265195037f9a7f5ec0af0148440f57fdd2c14ebee2524511a1ad62d7436ffb22`). A ~3 s video was captured successfully; opening it in FULLSCREEN VIDEO EVIDENCE crashed the app; after the restart/recovery the camera screen showed `GPS: Denied`, `ACC: ACQUIRING`, and a locked shutter ("GPS required for evidence"). The video's displayed forensic HUD showed an identifier-like token before `UTC:` followed by UTC/local timestamps, LAT/LON, altitude, `STATUS: VERIFIED`, accuracy and satellite count.
-* **Audit conclusions (code-verified)**:
-  * The video/fullscreen pipeline does **not** write GPS permission state; no video code path can set or clear `permissionStatus`. The post-crash GPS state is an **independent** state/initialization concern — "GPS Denied caused the video crash" is not established.
-  * The observed video HUD is the **fullscreen route's bottom overlay**, rendered dynamically from the persisted capture-time `MediaItem`. Video artifacts are never burned/watermarked: the MP4 is copied byte-for-byte and its SHA-256 is both the original and the evidence hash.
-  * Remaining lifecycle hazards identified: the fullscreen route constructed a **second** `VideoPlayerController`/ExoPlayer for the same file while the inline player stayed mounted, and CameraX was never released while `CameraScreen` was covered.
-* **A1 — Video Fullscreen Player Ownership (IMPLEMENTED & VERIFIED; ACCEPTED)**:
-  * New `EvidenceVideoPlayback` (`ChangeNotifier`, `lib/features/gallery/controllers/evidence_video_playback.dart`) is the single owner of at most ONE `VideoPlayerController` per evidence video: created once, initialized once, disposed exactly once.
-  * `MediaDetailScreen` owns the instance and shares it with the inline surface and the fullscreen route; `LocalVideoPlayerWidget` is now a stateless borrower (never creates/disposes a controller). The inline surface is parked while fullscreen is on top, so exactly one video surface renders.
-  * Race/idempotency: `initialize()` re-checks disposal after every await and releases a late-completing controller; `dispose()` is idempotent; the owned controller is released exactly once even when disposal races initialization; a missing/undecodable file yields a truthful `failed` state without creating a controller.
-  * Tests: `test/unit/evidence_video_playback_test.dart` (10) + the `MediaDetailScreen` fullscreen-ownership group (3) — single player reused across enter/exit/re-enter and repeated playback; disposal during async init; idempotent disposal; truthful failure.
-* **A2 — CameraX Route Lifecycle (IMPLEMENTED & VERIFIED; ACCEPTED)**:
-  * New `appRouteObserver` (`RouteObserver<PageRoute<dynamic>>`, `lib/app/router.dart`) registered via `navigatorObservers` on the root `MaterialApp` (`lib/app/app.dart`). Only full-page routes are observed — dialogs and bottom sheets (`PopupRoute`) do not trigger coverage.
-  * `CameraScreen` implements `RouteAware`: `didPushNext` → `pauseCamera()` (release CameraX), `didPopNext` → `resumeCamera()` plus interrupted-recording recovery. Both callbacks are idempotent via a `_isCoveredByRoute` guard; the app-lifecycle handler only reacquires the camera when the screen is not covered; GPS lifecycle calls are unchanged. Subscription/unsubscription is guarded so no callback runs after disposal.
-  * Tests: `test/widget/camera_screen_test.dart` A2 group (7) — covered→inactive / visible→active; repeated and nested coverage with no duplicate init or leak; background/foreground while covered stays inactive; redundant pause/resume; disposal while active; truthful error state on failed resume.
-* **B1 — GPS State Semantics & Recovery (IMPLEMENTED & VERIFIED)**:
-  * `GpsBlockReason` gained `permissionUnknown` and `lastKnownOnly`. `GpsHardwareState.isPermissionUnknown` distinguishes `LocationPermission.unableToDetermine`; `blockReason` is keyed off `hasLiveFix` and evaluates service-off, unknown, denied and last-known-only distinctly — Unknown is never collapsed into Denied, and service-off is never reported as Denied. `statusBadgeLabel`, `GpsUiFixture.pillLabel`/`statusLabel`, `GpsStatusPill` and `GpsStatusExplainerSheet` render the distinct states truthfully.
-  * `CameraScreen.isCapturePermitted` now requires `hasLiveFix` (was `hasValidFix`), so cached/last-known coordinates can never unlock evidence capture; the geofence label reads `GPS Fixed` / `Last Known` / `Acquiring Fix`.
-  * `initialize()` uses a grant check (denied / deniedForever / unableToDetermine all stop acquisition). `resumeLocationStream()` is now async and explicitly revalidates OS permission **and** location-service state, cancels the stream and clears the latched fix when unavailable, re-checks staleness when granted, and resumes/creates exactly one subscription. `pauseLocationStream()`/`dispose()` are idempotent and post-disposal recovery is harmless.
-  * Tests: `test/unit/gps_hardware_controller_test.dart` B1 group (15) + `test/widget/camera_screen_test.dart` B1 group (2) — all seven states, cached-never-live, capture-gate provenance, resume revalidation (denied / unknown / service-off), recovery-requires-a-new-live-fix, no duplicate subscriptions, idempotent cleanup.
-* **Physical re-verification**: PENDING — the Android 16 release-device sequence must be executed on the rebuilt APK after all remediation modules are complete (see §5 and §7).
-
----
-
-## 3. Working Tree Status & Git Ledger
-
-### Modified Files (`git status --short`)
-```text
- M .gitignore
- M docs/ALL_TESTS.md
- M docs/handover/PRD.md
- M docs/handover/PROJECT_STATUS.md
- M docs/handover/SESSION_HANDOVER.md
- M docs/handover/architecture.md
- M firestore.rules
- M integration_test/auth_session_boundary_e2e_test.dart
- M integration_test/helpers/fake_auth_service.dart
- M integration_test/helpers/fake_permission_service.dart
- M integration_test/helpers/fake_site_repository.dart
- M integration_test/helpers/fake_sync_coordinator.dart
- M lib/app/app.dart
- M lib/app/router.dart
- M lib/core/services/auth_service.dart
- M lib/core/services/map_thumbnail_service.dart
- M lib/core/services/permission_service.dart
- M lib/core/services/session_service.dart
- M lib/core/utils/gps_utils.dart
- M lib/data/local/database/app_database.dart
- M lib/data/local/database/app_database.g.dart
- M lib/data/repositories/media_repository.dart
- M lib/data/repositories/site_repository.dart
- M lib/domain/models/media_item.dart
- M lib/features/camera/camera_screen.dart
- M lib/features/camera/controllers/camera_hardware_controller.dart
- M lib/features/camera/controllers/gps_hardware_controller.dart
- M lib/features/camera/controllers/map_thumbnail_controller.dart
- M lib/features/camera/hud/hud_data.dart
- M lib/features/camera/hud/hud_formatter.dart
- M lib/features/camera/models/camera_hardware_state.dart
- M lib/features/camera/models/camera_ui_state.dart
- M lib/features/camera/models/evidence_metadata_snapshot.dart
- M lib/features/camera/models/gps_hardware_state.dart
- M lib/features/camera/services/evidence_processing_service.dart
- M lib/features/camera/services/evidence_storage_service.dart
- M lib/features/camera/services/media_persistence_coordinator.dart
- M lib/features/camera/widgets/camera_shutter_station.dart
- M lib/features/camera/widgets/camera_top_hud.dart
- M lib/features/camera/widgets/camera_viewfinder.dart
- M lib/features/camera/widgets/gps_map_thumbnail.dart
- M lib/features/camera/widgets/gps_status_explainer_sheet.dart
- M lib/features/gallery/media_detail_screen.dart
- M lib/features/gallery/services/evidence_export_service.dart
- M lib/features/gallery/widgets/gallery_filter_modal.dart
- M lib/features/gallery/widgets/local_video_player_widget.dart
- M lib/features/gallery/widgets/media_tag_edit_modal.dart
- M lib/features/nearby/controllers/nearby_search_controller.dart
- M lib/features/nearby/models/nearby_search_state.dart
- M lib/features/nearby/nearby_search_screen.dart
- M lib/features/nearby/widgets/location_timeline_view.dart
- M lib/features/nearby/widgets/nearby_media_card.dart
- M lib/features/onboarding/permission_onboarding_screen.dart
- M lib/features/onboarding/permission_recovery_screen.dart
- M lib/features/review/controllers/review_tag_controller.dart
- M lib/features/review/models/pending_capture_payload.dart
- M lib/features/review/models/review_tag_state.dart
- M lib/features/review/review_tag_screen.dart
- M lib/features/review/widgets/smart_link_card.dart
- M lib/features/settings/settings_screen.dart
- M lib/features/sites/site_controller.dart
- M lib/features/sites/site_setup_screen.dart
- M lib/features/sync/services/cloud_sync_service.dart
- M lib/features/sync/services/sync_coordinator.dart
- M lib/shared/widgets/evidence_metadata_hud_card.dart
- M test/unit/auth_session_routing_test.dart
- M test/unit/camera_hardware_controller_test.dart
- M test/unit/cloud_sync_service_test.dart
- M test/unit/evidence_processing_service_test.dart
- M test/unit/gallery_controller_test.dart
- M test/unit/gps_hardware_controller_test.dart
- M test/unit/hud_formatter_test.dart
- M test/unit/map_thumbnail_service_test.dart
- M test/unit/media_persistence_coordinator_test.dart
- M test/unit/minimap_evidence_provenance_test.dart
- M test/unit/nearby_search_controller_test.dart
- M test/unit/review_tag_controller_test.dart
- M test/unit/site_controller_test.dart
- M test/unit/storage_cleanup_service_test.dart
- M test/unit/storage_service_test.dart
- M test/unit/sync_coordinator_test.dart
- M test/widget/camera_screen_test.dart
- M test/widget/gallery_screen_test.dart
- M test/widget/location_timeline_view_test.dart
- M test/widget/m1_screens_test.dart
- M test/widget/media_detail_screen_test.dart
- M test/widget/nearby_search_screen_test.dart
- M test/widget/review_tag_screen_test.dart
- M test/widget/settings_screen_test.dart
- M test/widget_test.dart
- ?? lib/core/utils/closed_evidence_integrity.dart
- ?? lib/features/gallery/controllers/evidence_video_playback.dart
- ?? test/unit/auth_session_invalidation_test.dart
- ?? test/unit/closed_evidence_integrity_test.dart
- ?? test/unit/evidence_video_playback_test.dart
- ?? test/unit/metadata_overlay_workflow_test.dart
- ?? test/unit/review_tag_remediation_test.dart
- ?? test/unit/sync_lifecycle_bootstrap_test.dart
- ?? test/widget/camera_permission_recovery_test.dart
- ?? test/widget/gallery_filter_modal_test.dart
- ?? test/widget/permission_resume_navigation_test.dart
- ?? test/widget/review_tag_remediation_widget_test.dart
- ?? test/widget/site_setup_screen_test.dart
-```
-
-Delta vs. the previous ledger: `docs/handover/PRD.md` and
-`docs/handover/architecture.md` joined the modified set (documentation
-synchronization); `output.txt` (stale Audit A report artifact) was removed
-externally between sessions and is no longer present;
-`test/unit/evidence_processing_service_test.dart` joined the modified set
-(Audit A F-A1 regression tests). `lib/features/camera/models/gps_hardware_state.dart`
-and `test/unit/nearby_search_controller_test.dart` joined the modified set
-(Audit D: D-SPAT-001 provenance flag + LAT-001 regression test).
-
-Delta vs. the previous ledger (Physical Release Finding Remediation — A1 / A2 / B1):
-* **New (untracked)**: `lib/features/gallery/controllers/evidence_video_playback.dart` (A1 single video
-  player owner) and `test/unit/evidence_video_playback_test.dart` (A1 lifecycle tests).
-* **Newly joined the modified set**: `lib/features/gallery/widgets/local_video_player_widget.dart`
-  (A1 borrowed-view renderer), `lib/features/camera/widgets/camera_top_hud.dart` (B1 Unknown /
-  Last-known pill states), plus `lib/features/camera/controllers/map_thumbnail_controller.dart`,
-  `lib/features/camera/hud/hud_data.dart`, `lib/features/camera/widgets/gps_map_thumbnail.dart`,
-  `lib/features/nearby/widgets/location_timeline_view.dart` and
-  `test/widget/location_timeline_view_test.dart` (ledger parity refresh).
-* **Module-touched (all pre-existing modified entries)**: A1 — `media_detail_screen.dart`,
-  `media_detail_screen_test.dart`; A2 — `app.dart`, `router.dart`, `camera_screen.dart`,
-  `camera_screen_test.dart`; B1 — `gps_utils.dart`, `gps_hardware_state.dart`, `camera_ui_state.dart`,
-  `camera_top_hud.dart`, `gps_status_explainer_sheet.dart`, `gps_hardware_controller.dart`,
-  `camera_screen.dart`, `gps_hardware_controller_test.dart`, `camera_screen_test.dart`.
-
-Delta vs. the previous ledger (C1 Video HUD Identifier + Photo/Video Metadata-Card Unification):
-* **Newly joined the modified set**: `test/unit/hud_formatter_test.dart` (3 new `fromMediaItem`
-  canonical-siteCode / telemetry unit tests).
-* **Module-touched (all pre-existing modified entries)**: `lib/features/camera/hud/hud_data.dart`
-  (optional media-agnostic `accuracyText` / `satellitesText`), `lib/features/camera/hud/hud_formatter.dart`
-  (`resolveSiteIdentifier`, C1-correct `fromMediaItem`, telemetry formatting),
-  `lib/shared/widgets/evidence_metadata_hud_card.dart` (optional telemetry line),
-  `lib/features/gallery/media_detail_screen.dart` (canonical card mounted for Photo AND Video fullscreen,
-  bespoke video strip removed), `test/widget/media_detail_screen_test.dart` (F4 updated; C1 group replaced
-  by the Photo/Video parity group).
-* **Untouched (verified by mtime)**: `watermark_drawer.dart`, `evidence_processing_service.dart`
-  and the burned-JPEG/EXIF/SHA path; `evidence_video_playback.dart` (A1); `app.dart`/`router.dart` (A2);
-  `gps_hardware_controller.dart` (B1).
-* **Performance audit**: read-only, NO code change (do-not-optimize recommendation).
-
-### Git Invariants
-* **Current HEAD**: `f868a17` (`main`)
-* **Tag `v1.0.0`**: `a17e8c3580c157ba629bfc8fe39fa2fd75da923c` (UNMOVED & FROZEN)
-* **`git diff --check`**: Clean (no whitespace or lint issues).
+1. **AWAIT EXPLICIT USER AUTHORIZATION FOR WAVE G (R24–R26)**:
+   - Waves A, A.1, B, B.1/C/D (R11–R16), E (R17–R20) and F (R21) are complete and verified against the
+     automated suites (no physical verification). All remain uncommitted in the working tree.
+   - Wave G implemented to date per the §34 matrix & per-rule directives: **R22 (Tombstone Remote
+     Propagation) and R23 (Deletion Safety) are COMPLETED & VERIFIED.** R24 (tombstone retention/purge),
+     R25 (sync backoff/error classification) and R26 (deterministic gallery sort) are NOT STARTED — awaiting scope.
+   - DO NOT commit, push, or start Wave G without explicit instructions.
+2. **Physical verification of Waves A/A.1/B/B.1–F is outstanding** — build and exercise live-fix gating, countdown abort,
+   recording locks, audio disclosure, audio/heading persistence, smart-link behavior and export attribution on the
+   device before any release.
+3. Decide the Site Setup trash-icon gating (recommended: disable when `hasMediaForSite` is true; reuse the existing
+   repository method; update `site_setup_screen_test.dart` which currently drives deletion errors through the dialog).
+4. Close the harness residuals: assert an exact node:test count (`tests === passed`), add a stale-emulator/port
+   pre-check, and document the combined `npm test` invocation.
+5. Optionally refresh `docs/ALL_TESTS.md` (539 → 805) and reconcile `PROJECT_STATUS.md` with Waves A/A.1/B/B.1–F.
+6. Before a Play release: build the AAB, re-run the full physical A1/A2/B1/C1/Photo-fullscreen suite on the current
+   build, and complete the Play Console items listed in §6.
 
 ---
 
-## 4. Verification Test Results
+## 11. POST-REMEDIATION AUDITS
 
-All scoped verification suites pass completely:
+### 11.1 R22 — Tombstone Remote Propagation (independent Jev evaluation)
 
-1. **`flutter test test/unit/review_tag_remediation_test.dart`**:
-   - **Result**: `9/9 tests passed`
-   - Validates F1 dismissal note preservation, F2 candidate divergence reconciliation & save defense, F3 search miss note preservation & persistence invariants, F5 cross-user/cross-site rejection across repository and coordinator.
-2. **`flutter test test/widget/review_tag_remediation_widget_test.dart`**:
-   - **Result**: `3/3 tests passed`
-   - Validates F1 "Not now" button dismissal & fallback text, F4 loaded candidate Haversine distance, F4 searched candidate Haversine distance.
-3. **`flutter test test/unit/metadata_overlay_workflow_test.dart`**:
-   - **Result**: `9/9 tests passed`
-   - Validates configurable threshold parity, status invariance across settings changes, all 5 pre-v8 migration fallback branches, GNSS telemetry persistence, video metadata preservation with untouched raw video SHA-256, and MSL/WGS84/unknown altitude formatting.
-4. **`flutter test test/widget/media_detail_screen_test.dart`**:
-   - **Result**: `16/16 tests passed`
-   - Validates photo and video detail screens, `CAPTURE & GEOSPATIAL TELEMETRY` section rendering, canonical verification status badge, `Fullscreen Zoom` button on video container, `FULLSCREEN VIDEO EVIDENCE` route with non-intrusive metadata overlay strip, non-Closed linked-card prevention guard, and `MediaTagEditModal` type-switch & note cleanup.
-5. **`flutter test test/unit/gps_hardware_controller_test.dart`**:
-   - **Result**: `27/27 tests passed`
-   - Validates searching/ready status transitions, background/foreground staleness watchdog, MSL/WGS84/unknown altitude formatting, and GNSS telemetry extraction.
-6. **`flutter test test/widget/camera_screen_test.dart`**:
-   - **Result**: `21/21 tests passed`
-   - Validates camera viewfinder layout, HUD truthfulness, shutter button re-entrancy lock, zoom presets, interrupted recording recovery, and keepForLater persistence.
-7. **`flutter test test/unit/media_persistence_coordinator_test.dart`**:
-   - **Result**: `24/24 tests passed`
-   - Validates failure-safe writes, metadata population in `MediaItem`, original preservation on DB failure, retake cleanup of original and derived artifacts, and atomic persistence.
-8. **`flutter test test/unit/storage_service_test.dart`**:
-   - **Result**: `11/11 tests passed`
-   - Validates atomic publication with `.tmp_` files, write failure cleanup, zero-byte / incomplete artifact rejection, and partial artifact cleanup.
-9. **`flutter test test/unit/closed_evidence_integrity_test.dart`**:
-   - **Result**: `7/7 tests passed`
-   - Validates pure integrity logic, note `Evid_ID` removal and replacement, Drift SQLite persistence invariants in `MediaRepository.updateTags`, and non-Closed `linkMedia` prevention.
-10. **`flutter test test/unit/minimap_evidence_provenance_test.dart`**:
-    - **Result**: `24/24 tests passed`
-    - Validates generation guards, layer isolation, canonical cache keys, and out-of-order static map response discarding.
-11. **`flutter test test/unit/camera_hardware_controller_test.dart`**:
-    - **Result**: `21/21 tests passed`
-    - Validates Camera2 handle cleanup on fallback errors, lifecycle mutex concurrency, retry recovery, and 1.0x/capability-aware zoom states.
-12. **`flutter test test/widget/permission_resume_navigation_test.dart`**:
-    - **Result**: `8/8 tests passed`
-    - Validates first-launch recovery persistence in `PermissionRecoveryScreen`, back-stack unwinding, minimize/resume preservation, and single authoritative declarative onboarding.
-13. **`flutter test integration_test/auth_session_boundary_e2e_test.dart`**:
-    - **Result**: `6/6 tests passed`
-    - Validates sign-out cancellation, SiteSetup sign-out stack wipe, SettingsScreen deep sign-out stack wipe, Android system Back prevention, and mid-session invalidation on pushed `CameraScreen`.
-14. **`flutter test test/unit/auth_session_invalidation_test.dart`**:
-    - **Result**: `8/8 tests passed`
-    - Validates all 5 invalidation scenarios: user disabled, cold start user deleted, app resume token revoked, contextual `permission-denied`, `unauthenticated`, network fail-open, and concurrency race safety.
-15. **Full Workspace Suite (`flutter test`)**:
-    - **Result**: **`682/682 tests passed`** (0 failures, all unit, widget, and integration suites green; 657 at the previous handover + 6 Audit A regression tests + 13 Audit B tombstone tests + 6 Audit C remediation tests).
-16. **Static Analysis (`flutter analyze`)**:
-    - **Result**: **`0 issues found`** (clean).
-17. **Knowledge Graph (`graphify update .`)**:
-    - **Result**: Last rebuild 4568 nodes, 6758 edges, 234 communities. **Stale**: predates the Audit A–C remediations; refresh recommended before graph-assisted navigation.
-18. **Cross-Cutting Audit A–C Remediation Verification (this session)**:
-    - Audit A focused run (gps_hardware_controller, evidence_processing_service, camera_hardware_controller): **64/64**; related suites (camera_screen, minimap_evidence_provenance, media_persistence_coordinator, metadata_overlay_workflow, map_thumbnail_service, storage_service): **87/87**.
-    - Audit B focused tombstone suites (cloud_sync, sync_coordinator, media_persistence, sync_lifecycle_bootstrap, auth_session_invalidation, storage_cleanup): **104/104**; related suites (cloud_media_recovery, gallery_controller, google_photos, metadata_overlay, gallery_screen, gallery_filter_modal, media_detail, camera_screen): **91/91**.
-    - Audit C focused suites (camera_screen, sync_coordinator, cloud_sync, media_persistence): **108/108**; related suites (sync_lifecycle_bootstrap, auth_session_invalidation, storage_cleanup, camera_hardware_controller, cloud_media_recovery, google_photos, gallery_screen, media_detail, review_tag): **115/115**.
-19. **E2E Audit Program Verification (this session)**:
-    - Journey-edge suites (m1_screens, permission_resume_navigation, camera_permission_recovery, site_setup_screen, auth_session_routing, auth_session_invalidation, widget smoke): **52/52**.
-    - Settings & Legal surface (12 suites: settings_screen, account_deletion_dialog, storage_settings_modal, gps_settings_modal, google_photos_settings_card, enquiry_service, gps/timestamp/nearby/watermark/map_type controllers, google_photos controller): **70/70**.
-    - Account deletion: `functions/test/account_deletion.test.js` **43/43** (node --test); `account_deletion_dialog_test.dart` **5/5**.
-20. **Firebase Rules/Emulator JS Suites (test/security)**: **7/19 passed**; the 12 failures are root-caused test-harness/emulator environment drift (test contexts lacking the `email_verified` claim required by the rules, one suite authored for `node:test` instead of jest, and emulator rules-engine evaluation drift reproduced independently with production-shaped tokens). An independent scratchpad probe verified the canonical v8 media-create rule and Storage write-once semantics PASS on the same emulator. Not production defects; harness re-baseline recommended before relying on these suites.
-21. **Cross-Cutting Audit D Verification (this session)**:
-    - `flutter analyze`: **0 issues**.
-    - `test/unit/gps_hardware_controller_test.dart` + `test/unit/nearby_search_controller_test.dart`: **54/54** (includes the 3 D-SPAT-001 provenance regressions and LAT-001 test 19; all 5 pre-existing lastKnown seeding tests unaffected).
-    - `test/widget/camera_screen_test.dart`: **24/24**.
-    - Full Workspace Suite (`flutter test`): **686/686 tests passed** (682 + 4 Audit D regression tests); `flutter analyze` **0 issues**.
-22. **A1 — Video Player Ownership Verification (this session)**:
-    - `test/unit/evidence_video_playback_test.dart`: **10/10** (single controller created; initialize idempotent; missing file → failed with no controller; init failure → failed + released once; idempotent disposal; disposal during gated async init → no post-dispose notification and one release; initialize-after-dispose no-op; toggle-after-dispose safe; toggle notifies; repeated cycles keep one controller).
-    - `test/widget/media_detail_screen_test.dart`: **20/20** (includes the fullscreen single-owner group: single player reused across enter/exit/re-enter + repeated playback; missing file → truthful failure with zero controllers; disposal while fullscreen open → exactly one disposal).
-    - Full Workspace Suite (`flutter test`): **706/706 tests passed**; `flutter analyze` **0 issues**.
-23. **A2 — CameraX Route Lifecycle Verification (this session)**:
-    - `test/widget/camera_screen_test.dart`: **31/31** (includes the A2 group: covered → inactive / visible → active; repeated and nested coverage with no duplicate init or leak; background/foreground while covered stays inactive; redundant pause/resume; disposal while active; truthful error on failed resume).
-    - Full Workspace Suite (`flutter test`): **713/713 tests passed**; `flutter analyze` **0 issues**.
-24. **B1 — GPS State Semantics & Recovery Verification (this session)**:
-    - `test/unit/gps_hardware_controller_test.dart`: **50/50** (includes the B1 group: denied → Denied; unknown → Unknown (not Denied); service-off → ServiceDisabled (not Denied); Acquiring; last-known-only distinct; live-fix; stale/lost → non-live locked; cached coords never set `hasLiveFix` nor pass the capture gate; `applyBestRecentPosition` preserves cached provenance; resume revalidation for denied/unknown/service-off; recovery requires a new live fix; no duplicate subscriptions; idempotent cleanup + harmless post-disposal recovery).
-    - `test/widget/camera_screen_test.dart`: **33/33** (includes the B1 gate group: last-known keeps the shutter locked with `GPS: Last known` + lock banner, live fix unlocks with `GPS Fixed`; GPS state stays truthful across a covered-route round-trip and a stale fix stays locked after reveal).
-    - Full Workspace Suite (`flutter test`): **730/730 tests passed** (713 + 17 B1 tests); `flutter analyze` **0 issues**.
-25. **C1 — Video HUD Identifier Semantics Verification (this session)**:
-    - `test/unit/hud_formatter_test.dart`: **9/9** (includes the new `fromMediaItem` canonical-siteCode test — `SL-001` when provided, neutral `SITE` for missing/blank/`UNASSIGNED`, never the internal `siteId`).
-    - `test/widget/media_detail_screen_test.dart`: **24/24** (video fullscreen HUD renders canonical `siteCode`; internal `siteId` absent; fallback truthful; MP4 bytes/hash unaffected).
-    - Full Workspace Suite (`flutter test`): **737/737 tests passed**; `flutter analyze` **0 issues**.
-26. **Photo/Video Metadata-Card Unification Verification (this session)**:
-    - `test/widget/media_detail_screen_test.dart` group `Canonical Metadata Card Parity (Photo & Video)`: **4/4** — same canonical `StandaloneMetadataWidget` in both fullscreen routes; identical common fields (siteCode, UTC/local, lat/long, altitude+datum, verification, accuracy, satellite count, SHA); truthful `SITE` fallback for both media; runtime card uses persisted capture-time metadata and never rewrites the MP4.
-    - `test/unit/hud_formatter_test.dart` new tests: **3/3** — `fromMediaItem` canonical siteCode/never-siteId; accuracy + satellite telemetry carried from the persisted `MediaItem`; `fromSnapshot`/`fromLive` leave the telemetry tail unset (burned/live cards unchanged).
-    - The removed Detail `EVIDENCE MINIMAP & METADATA` section remains absent (`media_detail_screen_test.dart` negative assertion), and `review_tag_screen_test.dart` still asserts no `EvidenceMetadataHudCard` on the Review body.
-    - Full Workspace Suite (`flutter test`): **737/737 tests passed**; `flutter analyze` **0 issues**.
-27. **Save-Path Performance Audit (this session, read-only)**:
-    - Verdict: **DO NOT OPTIMIZE NOW**. No hashing, image codec, HUD render, or file writes occur on the Save click; image/CPU work is already off the UI isolate (`Isolate.run`) and Drift runs in a background isolate; atomic write→verify→commit ordering is preserved. The dominant Save cost is the legitimate await of the already-backgrounded `processingFuture`. No code was changed; no low-risk localized optimization exists.
+Independent, read-only Jev evaluation of R22 against current HEAD.
 
----
+- **Overall decision**: PASS. Jev confidence: 0.33 (distributions: PASS 0.55, FAIL 0.02, NOT_VERIFIED 0.43).
+- All six R22 requirements are directly supported by implementation evidence in `lib/features/sync/services/cloud_sync_service.dart` (`syncTombstone`) and `lib/features/sync/services/sync_coordinator.dart` (`_processSingleItem`), with focused tests in `test/unit/cloud_sync_service_test.dart` ("B-1 Cloud Tombstone Synchronization Tests").
+- Key evidence: `syncTombstone` checks the creator guard first, then returns early when `item.syncStatus == SyncStatusType.pending` (no cloud read, no cloud write); published/non-pending items continue through the canonical Firestore reconcile path via `_ensureFirestoreDocSynced`; permission-denied `FirebaseException` is rethrown verbatim by `_runMappedSyncOperation`; successful reconciliation calls `markTombstoneReconciled` via `SyncCoordinator`; no Firestore or Storage security rules were changed.
+- **Known residual (not an R22 violation)**: `SyncStatusType.pending` is overloaded — it can mean both "never-attempted" and "Firestore ledger created but first Attempt Storage write failed." The implementation treats all pending tombstones as never-published no-ops. Jev's 0.15 FAIL probability on the overall and 0.15 NOT_VERIFIED probability on R22.2 reflect this latent lifecycle ambiguity, not a direct violation of the six R22 requirements.
 
-## 5. Physical Device Verification Suite (Hardware: Motorola edge 50 fusion)
+### 11.2 M1 — GPS & Capture Readiness (post-remediation audit)
 
-- **Device Serial**: `ZA222NBPPV` (Motorola edge 50 fusion / Android 16 / API 36)
-- **Deployed Testing Build**: Debug APK (`build/app/outputs/flutter-apk/app-debug.apk`)
-- **Package Status**: Installed (`com.sitelens.app` via `adb install -r`)
-- **Release Cleanup**: Prior `releasearm64.apk` (`com.sitelens.app`) cleanly uninstalled via `adb uninstall com.sitelens.app`.
-- **Verification Rule**: Physical-device verification only. No source changes, no rebuilds, no reverts.
+Read-only audit of the GPS/capture readiness remediation (Waves B + B1/D-SPAT). Overall: PASS.
 
-### Comprehensive 10-Point Verification Matrix
+- **R1**: `hasLiveFix` is the sole capture-readiness authority — `hasValidFix && !isLastKnownSeed` (`gps_hardware_state.dart:61`; `camera_screen.dart:1095–1097`).
+- **R2/R06**: cached/last-known GPS is a display-only seed; `hasLiveFix` is false and the shutter stays locked (`gps_hardware_controller.dart:158–169`, `233–242`; `gps_hardware_state.dart:29–35, 61`).
+- **R6**: cached GPS never enters live-position selection — `getBestRecentPosition` filters `entry.isLive == true` and purges non-live entries on first live emission (`gps_hardware_controller.dart:242, 312–329`).
+- **R3**: countdown re-gates on `hasLiveFix` every tick and aborts on GPS loss; capture reads the current GPS authority, not a press-time snapshot (`camera_screen.dart:718–740`, `805–828`).
+- **R7**: video T₀ GPS snapshot is frozen at `startVideoRecording` and used at stop; stop-time GPS cannot usurp T₀ (`camera_hardware_controller.dart:448`; `camera_screen.dart:488–511`).
+- **R8/R09/R10**: recording locks, audio disclosure, and unknown-telemetry semantics are enforced.
+- **D1–D4**: RESOLVED (purge on first live emission; per-tick/countdown gate; T₀ video authority; shutter refusal on invalid GPS).
+- **D6**: NO drift — PRD.md §615–616 and architecture.md §361–370, §393 match implementation.
+- **D5**: PARTIALLY VERIFIED — production shutter paths are correct, but there is no automated test for GPS loss during an active countdown (coverage gap, not a behavior defect; see Known Issues entry below).
 
-| # | Verification Test | Result | Physical Evidence & Details |
-| :-: | :--- | :---: | :--- |
-| **1** | **Satellite → capture → Evidence = Satellite** | **PASS** | Captured Item 10 at `02:15:08 local`. Photo Evidence Detail renders genuine high-res Google Satellite tiles, radar cone, orange pin, and Google logo in burned card. `SHA256: da52b9584d...` |
-| **2** | **Roadmap → capture → Evidence = Roadmap** | **PASS** | Switched layer to `Default (Vector)`. Captured Item 11 at `02:22:17 local`. Evidence renders Google vector Roadmap tiles (street network, roads, pin, logo). `SHA256: 775a92ea...` |
-| **3** | **Roadmap → Satellite → capture → Evidence = Satellite** | **PASS** | Switched from Roadmap to Satellite. Captured Item 12 at `02:24:40 local`. Evidence renders Satellite imagery with zero residual roadmap pixels. `SHA256: 51aa7227...` |
-| **4** | **Satellite → Roadmap → Satellite → capture → Evidence = Satellite** | **PASS** | Cycled Satellite → Roadmap → Satellite. Captured Item 13 at `02:26:35 local`. Evidence renders Satellite imagery with complete layer fidelity. `SHA256: 232fdc03...` |
-| **5** | **Three rapid Satellite captures → all Satellite** | **PASS** | 3 consecutive rapid captures in Satellite mode: Item 14 (`02:28:39`), Item 15 (`02:34:14`), Item 16 (`02:34:37`). Inspected each in Gallery Detail: all 3 render 100% genuine Satellite tiles. |
-| **6** | **Three rapid Roadmap captures → all Roadmap** | **PASS** | Switched to Roadmap. 3 consecutive rapid captures: Item 17 (`02:43:52`), Item 18 (`02:44:24`), Item 19 (`02:49:13`). Inspected each in Gallery Detail: all 3 render 100% vector Roadmap tiles. |
-| **7** | **Rapid Satellite/Roadmap alternation → evidence matches live layer** | **PASS** | Evaluated across 19 total items and 6 layer switches/burst captures. Zero stale-layer tiles, cross-contamination, or poisoned fallback buffers observed. |
-| **8** | **Photo Evidence Detail matches burned JPEG** | **PASS** | Verified across Satellite (Items 10, 16) and Roadmap (Items 11, 17, 19). Photo Evidence Detail renders the exact canonical burned JPEG with embedded HUD card and SHA-256 hash. |
-| **9** | **Immersive Viewer matches burned JPEG** | **PASS** | Verified on Satellite Item 10 and Item 16 via `Fullscreen Zoom`. Immersive Evidence Viewer displays the exact canonical burned JPEG with embedded HUD without secondary re-rendering. |
-| **10** | **ALT displays corrected MSL value & remains consistent** | **PASS** | Across all items (10–19), altitude uniformly displays true MSL elevation (`+23.2m` to `+24.9m`) and live camera (`+13.8m`) instead of negative WGS84 ellipsoidal value (-42m bias eliminated). |
+#### M1 Findings
 
-### Release-Build Finding (Android 16) & Pending Re-Verification (A1 / A2 / B1 / C1 / Metadata Card)
+- **F7 (defensive-hardening gap, not a current Rule 5 defect)** — Severity LOW.
+  - `_showInterruptedRecordingRecovery` selects `recordingGps = (recordingGpsState != null && recordingGpsState.hasValidFix) ? recordingGpsState! : gpsHardware` and passes it to `EvidenceMetadataSnapshot.capture` without an explicit `!isLastKnownSeed` guard (`camera_screen.dart:189–195`).
+  - Safety is invariant-dependent: the only `startVideoRecording` call site passes `gpsHardware` only when `isCapturePermitted` (i.e. `hasLiveFix`) is true (`camera_screen.dart:638–640`), and `pauseCamera` preserves `recordingGpsState` while recovery is pending (`camera_hardware_controller.dart:518`).
+  - Under the current single call site, `recordingGpsState` is non-null and live during recovery; the theoretical state (`recordingGpsState == null && gpsHardware.isLastKnownSeed`) is not reachable. If a future caller invokes `startVideoRecording` without a live-fix `recordingGpsState`, cached coordinates could reach the sealing factory (which does not itself reject last-known provenance). Defensive recommendation: add an explicit `hasLiveFix`/`!isLastKnownSeed` gate in the recovery path to make safety local rather than call-site-dependent. No fix applied — audit only.
+  - Rule 5 impact: current behavior is truthful; the gap is latent and invariant-dependent.
+  - Regression status: not a regression.
+- **F5 (test coverage gap)** — Severity LOW.
+  - Requirement R5 is satisfied by implementation (per-tick gate + final capture gate), but no automated test exercises GPS loss during an active countdown.
+  - Rule 5 impact: missing regression coverage; does not imply incorrect behavior.
+  - Regression status: not a regression; pre-existing coverage gap.
 
-- **Build under test**: release APK, `com.sitelens.app` versionName 1.0.0 / versionCode 2001; SHA-256 `265195037f9a7f5ec0af0148440f57fdd2c14ebee2524511a1ad62d7436ffb22`.
-- **Observed**: a ~3 s video was captured successfully and reopened in the evidence viewer with a forensic HUD (identifier before `UTC:`, then UTC/local time, LAT/LON, altitude, `STATUS: VERIFIED`, accuracy, satellite count); entering FULLSCREEN VIDEO EVIDENCE crashed the app; after the restart/recovery the camera screen showed `GPS: Denied`, `ACC: ACQUIRING`, and a locked shutter ("GPS required for evidence"). Causal assumption "GPS Denied caused the video crash" is **not** established.
-- **Remediation delivered (automated-verified only)**: A1 (single video player owner shared by inline + fullscreen), A2 (CameraX released while `CameraScreen` is covered and safely reacquired), B1 (truthful GPS states + live-fix capture gate + resumable recovery), C1 (canonical `siteCode` in the video HUD), and the Photo/Video canonical metadata-card unification (one `StandaloneMetadataWidget` runtime card in both fullscreen surfaces).
-- **Re-verification sequence REQUIRED on the rebuilt release APK** (after all remediation modules are complete):
-  1. Capture a ~3 s video; open VIDEO EVIDENCE DETAIL; enter FULLSCREEN VIDEO EVIDENCE; confirm the HUD identifier renders the canonical site code and that UTC/Local/coords/altitude/STATUS/accuracy/SATS equal the capture-time values.
-  1b. Confirm the fullscreen metadata card is visually identical in Photo (IMMERSIVE EVIDENCE VIEWER) and Video (FULLSCREEN VIDEO EVIDENCE) viewing, and that it shows the canonical site code (never the internal site document id).
-  2. Play to completion; exit fullscreen; re-enter and replay ≥3 times; confirm no crash and no duplicate player/decoder/ExoPlayer in logcat.
-  3. Navigate camera → gallery → video detail → fullscreen and back; confirm CameraX is released while covered and reacquires on reveal with no duplicate init and no leaked `CameraController`.
-  4. Background/foreground during playback and while covered; confirm camera and GPS recovery is truthful.
-  5. Confirm GPS states render distinctly — Permission Denied vs Permission Unknown vs Location Services Off — and that a last-known-only state keeps the shutter locked until a live fix is received.
-  6. Relaunch/recover the app and confirm GPS recovery: `Denied` only if genuinely denied; otherwise `Acquiring → Live`.
+#### Physical-device verification still required (M1)
+1. Photo countdown: disable GPS/locate-loss mid-countdown; verify countdown cancels and no evidence is created.
+2. Interrupted video: background with GPS transition to last-known, resume; verify recovery uses the frozen T₀ live GPS, not current cached coordinates.
+3. Resume without a fresh live fix: verify shutter stays locked (no cached-seed unlock).
+4. Permission toggle to Denied during countdown: verify capture aborts.
 
----
+### 11.3 M2 — Camera & Capture Workflow Post-Remediation Verification
 
-## 6. Security Vulnerability Assessment Resolution (from Baseline Commit 6a02f91)
+Independent read-only verification of the M2 post-remediation audit against current HEAD (`f648779` + uncommitted Waves A–F + R22/R23).
 
-All 8 findings from the baseline security audit were formally resolved or verified:
+- **Overall Decision**: **FAIL** (confirmed reachable defects NF-M2-01 and NF-M2-03).
 
-1. **`sendSiteEnquiry` Rate Limiting & DoS Mitigation**: **RESOLVED** (App Check enforced; in-memory sliding window rate limiter at 5 requests / 15 min per IP/UID).
-2. **`qs` Prototype Pollution (CVE-2024-45296 / CVE-2024-52745)**: **RESOLVED** (All Cloud Functions dependencies upgraded; `npm audit` reports 0 vulnerabilities).
-3. **Firestore Security Rules**: **VERIFIED SECURE** (`request.auth.token.email_verified == true` enforced; granular site-membership RBAC; strict schema whitelists and size limits).
-4. **SHA-256 Trust Model**: **DESIGN CHOICE** (Mobile-first forensic integrity sealed at shutter $T_0$; immutable in Firestore ledger).
-5. **`firebase.json.example` Secret Exposure**: **FALSE POSITIVE** (100% mock template values; production config excluded).
-6. **GPS Validation / Geofencing**: **NOT A VULNERABILITY** (No geofence requirement in PRD; coordinate ranges and immutability enforced).
-7. **Email Verification / Token Refresh**: **FALSE POSITIVE** (`request.auth.token.email_verified == true` enforced across all Firestore and Storage rules).
-8. **Rate Limiting / Abuse**: **DESIGN CHOICE** (Public enquiry function is App Check & rate-limited; database write abuse mitigated by verified membership, schema allowlists, and size caps).
+#### Verified Findings
 
----
+1. **NF-M2-01: Site-less / Wrong-Site Interrupted Video Recovery** — Severity HIGH
+   - **Verdict**: **CONFIRMED DEFECT**
+   - **Decisive Evidence**:
+     - `CameraHardwareNotifier.startVideoRecording()` accepts `GpsHardwareState recordingGpsState`, but does not receive or store site identity (`siteId`, `siteCode`, `siteName`) in `CameraHardwareState`.
+     - `CameraScreen._showInterruptedRecordingRecovery()` resolves `activeSite` at recovery time via `ref.read(siteControllerProvider).activeSite`. If no site is active upon recovery, `activeSite` is null, defaulting to `siteId: ''`. If the user switched sites or accounts during interruption/backgrounding, the recording is bound to the wrong site and current authenticated `creatorId`.
+     - In `MediaPersistenceCoordinator.keepForLater()`, site validation is conditionally checked only `if (siteId.isNotEmpty)`. Unlike `persistCapturedEvidence()` and `persistPendingCapture()`, it does not reject or throw on `siteId.isEmpty`, persisting a row with `site_id = ''`.
+     - Reachable defect: media saved with `siteId: ''` is excluded by `activeSiteMediaStreamProvider` (which filters by `siteId`), becoming permanently orphaned and invisible across all site galleries.
 
-## 7. Handover Guidance for Next Session
+2. **NF-M2-02: `switchCamera()` Lacks Controller-Level Recording Guard** — Severity MEDIUM
+   - **Verdict**: **DEFENSIVE HARDENING / PARTIALLY CORRECT**
+   - **Decisive Evidence**:
+     - `CameraHardwareNotifier.switchCamera()` checks `if (_isSwitching || _isPaused) return;`, omitting `state.isRecordingVideo`. In contrast, `setCaptureMode`, `setZoomPreset`, and `setPinchZoom` strictly enforce `if (state.isRecordingVideo) return;`.
+     - However, all existing UI callers (`CameraShutterStation:141` and `CameraScreen._handleFlipCamera:434`) strictly gate camera flipping behind `!isRecordingVideo`.
+     - Unreachable from current UI, but represents an architectural inconsistency against R08 defensive controller-level invariant principles.
 
-1. **Drift Database Schema**: Currently at **Schema Version 8**. Any new columns added to `Media` or other tables must follow the migration pattern in `AppDatabase.onUpgrade`, bump `schemaVersion`, and execute `dart run build_runner build --delete-conflicting-outputs`.
-2. **Evidence Metadata Integrity**: `EvidenceMetadataSnapshot` is the capture-time authority. Do not re-evaluate or invent metadata in UI layers. Historical evidence must never assert stronger certainty than was established at capture. Unavailable values remain unknown — never synthesized (Audit A F-A2 policy).
-3. **EXIF / Derived-Artifact Policy**: derived evidence artifacts (`evid_*`, `thumb_*`) carry no camera EXIF (stripped after orientation bake in `EvidenceProcessingService`); the immutable original retains capture-time EXIF. Do not reintroduce EXIF passthrough in the encoding path.
-4. **Tombstone Lifecycle (Audit B-1 / C-2)**: locally deleted evidence rows are retained as hidden tombstones and reconciled via `CloudSyncService.syncTombstone` through the standard sync cycle (`getTombstoneSyncCandidates` discovery; count edge-trigger). Never physically delete a `media` row on user deletion, never write artifact-sync status for tombstone rows, and never create cloud records for never-published items. Storage artifacts remain write-once and untouched by propagation.
-5. **Video Handoff Invariant (Audit C-1)**: a normal successful video stop clears `_inFlightVideoFile` at handoff completion; only a genuine recording interruption (pause during recording) may raise the interrupted-recording recovery.
-6. **Firebase Rules/Emulator JS Suites**: `test/security` suites currently fail 12/19 due to test-harness/emulator environment drift (missing `email_verified` claims in test contexts; `node:test`-authored suite under jest; emulator evaluation drift). Re-baseline the harness before treating these suites as regression gates.
-7. **Knowledge Graph**: `graphify-out/` predates the Audit A–C remediations — run `graphify update .` before using graph-assisted navigation for the modified sync/camera/deletion paths.
-8. **Preserve Clean Working Tree State**: Working tree contains verified changes for all audited modules. Do not commit or discard changes without user direction.
-9. **Do NOT rebuild or deploy**: APK compilation, Gradle builds, and Firebase deployments are frozen until user explicitly authorizes a new release milestone.
-10. **Video Player Ownership Invariant (A1)**: exactly ONE `EvidenceVideoPlayback` owns the player for a given evidence video. The inline detail surface and the fullscreen viewer must render the same instance; never construct a second `VideoPlayerController`/ExoPlayer for the same video, and never dispose a borrowed controller from a view widget (`LocalVideoPlayerWidget` is a stateless borrower).
-11. **CameraX Route Lifecycle (A2)**: `appRouteObserver` (`RouteObserver<PageRoute<dynamic>>`) must remain registered via `navigatorObservers` on the root `MaterialApp`. `CameraScreen` releases CameraX in `didPushNext` and reacquires in `didPopNext`; do not add a second coverage mechanism, and never reactivate the camera while a page route covers the screen (the app-lifecycle resume path honours the same guard).
-12. **GPS State Semantics (B1)**: Permission Unknown (`LocationPermission.unableToDetermine`) is NOT Denied, and Location-Services-Off is NOT Denied. Capture readiness is live-fix provenance — `hasLiveFix` (`hasValidFix && !isLastKnownSeed`) — never `hasValidFix` alone; a cached/last-known seed must never unlock evidence capture. Any resume path must revalidate permission **and** service state before acquiring, and a stale/lost live fix must transition to a locked non-live state until a new live fix arrives.
-13. **Physical Re-Verification Outstanding**: A1/A2/B1/C1 and the Photo/Video metadata-card unification are automated-verified only. The Android 16 physical sequence in §5 (fullscreen video enter/play/replay/exit; CameraX release/resume across video + evidence routes; GPS Denied vs Unknown vs Service-Off; last-known-only shutter lock; Photo AND Video fullscreen metadata-card visual parity with canonical siteCode) must be executed on the rebuilt release APK after all remediation modules are complete.
-14. **Video HUD Identifier Invariant (C1)**: the fullscreen video HUD renders the canonical persisted `SiteModel.siteCode` (uppercased), never the internal Firestore-style `siteId`; missing / blank / `UNASSIGNED` codes fall back to the neutral `SITE`. Keep `HudFormatter.resolveSiteIdentifier` as the single implementation — do not reintroduce `MediaItem.siteId` as a user-facing identifier.
-15. **Canonical Metadata Card Invariant (Photo/Video Unification)**: Photo and Video fullscreen/immersive viewing MUST use the same runtime metadata card — `StandaloneMetadataWidget` driven by `HudData` via `HudFormatter.fromMediaItem`. Do not reintroduce a photo- or video-specific metadata card or the removed bespoke video strip, and do not mount the card in the Photo Detail / Review & Tag body. The burned Photo JPEG HUD (`WatermarkDrawer` / `EvidenceProcessingService`) and the removed `EVIDENCE MINIMAP & METADATA` Detail section must remain untouched.
-16. **Save-Path Performance (Audit — DO NOT OPTIMIZE)**: the Photo Capture → Review & Tag → Save path is already lean (no hashing, image codec, HUD render, or file writes on Save; CPU work off-isolate; atomic write→verify→commit ordering preserved). Do not defer the DB commit, move persistence to a background worker, or alter ordering for perceived Save latency.
-17. **Reference Documents**:
-    - [`docs/handover/SESSION_HANDOVER.md`](file:///home/moloy/workspace/products/SiteLens/docs/handover/SESSION_HANDOVER.md): Authoritative session handover state.
-    - [`docs/handover/PRD.md`](file:///home/moloy/workspace/products/SiteLens/docs/handover/PRD.md) / [`docs/handover/architecture.md`](file:///home/moloy/workspace/products/SiteLens/docs/handover/architecture.md): Synchronized to the verified v8 implementation semantics (this session).
-    - [`docs/ALL_TESTS.md`](file:///home/moloy/workspace/products/SiteLens/docs/ALL_TESTS.md): Authoritative test inventory tracking test coverage.
-    - [`strix-sitelens-instructions.md`](file:///home/moloy/workspace/products/SiteLens/strix-sitelens-instructions.md): Authoritative repository guidelines and security instructions.
+3. **NF-M2-03: Android Back Can Dismiss Interrupted-Recording Recovery** — Severity MEDIUM
+   - **Verdict**: **CONFIRMED DEFECT**
+   - **Decisive Evidence**:
+     - `CameraScreen._showInterruptedRecordingRecovery()` displays the recovery `AlertDialog` via `showDialog` with `barrierDismissible: false`, but **omits `PopScope`**.
+     - On Android devices, system back navigation (hardware back button or predictive back gesture) dismisses the dialog route, returning `null`.
+     - Prior to showing the dialog, lines 207–213 have already written the permanent file `media/orig_${snapshot.mediaId}.mp4` to disk and deleted the temporary camera file via `storageService.deleteTempCameraFile()`.
+     - Dismissal prevents execution of both `_keepInterruptedRecording` and `_discardInterruptedRecording`.
+     - Subsequent recovery retries fail with `FileSystemException` (temp file gone), clearing `_inFlightVideoFile` and leaving `orig_${snapshot.mediaId}.mp4` orphaned on disk without a database row, violating R14 atomic lifecycle mandates.
 
----
+4. **NF-M2-04: `isCameraFunctional` Semantic Inconsistency / Optical Simulation Dead Code** — Severity LOW
+   - **Verdict**: **SEMANTIC INCONSISTENCY / DEAD CODE ONLY (Harmless Residual)**
+   - **Decisive Evidence**:
+     - `CameraScreen:1094` defines `isCameraFunctional = cameraHardware.isReady || cameraHardware.isUnavailable;`, causing `isCapturePermitted` to be mathematically true when GPS has a live fix even if the camera is unavailable.
+     - However, `CameraShutterStation:35` independently locks the shutter button (`cameraStatus == CameraStatus.unavailable`), and `_handleShutterPressed:654` rejects capture with a `'Camera unavailable'` SnackBar.
+     - Residual simulation code in `camera_screen.dart:983–995` displays an `'Optical Simulation Capture'` SnackBar, but returns immediately without writing evidence, mutating state, or navigating to review. No false evidence or Rule 5 violation occurs.
 
-## 8. Key Files & Reference Paths
+#### Confirmation of Historical M2 Resolutions
+- **D1 (Cached GPS)**: **CONFIRMED RESOLVED**. `hasLiveFix` strictly enforced; non-live buffer entries purged; live-fix re-gated on countdown tick; video T₀ GPS snapshot governs.
+- **D3 (Video Persistence Atomicity)**: **CONFIRMED RESOLVED**. Database transaction failures trigger disk cleanup. The gap where app kill occurs on `ReviewTagScreen` is an uncommitted draft lifecycle boundary, not a database corruption.
+- **D6 (Audio Fallback Disclosure)**: **CONFIRMED RESOLVED**. Preset `enableAudio` status captured and frozen at T₀ as `recordingHasAudioTrack`, persisted in Drift v10 `has_audio_track` (nullable with no default), and disclosed in `MediaDetailScreen` (`CAPTURED`, `MUTED`, or `—`).
+- **D7 (Unavailable Camera)**: **CONFIRMED PARTIALLY RESOLVED**. Shutter and handler block capture, but semantic definition and dead simulation code remain as harmless technical debt.
 
+#### Minimum Remediation Set (Required for M2 PASS)
+1. **NF-M2-01**:
+   - Capture and store `siteId`, `siteCode`, and `siteName` in `CameraHardwareState` at $T_0$ (`startVideoRecording`).
+   - In `MediaPersistenceCoordinator.keepForLater()`, enforce `if (siteId.isEmpty) throw SiteAssociationException(...)`.
+   - In `CameraScreen._showInterruptedRecordingRecovery()`, restore original $T_0$ site and creator identity rather than querying live controllers.
+2. **NF-M2-03**:
+   - Wrap recovery `AlertDialog` in `PopScope(canPop: false)` or handle `null` route pop by invoking `_discardInterruptedRecording()`.
+3. **NF-M2-02 (Defensive)**:
+   - Add `if (state.isRecordingVideo) return;` to `CameraHardwareNotifier.switchCamera()`.
+
+#### Physical-Device Verification Required (M2)
+1. **Hardware Video Interruption**: Background app or simulate incoming phone call during active video recording; verify CameraX flushes MP4 and recovery prompts with authentic $T_0$ site metadata.
+2. **Microphone Permission Denial**: Deny audio permission at Android OS level; record video; verify `MediaDetailScreen` displays `MUTED` and database persists `has_audio_track = 0`.
+3. **GNSS Shielding Mid-Countdown**: Initiate capture with 5s countdown under live fix, shield device; verify countdown cancels before shutter fires.
+
+### 11.4 Local Jev Integration Verification
+
+- Verified operational on local environment via `~/.local/bin/typesafe-jev`.
+- Model: `jev-1.13.0` (evaluated test state "Antigravity is testing its local Jev integration" with question `working` of type `noul`, returning probability `0.92`).
+- Accessible for zero-cost semantic verification, structured extraction, and policy adherence audits.
+
+### Reference Links
 * **Public GitHub Repo**: [https://github.com/moloygoswami/SiteLens](https://github.com/moloygoswami/SiteLens)
 * **Authoritative Strix Instructions**: [`strix-sitelens-instructions.md`](file:///home/moloy/workspace/products/SiteLens/strix-sitelens-instructions.md)
 * **Local Database Definition**: [`lib/data/local/database/app_database.dart`](file:///home/moloy/workspace/products/SiteLens/lib/data/local/database/app_database.dart)
 * **Media Repository**: [`lib/data/repositories/media_repository.dart`](file:///home/moloy/workspace/products/SiteLens/lib/data/repositories/media_repository.dart)
+* **Site Repository**: [`lib/data/repositories/site_repository.dart`](file:///home/moloy/workspace/products/SiteLens/lib/data/repositories/site_repository.dart)
 * **Evidence Metadata Snapshot**: [`lib/features/camera/models/evidence_metadata_snapshot.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/camera/models/evidence_metadata_snapshot.dart)
 * **Media Persistence Coordinator**: [`lib/features/camera/services/media_persistence_coordinator.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/camera/services/media_persistence_coordinator.dart)
 * **GPS Utilities**: [`lib/core/utils/gps_utils.dart`](file:///home/moloy/workspace/products/SiteLens/lib/core/utils/gps_utils.dart)
 * **HUD Formatter**: [`lib/features/camera/hud/hud_formatter.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/camera/hud/hud_formatter.dart)
 * **Canonical Metadata Card (Photo/Video unification)**: [`lib/shared/widgets/evidence_metadata_hud_card.dart`](file:///home/moloy/workspace/products/SiteLens/lib/shared/widgets/evidence_metadata_hud_card.dart)
 * **Canonical HUD Data Contract (accuracy/satellite telemetry)**: [`lib/features/camera/hud/hud_data.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/camera/hud/hud_data.dart)
-* **Camera Screen**: [`lib/features/camera/camera_screen.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/camera/camera_screen.dart)
-* **Media Detail Screen**: [`lib/features/gallery/media_detail_screen.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/gallery/media_detail_screen.dart)
+* **Camera Screen (capture orchestration, countdown guard, video T₀ handoff)**: [`lib/features/camera/camera_screen.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/camera/camera_screen.dart)
+* **Camera Hardware Controller (R07 T₀ snapshot, R08 recording lock, R09 audio)**: [`lib/features/camera/controllers/camera_hardware_controller.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/camera/controllers/camera_hardware_controller.dart)
+* **Camera Hardware State (R09 `isAudioEnabled`/`recordingHasAudioTrack`)**: [`lib/features/camera/models/camera_hardware_state.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/camera/models/camera_hardware_state.dart)
+* **Camera Viewfinder (R08 locked controls/gestures)**: [`lib/features/camera/widgets/camera_viewfinder.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/camera/widgets/camera_viewfinder.dart)
+* **Media Detail Screen (R09 AUDIO / R10 HEADING disclosure)**: [`lib/features/gallery/media_detail_screen.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/gallery/media_detail_screen.dart)
 * **Evidence Video Playback Owner (A1 — sole player ownership)**: [`lib/features/gallery/controllers/evidence_video_playback.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/gallery/controllers/evidence_video_playback.dart)
 * **Local Video Player Widget (A1 — stateless borrower)**: [`lib/features/gallery/widgets/local_video_player_widget.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/gallery/widgets/local_video_player_widget.dart)
 * **App Router & Route Observer (A2)**: [`lib/app/router.dart`](file:///home/moloy/workspace/products/SiteLens/lib/app/router.dart)
-* **GPS Hardware Controller (B1 — permission/service revalidation on resume)**: [`lib/features/camera/controllers/gps_hardware_controller.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/camera/controllers/gps_hardware_controller.dart)
+* **GPS Hardware Controller (B1/R06 — provenance buffer, live-fix selection authority)**: [`lib/features/camera/controllers/gps_hardware_controller.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/camera/controllers/gps_hardware_controller.dart)
+* **Cloud Sync Service (R05/R09/R10 payload + immutability checks)**: [`lib/features/sync/services/cloud_sync_service.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/sync/services/cloud_sync_service.dart)
+* **Firestore Security Rules (creator-owned model, R09/R10 field allowlist)**: [`firestore.rules`](file:///home/moloy/workspace/products/SiteLens/firestore.rules)
+* **Wave A isolation regression suite**: [`test/unit/wave_a_isolation_regression_test.dart`](file:///home/moloy/workspace/products/SiteLens/test/unit/wave_a_isolation_regression_test.dart)
+* **Wave B telemetry persistence suite**: [`test/unit/wave_b_telemetry_persistence_test.dart`](file:///home/workspace/products/SiteLens/test/unit/wave_b_telemetry_persistence_test.dart)
+* **Nearby Search Controller (R19 spatial-uncertainty candidate evaluation)**: [`lib/features/nearby/controllers/nearby_search_controller.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/nearby/controllers/nearby_search_controller.dart)
+* **Smart-Link Engine + Media Repository (R17 temporal gate, R18 live distance)**: [`lib/data/repositories/media_repository.dart`](file:///home/moloy/workspace/products/SiteLens/lib/data/repositories/media_repository.dart)
+* **GPS Utilities — distance + GNSS uncertainty formatting (R19)**: [`lib/core/utils/gps_utils.dart`](file:///home/moloy/workspace/products/SiteLens/lib/core/utils/gps_utils.dart)
+* **Evidence Export Service (R21 creator/exporter attribution)**: [`lib/features/gallery/services/evidence_export_service.dart`](file:///home/moloy/workspace/products/SiteLens/lib/features/gallery/services/evidence_export_service.dart)
+* **R21 export-attribution regression suite**: [`test/unit/r21_export_attribution_test.dart`](file:///home/moloy/workspace/products/SiteLens/test/unit/r21_export_attribution_test.dart)
 * **Complete Test Inventory**: [`docs/ALL_TESTS.md`](file:///home/moloy/workspace/products/SiteLens/docs/ALL_TESTS.md)

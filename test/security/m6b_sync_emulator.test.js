@@ -56,51 +56,26 @@ describe('SiteLens Milestone M6-B Firebase Emulator Synchronization E2E Suite', 
         id: 'site-alpha',
         name: 'Metro Line Sector 4',
         site_code: 'SEC-04',
-        creator_id: 'admin-user',
+        creator_id: 'engineer-bob',
         created_at: new Date(),
-      });
-
-      // 2. Add active admin
-      await db.doc('sites/site-alpha/members/admin-user').set({
-        user_id: 'admin-user',
-        role: 'admin',
-        status: 'active',
-        joined_at: new Date(),
-      });
-
-      // 3. Add active member
-      await db.doc('sites/site-alpha/members/engineer-bob').set({
-        user_id: 'engineer-bob',
-        role: 'member',
-        status: 'active',
-        joined_at: new Date(),
-      });
-
-      // 4. Add inactive member (revoked/suspended)
-      await db.doc('sites/site-alpha/members/revoked-alice').set({
-        user_id: 'revoked-alice',
-        role: 'member',
-        status: 'inactive',
-        joined_at: new Date(),
       });
     });
   }
 
   // ---------------------------------------------------------------------------
-  // 1. Active Site Membership Authorization
+  // 1. Creator Site Authorization
   // ---------------------------------------------------------------------------
-  test('1. Active membership authorization: Active member can sync, inactive or non-member is blocked', async () => {
+  test('1. Creator authorization: Creator can sync, non-creator is blocked', async () => {
     await seedSiteAndMembers();
 
     const bobDb = testEnv.authenticatedContext('engineer-bob', { email_verified: true }).firestore();
-    const bobStorage = testEnv.authenticatedContext('engineer-bob', { email_verified: true }).storage();
     const revokedDb = testEnv.authenticatedContext('revoked-alice', { email_verified: true }).firestore();
     const outsiderDb = testEnv.authenticatedContext('outsider-charlie', { email_verified: true }).firestore();
 
-    // Active member can read site
+    // Creator can read site
     await assertSucceeds(bobDb.doc('sites/site-alpha').get());
 
-    // Inactive member blocked
+    // Non-creator blocked
     await assertFails(revokedDb.doc('sites/site-alpha').get());
     await assertFails(
       revokedDb.doc('sites/site-alpha/media/m-revoked').set({

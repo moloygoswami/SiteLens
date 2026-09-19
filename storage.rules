@@ -7,50 +7,44 @@ service firebase.storage {
       return request.auth != null && request.auth.token.email_verified == true;
     }
 
-    function isSiteMember(siteId) {
-      return isAuthenticated() &&
-        firestore.exists(/databases/(default)/documents/sites/$(siteId)/members/$(request.auth.uid)) &&
-        firestore.get(/databases/(default)/documents/sites/$(siteId)/members/$(request.auth.uid)).data.status == 'active';
-    }
-
-    function isSiteAdmin(siteId) {
-      return isSiteMember(siteId) &&
-        firestore.get(/databases/(default)/documents/sites/$(siteId)/members/$(request.auth.uid)).data.role == 'admin';
+    function getSiteDoc(siteId) {
+      return firestore.get(/databases/(default)/documents/sites/$(siteId));
     }
 
     function getMediaDoc(siteId, mediaId) {
       return firestore.get(/databases/(default)/documents/sites/$(siteId)/media/$(mediaId));
     }
 
-    function isMediaCreatorOrAdmin(siteId, mediaId) {
-      return isSiteMember(siteId) &&
+    function isMediaCreator(siteId, mediaId) {
+      return isAuthenticated() &&
+        firestore.exists(/databases/(default)/documents/sites/$(siteId)) &&
+        getSiteDoc(siteId).data.creator_id == request.auth.uid &&
         firestore.exists(/databases/(default)/documents/sites/$(siteId)/media/$(mediaId)) &&
-        (
-          getMediaDoc(siteId, mediaId).data.creator_id == request.auth.uid ||
-          isSiteAdmin(siteId)
-        );
+        getMediaDoc(siteId, mediaId).data.creator_id == request.auth.uid;
     }
 
     // SiteLens Evidence Media Storage
     // Structure: sites/{siteId}/media/{mediaId}/{imageType}
     match /sites/{siteId}/media/{mediaId}/{imageType} {
-      // Read Evidence: Scoped strictly to site admin OR original document creator (vuln-0004)
-      allow read: if isMediaCreatorOrAdmin(siteId, mediaId);
+      // Read Evidence: Scoped strictly to original document creator & site owner
+      allow read: if isMediaCreator(siteId, mediaId);
 
       // Dedicated validation for Original vs Thumbnail with strict MIME & size boundaries,
-      // bound strictly to the creator_id of the matching Firestore media metadata document (vuln-0001)
-      allow create: if isSiteMember(siteId) &&
+      // bound strictly to the creator_id of the matching Firestore media metadata document
+      allow create: if isMediaCreator(siteId, mediaId) &&
         (
           (imageType == 'original' &&
            request.resource.contentType in ['image/jpeg', 'video/mp4'] &&
            request.resource.size <= 50 * 1024 * 1024)
           ||
+          (imageType == 'evidence' &&
+           request.resource.contentType == 'image/jpeg' &&
+           request.resource.size <= 25 * 1024 * 1024)
+          ||
           (imageType == 'thumbnail' &&
            request.resource.contentType in ['image/jpeg', 'image/png'] &&
            request.resource.size <= 1 * 1024 * 1024)
-        ) &&
-        firestore.exists(/databases/(default)/documents/sites/$(siteId)/media/$(mediaId)) &&
-        getMediaDoc(siteId, mediaId).data.creator_id == request.auth.uid;
+        );
 
       // Write-once immutability: Files cannot be overwritten or physically deleted
       allow update: if false;

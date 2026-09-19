@@ -12,6 +12,7 @@ import 'package:share_plus/share_plus.dart';
 import '../../../core/utils/gps_utils.dart';
 import '../../../domain/models/enums.dart';
 import '../../../domain/models/media_item.dart';
+import '../../camera/hud/hud_formatter.dart';
 import '../../camera/services/evidence_storage_service.dart';
 
 /// Report presentation mode for PDF generation.
@@ -21,6 +22,48 @@ enum EvidenceReportMode {
 
   /// Dedicated forensic & legal audit report exposing cryptographic hashes, chain-of-custody, and file URIs.
   forensicAudit,
+}
+
+bool _present(String? value) => value != null && value.trim().isNotEmpty;
+
+/// R21 — immutable, truthful export attribution.
+///
+/// Evidence creator attribution is bound to the persisted `media.creator_id` of
+/// the exported record. The exporter (the authenticated user triggering the
+/// export) is tracked separately and can never overwrite the creator. A
+/// human-readable identity is surfaced ONLY when it actually exists; otherwise
+/// it stays explicitly unknown — no inspector/engineer name is ever fabricated.
+class ExportAttribution {
+  /// Persisted `creator_id` of the evidence being exported (authoritative).
+  final String? evidenceCreatorId;
+
+  /// Identity of the authenticated user performing the export.
+  final String? exporterUid;
+  final String? exporterEmail;
+
+  const ExportAttribution({
+    required this.evidenceCreatorId,
+    this.exporterUid,
+    this.exporterEmail,
+  });
+
+  /// Evidence creator attribution for display. Never substitutes the exporter.
+  String get creatorLabel =>
+      _present(evidenceCreatorId) ? evidenceCreatorId!.trim() : 'Unknown';
+
+  /// Exporter attribution for display; unknown stays explicitly unknown.
+  String get exporterLabel =>
+      _present(exporterEmail) ? exporterEmail!.trim() : 'Unknown';
+
+  /// Authoritative exporter UID for display; unknown stays explicitly unknown.
+  String get exporterUidLabel =>
+      _present(exporterUid) ? exporterUid!.trim() : 'Unknown';
+
+  /// Optional authoritative human identity of the exporter, or null when the
+  /// trusted session did not establish one. Never fabricated.
+  String? get exporterHumanIdentity => _present(exporterEmail)
+      ? exporterEmail!.trim()
+      : null;
 }
 
 final evidenceExportServiceProvider = Provider<EvidenceExportService>((ref) {
@@ -54,7 +97,8 @@ class EvidenceExportService {
     required MediaItem item,
     String? siteCode,
     String? siteName,
-    String? inspectorEmail,
+    String? exporterEmail,
+    String? exporterUid,
     Uint8List? imageBytes,
     EvidenceReportMode mode = EvidenceReportMode.standardInspectionNote,
   }) async {
@@ -77,7 +121,8 @@ class EvidenceExportService {
         item: item,
         siteCode: siteCode,
         siteName: siteName,
-        inspectorEmail: inspectorEmail,
+        exporterEmail: exporterEmail,
+        exporterUid: exporterUid,
         imageBytes: resolvedImageBytes,
         pageIndex: 1,
         totalPages: 1,
@@ -93,7 +138,8 @@ class EvidenceExportService {
     required MediaItem item,
     String? siteCode,
     String? siteName,
-    String? inspectorEmail,
+    String? exporterEmail,
+    String? exporterUid,
     Uint8List? imageBytes,
     EvidenceReportMode mode = EvidenceReportMode.standardInspectionNote,
   }) =>
@@ -101,7 +147,8 @@ class EvidenceExportService {
         item: item,
         siteCode: siteCode,
         siteName: siteName,
-        inspectorEmail: inspectorEmail,
+        exporterEmail: exporterEmail,
+        exporterUid: exporterUid,
         imageBytes: imageBytes,
         mode: mode,
       );
@@ -111,7 +158,8 @@ class EvidenceExportService {
     required MediaItem item,
     String? siteCode,
     String? siteName,
-    String? inspectorEmail,
+    String? exporterEmail,
+    String? exporterUid,
     Uint8List? imageBytes,
     EvidenceReportMode mode = EvidenceReportMode.standardInspectionNote,
   }) async {
@@ -119,7 +167,8 @@ class EvidenceExportService {
       item: item,
       siteCode: siteCode,
       siteName: siteName,
-      inspectorEmail: inspectorEmail,
+      exporterEmail: exporterEmail,
+      exporterUid: exporterUid,
       imageBytes: imageBytes,
       mode: mode,
     );
@@ -139,7 +188,8 @@ class EvidenceExportService {
     required MediaItem item,
     String? siteCode,
     String? siteName,
-    String? inspectorEmail,
+    String? exporterEmail,
+    String? exporterUid,
     Uint8List? imageBytes,
     EvidenceReportMode mode = EvidenceReportMode.standardInspectionNote,
   }) =>
@@ -147,7 +197,8 @@ class EvidenceExportService {
         item: item,
         siteCode: siteCode,
         siteName: siteName,
-        inspectorEmail: inspectorEmail,
+        exporterEmail: exporterEmail,
+        exporterUid: exporterUid,
         imageBytes: imageBytes,
         mode: mode,
       );
@@ -187,7 +238,8 @@ class EvidenceExportService {
     List<MediaItem> items, {
     String? siteCode,
     String? siteName,
-    String? inspectorEmail,
+    String? exporterEmail,
+    String? exporterUid,
     EvidenceReportMode mode = EvidenceReportMode.standardInspectionNote,
   }) async {
     final doc = pw.Document();
@@ -210,7 +262,8 @@ class EvidenceExportService {
           item: item,
           siteCode: siteCode,
           siteName: siteName,
-          inspectorEmail: inspectorEmail,
+          exporterEmail: exporterEmail,
+          exporterUid: exporterUid,
           imageBytes: resolvedImageBytes,
           pageIndex: i + 1,
           totalPages: totalPages,
@@ -227,7 +280,8 @@ class EvidenceExportService {
     List<MediaItem> items, {
     String? siteCode,
     String? siteName,
-    String? inspectorEmail,
+    String? exporterEmail,
+    String? exporterUid,
     EvidenceReportMode mode = EvidenceReportMode.standardInspectionNote,
   }) async {
     if (items.isEmpty) return;
@@ -236,7 +290,8 @@ class EvidenceExportService {
       items,
       siteCode: siteCode,
       siteName: siteName,
-      inspectorEmail: inspectorEmail,
+      exporterEmail: exporterEmail,
+      exporterUid: exporterUid,
       mode: mode,
     );
 
@@ -255,7 +310,8 @@ class EvidenceExportService {
     List<MediaItem> items, {
     String? siteCode,
     String? siteName,
-    String? inspectorEmail,
+    String? exporterEmail,
+    String? exporterUid,
     EvidenceReportMode mode = EvidenceReportMode.standardInspectionNote,
   }) async {
     if (items.isEmpty) {
@@ -266,12 +322,25 @@ class EvidenceExportService {
     final nowUtc = DateTime.now().toUtc();
     final nowUtcIso = nowUtc.toIso8601String();
 
-    // 1. Build manifest.json with full cryptographic hashes & provenance
+    // 1. Build manifest.json with full cryptographic hashes & provenance.
+    // R21: each record is attributed to its persisted evidence creator, and the
+    // exporter is recorded separately. The exporting user never substitutes the
+    // creator, and an absent human identity stays null rather than defaulted.
+    final evidenceCreatorIds = items
+        .map((item) => item.creatorId)
+        .where(_present)
+        .cast<String>()
+        .toSet()
+        .toList();
     final manifestMap = {
       'export_generated_at': nowUtcIso,
-      'site_code': siteCode ?? 'SITE',
+      // R20/R21: canonical human-facing site code via the shared resolver.
+      'site_code': HudFormatter.resolveSiteIdentifier(siteCode),
       'site_name': siteName ?? 'Inspection Site',
-      'inspector': inspectorEmail ?? 'Field Inspector',
+      'evidence_creator_ids': evidenceCreatorIds,
+      'exporter_uid': _present(exporterUid) ? exporterUid!.trim() : null,
+      'exporter_email':
+          _present(exporterEmail) ? exporterEmail!.trim() : null,
       'item_count': items.length,
       'items': items.map((item) {
         final origFileName = item.originalUri.split('/').last;
@@ -279,6 +348,7 @@ class EvidenceExportService {
         return {
           'id': item.id,
           'type': item.type.name,
+          'creator_id': _present(item.creatorId) ? item.creatorId!.trim() : null,
           'captured_at': item.capturedAt.toUtc().toIso8601String(),
           'lat': item.lat,
           'lon': item.lon,
@@ -306,7 +376,8 @@ class EvidenceExportService {
       items,
       siteCode: siteCode,
       siteName: siteName,
-      inspectorEmail: inspectorEmail,
+      exporterEmail: exporterEmail,
+      exporterUid: exporterUid,
       mode: mode,
     );
     archive.addFile(
@@ -371,14 +442,16 @@ class EvidenceExportService {
     List<MediaItem> items, {
     String? siteCode,
     String? siteName,
-    String? inspectorEmail,
+    String? exporterEmail,
+    String? exporterUid,
     EvidenceReportMode mode = EvidenceReportMode.standardInspectionNote,
   }) async {
     final zipPath = await buildZipPackage(
       items,
       siteCode: siteCode,
       siteName: siteName,
-      inspectorEmail: inspectorEmail,
+      exporterEmail: exporterEmail,
+      exporterUid: exporterUid,
       mode: mode,
     );
 
@@ -409,7 +482,8 @@ class EvidenceExportService {
     required MediaItem item,
     String? siteCode,
     String? siteName,
-    String? inspectorEmail,
+    String? exporterEmail,
+    String? exporterUid,
     Uint8List? imageBytes,
     required int pageIndex,
     required int totalPages,
@@ -429,9 +503,9 @@ class EvidenceExportService {
 
     final fullOrigSha = item.sha256Hash ?? 'UNKNOWN';
     final fullEvidSha = item.evidenceSha256Hash ?? 'UNKNOWN';
-    final effectiveSiteCode = (siteCode != null && siteCode.isNotEmpty)
-        ? siteCode
-        : (item.siteId.isNotEmpty ? item.siteId : 'SITE');
+    // R20: the canonical human-facing site code is the only identifier emitted;
+    // the internal database site id is never substituted into export metadata.
+    final effectiveSiteCode = HudFormatter.resolveSiteIdentifier(siteCode);
     final effectiveSiteName = (siteName != null && siteName.isNotEmpty)
         ? siteName
         : 'Active Inspection Site';
@@ -439,6 +513,13 @@ class EvidenceExportService {
         (item.capturedAddress != null && item.capturedAddress!.isNotEmpty)
             ? item.capturedAddress!
             : '$effectiveSiteCode VICINITY';
+
+    // R21: creator and exporter are distinct, non-interchangeable attributions.
+    final attribution = ExportAttribution(
+      evidenceCreatorId: item.creatorId,
+      exporterUid: exporterUid,
+      exporterEmail: exporterEmail,
+    );
 
     final isForensic = mode == EvidenceReportMode.forensicAudit;
     final reportTitle =
@@ -543,8 +624,9 @@ class EvidenceExportService {
                           item.observationType.label.toUpperCase()),
                       if (item.linkedMediaId != null)
                         _buildDataRow('Linked BEFORE ID', item.linkedMediaId!),
-                      _buildDataRow('Inspector User',
-                          inspectorEmail ?? 'Field Inspector'),
+                      _buildDataRow(
+                          'Evidence Creator (UID)', attribution.creatorLabel),
+                      _buildDataRow('Exported By', attribution.exporterLabel),
                       pw.SizedBox(height: 10),
                       _buildSectionHeader('CALIBRATED GPS TELEMETRY'),
                       _buildDataRow('Capture Timestamp', capturedUtcFormatted),
@@ -644,6 +726,9 @@ class EvidenceExportService {
                         isHash: true),
                     _buildCryptoRow('Evidence SHA-256', fullEvidSha,
                         isHash: true),
+                    pw.Divider(color: PdfColors.grey300, height: 8),
+                    _buildCryptoRow(
+                        'Exported By (UID)', attribution.exporterUidLabel),
                   ],
                 ),
               ),

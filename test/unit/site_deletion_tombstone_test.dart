@@ -59,7 +59,7 @@ void main() {
         ),
       );
 
-      expect(await siteRepo.hasMediaForSite(testSiteId), isTrue);
+      expect(await siteRepo.hasMediaForSite(testSiteId, creatorId: testUserId), isTrue);
 
       expect(
         () => siteRepo.deleteSite(testSiteId, creatorId: testUserId),
@@ -67,7 +67,7 @@ void main() {
       );
 
       // Verify site was not deleted
-      final site = await siteRepo.getSiteById(testSiteId);
+      final site = await siteRepo.getSiteById(testSiteId, creatorId: testUserId);
       expect(site, isNotNull);
     });
 
@@ -87,14 +87,14 @@ void main() {
         ),
       );
 
-      expect(await siteRepo.hasMediaForSite(testSiteId), isTrue);
+      expect(await siteRepo.hasMediaForSite(testSiteId, creatorId: testUserId), isTrue);
 
       expect(
         () => siteRepo.deleteSite(testSiteId, creatorId: testUserId),
         throwsA(isA<SiteReferencedByMediaException>()),
       );
 
-      final site = await siteRepo.getSiteById(testSiteId);
+      final site = await siteRepo.getSiteById(testSiteId, creatorId: testUserId);
       expect(site, isNotNull);
     });
 
@@ -114,18 +114,18 @@ void main() {
         ),
       );
 
-      expect(await siteRepo.hasMediaForSite(testSiteId), isTrue);
+      expect(await siteRepo.hasMediaForSite(testSiteId, creatorId: testUserId), isTrue);
 
       expect(
         () => siteRepo.deleteSite(testSiteId, creatorId: testUserId),
         throwsA(isA<SiteReferencedByMediaException>()),
       );
 
-      final site = await siteRepo.getSiteById(testSiteId);
+      final site = await siteRepo.getSiteById(testSiteId, creatorId: testUserId);
       expect(site, isNotNull);
     });
 
-    test('Never-published tombstone (synced=0) allows site deletion', () async {
+    test('Unreconciled never-published tombstone (synced=0, tombstoneReconciled=0) is retained and blocks site deletion', () async {
       await db.into(db.media).insert(
         MediaCompanion.insert(
           id: 'media-never-published',
@@ -137,23 +137,22 @@ void main() {
           creatorId: const Value(testUserId),
           isDeleted: const Value(1),
           synced: const Value(0), // never published
-          tombstoneReconciled: const Value(0),
+          tombstoneReconciled: const Value(0), // not yet settled by the no-op
         ),
       );
 
-      // Has media check must be false
-      expect(await siteRepo.hasMediaForSite(testSiteId), isFalse);
+      // R24: an unreconciled tombstone is retained — deletion is blocked.
+      expect(await siteRepo.hasMediaForSite(testSiteId, creatorId: testUserId), isTrue);
 
-      // Delete site succeeds cleanly
-      await siteRepo.deleteSite(testSiteId, creatorId: testUserId);
+      expect(
+        () => siteRepo.deleteSite(testSiteId, creatorId: testUserId),
+        throwsA(isA<SiteReferencedByMediaException>()),
+      );
 
-      // Site is deleted
-      final site = await siteRepo.getSiteById(testSiteId);
-      expect(site, isNull);
-
-      // Tombstone is atomically removed
+      // Both the site and the tombstone are retained.
+      expect(await siteRepo.getSiteById(testSiteId, creatorId: testUserId), isNotNull);
       final media = await (db.select(db.media)..where((tbl) => tbl.siteId.equals(testSiteId))).get();
-      expect(media, isEmpty);
+      expect(media.single.id, equals('media-never-published'));
     });
 
     test('Fully reconciled tombstone (synced=1, tombstoneReconciled=1) allows site deletion', () async {
@@ -172,11 +171,11 @@ void main() {
         ),
       );
 
-      expect(await siteRepo.hasMediaForSite(testSiteId), isFalse);
+      expect(await siteRepo.hasMediaForSite(testSiteId, creatorId: testUserId), isFalse);
 
       await siteRepo.deleteSite(testSiteId, creatorId: testUserId);
 
-      final site = await siteRepo.getSiteById(testSiteId);
+      final site = await siteRepo.getSiteById(testSiteId, creatorId: testUserId);
       expect(site, isNull);
 
       final media = await (db.select(db.media)..where((tbl) => tbl.siteId.equals(testSiteId))).get();
@@ -213,16 +212,16 @@ void main() {
           linkedMediaId: const Value('parent-tombstone'),
           isDeleted: const Value(1),
           synced: const Value(0),
-          tombstoneReconciled: const Value(0),
+          tombstoneReconciled: const Value(1), // reconciled so both rows are purge-eligible
         ),
       );
 
-      expect(await siteRepo.hasMediaForSite(testSiteId), isFalse);
+      expect(await siteRepo.hasMediaForSite(testSiteId, creatorId: testUserId), isFalse);
 
       // Atomically delete site and eligible tombstones under foreign_keys = ON
       await siteRepo.deleteSite(testSiteId, creatorId: testUserId);
 
-      expect(await siteRepo.getSiteById(testSiteId), isNull);
+      expect(await siteRepo.getSiteById(testSiteId, creatorId: testUserId), isNull);
       final remaining = await (db.select(db.media)..where((tbl) => tbl.siteId.equals(testSiteId))).get();
       expect(remaining, isEmpty);
     });
@@ -245,7 +244,7 @@ void main() {
       ));
 
       // Active media blocks site deletion
-      expect(await siteRepo.hasMediaForSite(testSiteId), isTrue);
+      expect(await siteRepo.hasMediaForSite(testSiteId, creatorId: testUserId), isTrue);
       expect(
         () => siteRepo.deleteSite(testSiteId, creatorId: testUserId),
         throwsA(isA<SiteReferencedByMediaException>()),
@@ -255,7 +254,7 @@ void main() {
       await mediaRepo.softDeleteMedia('photo-lifecycle');
 
       // Tombstone is published (synced=1) and not reconciled (tombstoneReconciled=0) -> BLOCKS deletion
-      expect(await siteRepo.hasMediaForSite(testSiteId), isTrue);
+      expect(await siteRepo.hasMediaForSite(testSiteId, creatorId: testUserId), isTrue);
       expect(
         () => siteRepo.deleteSite(testSiteId, creatorId: testUserId),
         throwsA(isA<SiteReferencedByMediaException>()),
@@ -265,14 +264,146 @@ void main() {
       await mediaRepo.markTombstoneReconciled('photo-lifecycle');
 
       // Now reconciled -> ALLOWS deletion
-      expect(await siteRepo.hasMediaForSite(testSiteId), isFalse);
+      expect(await siteRepo.hasMediaForSite(testSiteId, creatorId: testUserId), isFalse);
 
       // 4. Delete site
       await siteRepo.deleteSite(testSiteId, creatorId: testUserId);
 
-      expect(await siteRepo.getSiteById(testSiteId), isNull);
+      expect(await siteRepo.getSiteById(testSiteId, creatorId: testUserId), isNull);
       final remaining = await (db.select(db.media)..where((tbl) => tbl.siteId.equals(testSiteId))).get();
       expect(remaining, isEmpty);
+    });
+  });
+
+  group('R24: Tombstone Retention & Purge Eligibility', () {
+    Future<void> insertTombstone({
+      required String id,
+      required int synced,
+      required int reconciled,
+      String creatorId = testUserId,
+    }) async {
+      await db.into(db.media).insert(
+        MediaCompanion.insert(
+          id: id,
+          uri: 'file:///data/$id.jpg',
+          lat: 22.57,
+          lon: 88.36,
+          capturedAt: DateTime.now().toUtc().toIso8601String(),
+          siteId: const Value(testSiteId),
+          creatorId: Value(creatorId),
+          isDeleted: const Value(1),
+          synced: Value(synced),
+          tombstoneReconciled: Value(reconciled),
+        ),
+      );
+    }
+
+    test('1. reconciled + eligible -> purged with the site', () async {
+      await insertTombstone(id: 'r24-eligible', synced: 1, reconciled: 1);
+
+      expect(await siteRepo.hasMediaForSite(testSiteId, creatorId: testUserId), isFalse);
+
+      await siteRepo.deleteSite(testSiteId, creatorId: testUserId);
+
+      expect(await siteRepo.getSiteById(testSiteId, creatorId: testUserId), isNull);
+      expect(await (db.select(db.media)..where((t) => t.siteId.equals(testSiteId))).get(), isEmpty);
+    });
+
+    test('2. reconciled + not yet eligible (unreconciled sibling) -> retained', () async {
+      await insertTombstone(id: 'r24-reconciled-sibling', synced: 1, reconciled: 1);
+      await insertTombstone(id: 'r24-pending-sibling', synced: 1, reconciled: 0);
+
+      // The site is not purge-eligible while any tombstone is unreconciled.
+      expect(await siteRepo.hasMediaForSite(testSiteId, creatorId: testUserId), isTrue);
+      expect(
+        () => siteRepo.deleteSite(testSiteId, creatorId: testUserId),
+        throwsA(isA<SiteReferencedByMediaException>()),
+      );
+
+      // Nothing is purged — the reconciled tombstone is retained too.
+      final rows = await (db.select(db.media)..where((t) => t.siteId.equals(testSiteId))).get();
+      expect(rows.map((r) => r.id).toSet(), equals({'r24-reconciled-sibling', 'r24-pending-sibling'}));
+    });
+
+    test('3. pending (published, unreconciled) -> retained', () async {
+      await insertTombstone(id: 'r24-pending', synced: 1, reconciled: 0);
+
+      expect(await siteRepo.hasMediaForSite(testSiteId, creatorId: testUserId), isTrue);
+      expect(
+        () => siteRepo.deleteSite(testSiteId, creatorId: testUserId),
+        throwsA(isA<SiteReferencedByMediaException>()),
+      );
+
+      final rows = await (db.select(db.media)..where((t) => t.siteId.equals(testSiteId))).get();
+      expect(rows.single.id, equals('r24-pending'));
+    });
+
+    test('4. failed/unresolved -> retained', () async {
+      await insertTombstone(id: 'r24-failed', synced: 3, reconciled: 0);
+
+      expect(await siteRepo.hasMediaForSite(testSiteId, creatorId: testUserId), isTrue);
+      expect(
+        () => siteRepo.deleteSite(testSiteId, creatorId: testUserId),
+        throwsA(isA<SiteReferencedByMediaException>()),
+      );
+
+      final rows = await (db.select(db.media)..where((t) => t.siteId.equals(testSiteId))).get();
+      expect(rows.single.id, equals('r24-failed'));
+    });
+
+    test('5. wrong creator -> inaccessible and never purged (fail-closed)', () async {
+      await insertTombstone(id: 'r24-foreign', synced: 1, reconciled: 1, creatorId: 'other-user');
+
+      // The site is not purge-eligible while it holds a non-creator-owned row.
+      expect(await siteRepo.hasMediaForSite(testSiteId, creatorId: testUserId), isTrue);
+      expect(
+        () => siteRepo.deleteSite(testSiteId, creatorId: testUserId),
+        throwsA(isA<SiteReferencedByMediaException>()),
+      );
+
+      // The foreign row is retained (never purged by this creator).
+      final rows = await (db.select(db.media)..where((t) => t.siteId.equals(testSiteId))).get();
+      expect(rows.single.id, equals('r24-foreign'));
+
+      // Fail-closed for an unscoped caller.
+      expect(await siteRepo.hasMediaForSite(testSiteId), isTrue);
+
+      // Another creator cannot delete this site at all (creator-scoped).
+      await siteRepo.deleteSite(testSiteId, creatorId: 'other-user');
+      expect(await siteRepo.getSiteById(testSiteId, creatorId: testUserId), isNotNull);
+    });
+
+    test('6. never-published tombstone -> retained until reconciled, purged once reconciled', () async {
+      await insertTombstone(id: 'r24-never-published', synced: 0, reconciled: 0);
+
+      // Unreconciled: retained (not purge-eligible).
+      expect(await siteRepo.hasMediaForSite(testSiteId, creatorId: testUserId), isTrue);
+      expect(
+        () => siteRepo.deleteSite(testSiteId, creatorId: testUserId),
+        throwsA(isA<SiteReferencedByMediaException>()),
+      );
+
+      // The existing never-published verification no-op settles it locally.
+      await mediaRepo.markTombstoneReconciled('r24-never-published');
+
+      expect(await siteRepo.hasMediaForSite(testSiteId, creatorId: testUserId), isFalse);
+      await siteRepo.deleteSite(testSiteId, creatorId: testUserId);
+
+      expect(await siteRepo.getSiteById(testSiteId, creatorId: testUserId), isNull);
+      expect(await (db.select(db.media)..where((t) => t.siteId.equals(testSiteId))).get(), isEmpty);
+    });
+
+    test('7. purge is deterministic and idempotent', () async {
+      await insertTombstone(id: 'r24-p1', synced: 1, reconciled: 1);
+      await insertTombstone(id: 'r24-p2', synced: 0, reconciled: 1);
+
+      await siteRepo.deleteSite(testSiteId, creatorId: testUserId);
+
+      // Re-running the purge after the site is gone is a safe no-op.
+      await siteRepo.deleteSite(testSiteId, creatorId: testUserId);
+
+      expect(await siteRepo.getSiteById(testSiteId, creatorId: testUserId), isNull);
+      expect(await (db.select(db.media)..where((t) => t.siteId.equals(testSiteId))).get(), isEmpty);
     });
   });
 }
