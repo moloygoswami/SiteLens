@@ -78,10 +78,7 @@ app_flutter/
 # -----------------------------------------------------------------------------
 # INTERNAL DOCUMENTATION & DESIGN ASSETS
 # -----------------------------------------------------------------------------
-docs/*
-!docs/handover/
-!docs/ALL_TESTS.md
-design.md
+docs/
 design-reference-*.png
 .stitch/
 
@@ -91,7 +88,6 @@ design-reference-*.png
 # Local IDE, agent & tool configs
 .agents/
 .commandcode/
-.design_review/
 .impeccable/
 .claude/
 CLAUDE.md
@@ -100,8 +96,6 @@ devtools_options.yaml
 graphify-out/
 strix_runs/
 skills-lock.json
-strix-sitelens-instructions.md
-design-plans/
 
 # Root screenshot and scratch images
 /*.png
