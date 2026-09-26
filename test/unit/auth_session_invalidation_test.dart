@@ -66,7 +66,7 @@ class FakeMediaRepository implements MediaRepository {
   final List<MediaItem> items = [];
 
   @override
-  Future<void> resetStuckSyncingMedia() async {}
+  Future<void> resetStuckSyncingMedia({String? creatorId}) async {}
 
   @override
   Stream<int> watchUnsyncedCount({String? creatorId}) => Stream.value(items.length);
@@ -75,12 +75,13 @@ class FakeMediaRepository implements MediaRepository {
   Future<List<MediaItem>> getPendingOrFailedMedia({String? creatorId}) async => items;
 
   @override
-  Future<void> updateSyncStatus(String mediaId, SyncStatusType status) async {
+  Future<void> updateSyncStatus(String mediaId, SyncStatusType status, {String? creatorId}) async {
     final index = items.indexWhere((i) => i.id == mediaId);
     if (index != -1) {
       items[index] = items[index].copyWith(syncStatus: status);
     }
   }
+
 
   @override
   Future<List<MediaItem>> getTombstoneSyncCandidates({String? creatorId}) async => const [];

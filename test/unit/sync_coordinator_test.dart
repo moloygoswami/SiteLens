@@ -67,7 +67,7 @@ class FakeMediaRepository implements MediaRepository {
   }
 
   @override
-  Future<void> resetStuckSyncingMedia() async {
+  Future<void> resetStuckSyncingMedia({String? creatorId}) async {
     for (int i = 0; i < _items.length; i++) {
       if (_items[i].syncStatus == SyncStatusType.syncing) {
         _items[i] = _items[i].copyWith(syncStatus: SyncStatusType.pending);
@@ -116,7 +116,7 @@ class FakeMediaRepository implements MediaRepository {
   }
 
   @override
-  Future<void> updateSyncStatus(String mediaId, SyncStatusType status) async {
+  Future<void> updateSyncStatus(String mediaId, SyncStatusType status, {String? creatorId}) async {
     final index = _items.indexWhere((i) => i.id == mediaId);
     if (index != -1) {
       _items[index] = _items[index].copyWith(syncStatus: status);
@@ -125,7 +125,7 @@ class FakeMediaRepository implements MediaRepository {
   }
 
   @override
-  Future<void> markTombstoneReconciled(String mediaId) async {
+  Future<void> markTombstoneReconciled(String mediaId, {String? creatorId}) async {
     final index = _items.indexWhere((i) => i.id == mediaId);
     if (index != -1) {
       _items[index] = _items[index].copyWith(tombstoneReconciled: true);
@@ -133,7 +133,7 @@ class FakeMediaRepository implements MediaRepository {
   }
 
   @override
-  Future<void> deletePermanently(String mediaId) async {
+  Future<void> deletePermanently(String mediaId, {String? creatorId}) async {
     // C-2 semantics: permanent user deletion converts the row into a hidden
     // tombstone candidate instead of destroying it, so the cloud ledger can
     // always be reconciled by the existing tombstone synchronization.
@@ -143,6 +143,7 @@ class FakeMediaRepository implements MediaRepository {
     }
     _emitCount();
   }
+
 
   @override
   Future<List<MediaItem>> getAllMediaEntriesIncludingDeleted({String? creatorId}) async {

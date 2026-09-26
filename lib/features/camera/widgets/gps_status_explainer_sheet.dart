@@ -67,6 +67,15 @@ class GpsStatusExplainerSheet extends StatelessWidget {
         accent = AppColors.statusAmber;
         showRecovery = false;
         break;
+      case GpsBlockReason.liveGoneStale:
+        title = 'GPS fix lost';
+        body = 'A previously valid GPS fix was held, but no fresh satellite updates '
+            'have been received. Evidence capture requires an active live fix. '
+            'Move to an open area and wait for satellite lock to restore.';
+        icon = Icons.gps_not_fixed_rounded;
+        accent = AppColors.statusAmber;
+        showRecovery = false;
+        break;
       case GpsBlockReason.searching:
       case null:
         title = gps.isDegraded ? 'Low GPS precision' : 'Waiting for GPS lock';

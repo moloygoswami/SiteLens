@@ -20,6 +20,10 @@ const VALID_CATEGORIES = Object.freeze({
 const EMAIL_REGEX =
   /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
 
+// Global rate limiting thresholds (AC-SECF-03 / 04_SECURITY.MD §10 / Finding 6)
+const GLOBAL_RATE_LIMIT_CAP = 200;
+const GLOBAL_RATE_LIMIT_ALERT = 160;
+
 /**
  * Escapes user-controlled text for safe insertion into HTML.
  * @param {string} unsafe
@@ -61,7 +65,10 @@ function validateEnquiryPayload(data) {
     throw new HttpsError('invalid-argument', 'A valid email address is required.');
   }
 
-  if (typeof category !== 'string' || !VALID_CATEGORIES[category]) {
+  if (
+    typeof category !== 'string' ||
+    !Object.prototype.hasOwnProperty.call(VALID_CATEGORIES, category)
+  ) {
     throw new HttpsError(
       'invalid-argument',
       `Category must be one of: ${Object.keys(VALID_CATEGORIES).join(', ')}.`
@@ -89,8 +96,9 @@ function validateEnquiryPayload(data) {
  * @param {string} identifier
  * @param {number} [maxAttempts=5]
  * @param {number} [windowMs=600000]
+ * @param {number|null} [alertThreshold=null]
  */
-async function checkPersistentRateLimit(db, identifier, maxAttempts = 5, windowMs = 10 * 60 * 1000) {
+async function checkPersistentRateLimit(db, identifier, maxAttempts = 5, windowMs = 10 * 60 * 1000, alertThreshold = null) {
   const now = Date.now();
   const rateLimitRef = db.collection('_system_rate_limits').doc(`enquiry_${identifier}`);
 
@@ -116,6 +124,13 @@ async function checkPersistentRateLimit(db, identifier, maxAttempts = 5, windowM
     }
 
     timestamps.push(now);
+
+    if (typeof alertThreshold === 'number' && timestamps.length >= alertThreshold) {
+      console.warn(
+        `[RateLimitAlert] High-water mark reached for '${identifier}': ${timestamps.length}/${maxAttempts} submissions in sliding window.`
+      );
+    }
+
     transaction.set(rateLimitRef, {
       identifier,
       timestamps,
@@ -321,18 +336,25 @@ async function handleUserEnquiry(request, options = {}) {
   // Baseline: 10 attempts per 10-minute sliding window across all accounts from the same IP
   await checkPersistentRateLimit(db, `ip_aggregate_${ipKey}`, 10, 10 * 60 * 1000);
 
-  // Step 3a-2: Global non-IP aggregate cap (defense-in-depth). Even if the caller
-  // IP cannot be pinned down reliably, total submission volume stays bounded.
-  await checkPersistentRateLimit(db, 'global_total', 100, 10 * 60 * 1000);
-
   // Step 3b: Enforce granular limit (5 attempts / 10 minutes)
-  // - For authenticated callers: scoped to UID + IP (uid_${callerUid}_ip_${ipKey})
+  // - For authenticated callers: scoped to UID across all IPs (uid_${safeUid}) as well as
+  //   UID + IP (uid_${safeUid}_ip_${ipKey}). This strictly prevents an authenticated user
+  //   from bypassing limits by rotating IP addresses.
   // - For unauthenticated callers: scoped to unauth IP (ip_unauth_${ipKey})
-  if (callerUid) {
-    await checkPersistentRateLimit(db, `uid_${callerUid}_ip_${ipKey}`, 5, 10 * 60 * 1000);
+  const safeUid = callerUid ? callerUid.replace(/[^a-zA-Z0-9_-]/g, '_') : null;
+  if (safeUid) {
+    await checkPersistentRateLimit(db, `uid_${safeUid}`, 5, 10 * 60 * 1000);
+    await checkPersistentRateLimit(db, `uid_${safeUid}_ip_${ipKey}`, 5, 10 * 60 * 1000);
   } else {
     await checkPersistentRateLimit(db, `ip_unauth_${ipKey}`, 5, 10 * 60 * 1000);
   }
+
+  // Step 3c: Enforce Global Non-IP Aggregate Cap (AC-SECF-03 / 04_SECURITY.MD §10)
+  // G = 200 submissions / 10-minute sliding window; high-water alert at 160 (80%).
+  // Crucial (vuln-0018 remediation): Steps 3a and 3b execute BEFORE this global tier.
+  // Because any individual UID is capped at 5 and any single IP is capped at 10,
+  // a single abusive actor cannot consume the global quota of 200 and starve others.
+  await checkPersistentRateLimit(db, 'global_total', GLOBAL_RATE_LIMIT_CAP, 10 * 60 * 1000, GLOBAL_RATE_LIMIT_ALERT);
 
   // 4. Idempotency Check in Firestore
   const enquiryRef = db.collection('enquiries').doc(validated.submissionId);
@@ -600,4 +622,6 @@ exports.handleUserEnquiry = handleUserEnquiry;
 exports.VALID_CATEGORIES = VALID_CATEGORIES;
 exports.extractClientIp = extractClientIp;
 exports.handleDeleteUserAccount = handleDeleteUserAccount;
+exports.GLOBAL_RATE_LIMIT_CAP = GLOBAL_RATE_LIMIT_CAP;
+exports.GLOBAL_RATE_LIMIT_ALERT = GLOBAL_RATE_LIMIT_ALERT;
 

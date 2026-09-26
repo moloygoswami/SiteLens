@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/widgets.dart';
@@ -80,8 +79,9 @@ class SyncCoordinator extends StateNotifier<SyncState> with WidgetsBindingObserv
     // Gated on an authenticated session: unauthenticated startup must not initialize
     // evidence synchronization or mutate local state.
     if (_authService.currentUser != null) {
-      await _mediaRepo.resetStuckSyncingMedia();
+      await _mediaRepo.resetStuckSyncingMedia(creatorId: _authService.currentUser?.uid);
     }
+
 
     // 2. Observe app lifecycle so foreground resume offers the existing sync
     // pipeline a chance to process pending/retryable evidence.
@@ -132,7 +132,7 @@ class SyncCoordinator extends StateNotifier<SyncState> with WidgetsBindingObserv
       } else {
         // User signed in -> Session-scoped crash recovery, then user-specific
         // counts and sync. Idempotent: stuck syncing rows are normalized to pending.
-        await _mediaRepo.resetStuckSyncingMedia();
+        await _mediaRepo.resetStuckSyncingMedia(creatorId: user.uid);
         await _refreshCounts();
         triggerSync(isManual: false);
       }
@@ -331,9 +331,9 @@ class SyncCoordinator extends StateNotifier<SyncState> with WidgetsBindingObserv
   /// deleted rows keep their row state as the propagation marker and their
   /// artifact-sync status column is never written by tombstone synchronization
   /// (B-1: a tombstone must never be marked artifact-synced, attempted or not).
-  Future<void> _updateArtifactSyncStatus(String mediaId, SyncStatusType status, {required bool isTombstone}) async {
+  Future<void> _updateArtifactSyncStatus(String mediaId, SyncStatusType status, {required bool isTombstone, String? currentUserId}) async {
     if (isTombstone) return;
-    await _mediaRepo.updateSyncStatus(mediaId, status);
+    await _mediaRepo.updateSyncStatus(mediaId, status, creatorId: currentUserId);
   }
 
   Future<void> _processSingleItem(MediaItem item, String currentUserId, {bool isTombstone = false}) async {
@@ -344,7 +344,7 @@ class SyncCoordinator extends StateNotifier<SyncState> with WidgetsBindingObserv
 
     try {
       if (!isTombstone) {
-        await _mediaRepo.updateSyncStatus(item.id, SyncStatusType.syncing);
+        await _mediaRepo.updateSyncStatus(item.id, SyncStatusType.syncing, creatorId: currentUserId);
       }
 
       if (isTombstone) {
@@ -369,9 +369,9 @@ class SyncCoordinator extends StateNotifier<SyncState> with WidgetsBindingObserv
 
       // Successfully synced
       if (!isTombstone) {
-        await _mediaRepo.updateSyncStatus(item.id, SyncStatusType.synced);
+        await _mediaRepo.updateSyncStatus(item.id, SyncStatusType.synced, creatorId: currentUserId);
       } else {
-        await _mediaRepo.markTombstoneReconciled(item.id);
+        await _mediaRepo.markTombstoneReconciled(item.id, creatorId: currentUserId);
       }
       _retryCounts.remove(item.id);
       _nextRetryTimes.remove(item.id);
@@ -387,12 +387,12 @@ class SyncCoordinator extends StateNotifier<SyncState> with WidgetsBindingObserv
           switch (resolution) {
             case SessionAnomalyResolution.sessionInvalidated:
               _permanentFailedIds.add(item.id);
-              await _updateArtifactSyncStatus(item.id, SyncStatusType.failed, isTombstone: isTombstone);
+              await _updateArtifactSyncStatus(item.id, SyncStatusType.failed, isTombstone: isTombstone, currentUserId: currentUserId);
               state = state.copyWith(lastError: 'Session terminated: ${e.message ?? e.code}');
               return;
             case SessionAnomalyResolution.sitePermissionDenied:
               _permanentFailedIds.add(item.id);
-              await _updateArtifactSyncStatus(item.id, SyncStatusType.failed, isTombstone: isTombstone);
+              await _updateArtifactSyncStatus(item.id, SyncStatusType.failed, isTombstone: isTombstone, currentUserId: currentUserId);
               state = state.copyWith(
                 lastError: 'Permission denied: User does not own site ${item.siteId}.',
               );
@@ -401,50 +401,51 @@ class SyncCoordinator extends StateNotifier<SyncState> with WidgetsBindingObserv
               break;
           }
         }
-        await _handleRetryableFailure(item, e.message ?? e.code, isTombstone: isTombstone);
+        await _handleRetryableFailure(item, e.message ?? e.code, isTombstone: isTombstone, currentUserId: currentUserId);
       } else if (e.code == 'quota-exceeded') {
         _permanentFailedIds.add(item.id);
-        await _updateArtifactSyncStatus(item.id, SyncStatusType.failed, isTombstone: isTombstone);
+        await _updateArtifactSyncStatus(item.id, SyncStatusType.failed, isTombstone: isTombstone, currentUserId: currentUserId);
         state = state.copyWith(lastError: 'Storage quota exceeded.');
       } else {
-        await _handleRetryableFailure(item, e.message ?? e.code, isTombstone: isTombstone);
+        await _handleRetryableFailure(item, e.message ?? e.code, isTombstone: isTombstone, currentUserId: currentUserId);
       }
     } on PermanentSyncException catch (e) {
       _permanentFailedIds.add(item.id);
-      await _updateArtifactSyncStatus(item.id, SyncStatusType.failed, isTombstone: isTombstone);
+      await _updateArtifactSyncStatus(item.id, SyncStatusType.failed, isTombstone: isTombstone, currentUserId: currentUserId);
       state = state.copyWith(lastError: e.message);
     } on IntegrityConflictException catch (e) {
       _permanentFailedIds.add(item.id);
-      await _updateArtifactSyncStatus(item.id, SyncStatusType.failed, isTombstone: isTombstone);
+      await _updateArtifactSyncStatus(item.id, SyncStatusType.failed, isTombstone: isTombstone, currentUserId: currentUserId);
       state = state.copyWith(lastError: e.message);
     } on RetryableSyncException catch (e) {
-      await _handleRetryableFailure(item, e.message, isTombstone: isTombstone);
+      await _handleRetryableFailure(item, e.message, isTombstone: isTombstone, currentUserId: currentUserId);
     } catch (e) {
       // R25: an unclassified/unexpected exception carries no evidence of
       // permanence, so it must remain retryable — routed through the same
       // bounded exponential backoff / max-attempt policy as any transient
       // failure. It must never be silently promoted to a permanent failure.
-      await _handleRetryableFailure(item, e.toString(), isTombstone: isTombstone);
+      await _handleRetryableFailure(item, e.toString(), isTombstone: isTombstone, currentUserId: currentUserId);
     } finally {
       _inFlightMediaIds.remove(item.id);
     }
   }
 
-  Future<void> _handleRetryableFailure(MediaItem item, String message, {bool isTombstone = false}) async {
+  Future<void> _handleRetryableFailure(MediaItem item, String message, {bool isTombstone = false, String? currentUserId}) async {
     final currentRetries = (_retryCounts[item.id] ?? 0) + 1;
     _retryCounts[item.id] = currentRetries;
 
     if (currentRetries >= maxRetryAttempts) {
       _permanentFailedIds.add(item.id);
-      await _updateArtifactSyncStatus(item.id, SyncStatusType.failed, isTombstone: isTombstone);
+      await _updateArtifactSyncStatus(item.id, SyncStatusType.failed, isTombstone: isTombstone, currentUserId: currentUserId);
       state = state.copyWith(lastError: 'Max retries exceeded: $message');
     } else {
-      // Compute exponential backoff with jitter
-      final delaySeconds = (pow(2, currentRetries) as int) + Random().nextInt(2);
-      _nextRetryTimes[item.id] = DateTime.now().add(Duration(seconds: delaySeconds));
-      await _updateArtifactSyncStatus(item.id, SyncStatusType.pending, isTombstone: isTombstone);
+      // Compute exponential backoff with jitter per 02_ARCHITECTURE.MD §18.3
+      final delay = calculateBackoffDelay(attempt: currentRetries);
+      _nextRetryTimes[item.id] = DateTime.now().add(delay);
+      await _updateArtifactSyncStatus(item.id, SyncStatusType.pending, isTombstone: isTombstone, currentUserId: currentUserId);
     }
   }
+
 
   @override
   void dispose() {

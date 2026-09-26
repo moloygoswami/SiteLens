@@ -6,6 +6,8 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'firebase_options.dart';
 import 'app/app.dart';
+import 'core/services/session_end_teardown.dart';
+import 'features/google_photos/services/google_photos_session_teardown.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -30,7 +32,13 @@ void main() async {
     debugPrint('[FirebaseAppCheck] Activation warning (non-fatal): $e');
   }
 
-  final container = ProviderContainer();
+  final container = ProviderContainer(
+    overrides: [
+      sessionEndTeardownsProvider.overrideWith(
+        (ref) => [GooglePhotosSessionEndTeardown(ref)],
+      ),
+    ],
+  );
 
   // Build the first frame first so startup is never blocked on database I/O.
   runApp(

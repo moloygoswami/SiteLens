@@ -3,6 +3,7 @@ import 'google_photos_sync_status.dart';
 class GooglePhotosSyncEntry {
   final String mediaId;
   final GooglePhotosSyncStatus status;
+  final String? creatorId;
   final String? googlePhotosMediaId;
   final DateTime? uploadedAt;
   final String? errorMessage;
@@ -12,6 +13,7 @@ class GooglePhotosSyncEntry {
   const GooglePhotosSyncEntry({
     required this.mediaId,
     required this.status,
+    this.creatorId,
     this.googlePhotosMediaId,
     this.uploadedAt,
     this.errorMessage,
@@ -22,6 +24,7 @@ class GooglePhotosSyncEntry {
   GooglePhotosSyncEntry copyWith({
     String? mediaId,
     GooglePhotosSyncStatus? status,
+    String? creatorId,
     String? googlePhotosMediaId,
     DateTime? uploadedAt,
     String? errorMessage,
@@ -32,6 +35,7 @@ class GooglePhotosSyncEntry {
     return GooglePhotosSyncEntry(
       mediaId: mediaId ?? this.mediaId,
       status: status ?? this.status,
+      creatorId: creatorId ?? this.creatorId,
       googlePhotosMediaId: googlePhotosMediaId ?? this.googlePhotosMediaId,
       uploadedAt: uploadedAt ?? this.uploadedAt,
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),

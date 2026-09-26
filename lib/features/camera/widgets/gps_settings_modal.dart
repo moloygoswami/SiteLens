@@ -177,6 +177,45 @@ class GpsSettingsModal extends ConsumerWidget {
                 );
               }).toList(),
             ),
+            const SizedBox(height: 20),
+
+            const Divider(height: 1),
+            const SizedBox(height: 16),
+
+            // High Accuracy Mode toggle
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'High Accuracy Mode',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                          fontSize: 13,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        settings.highAccuracyMode
+                            ? 'Uses GPS + sensors for best precision (uses more battery)'
+                            : 'Uses cell/Wi-Fi for a coarser but faster fix',
+                        style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Switch(
+                  value: settings.highAccuracyMode,
+                  onChanged: (enabled) => notifier.setHighAccuracyMode(enabled),
+                  activeThumbColor: AppColors.primary,
+                ),
+              ],
+            ),
             const SizedBox(height: 16),
           ],
         ),

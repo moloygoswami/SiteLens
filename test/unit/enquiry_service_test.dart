@@ -1,10 +1,38 @@
 import 'dart:convert';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:sitelens/features/support/controllers/enquiry_controller.dart';
 import 'package:sitelens/features/support/models/enquiry_model.dart';
 import 'package:sitelens/features/support/services/enquiry_service.dart';
+
+class _FakeUser implements User {
+  _FakeUser({required this.uid, this.idToken});
+
+  @override
+  final String uid;
+
+  final String? idToken;
+
+  @override
+  Future<String?> getIdToken([bool forceRefresh = false]) async => idToken;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _FakeFirebaseAuth implements FirebaseAuth {
+  _FakeFirebaseAuth({this.signedIn});
+
+  final User? signedIn;
+
+  @override
+  User? get currentUser => signedIn;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
 
 void main() {
   group('UserEnquiry Model & Validation Tests', () {
@@ -80,7 +108,10 @@ void main() {
         );
       });
 
-      final service = FirebaseEnquiryService(httpClient: mockClient);
+      final service = FirebaseEnquiryService(
+        httpClient: mockClient,
+        appCheckTokenProvider: () async => 'fake-app-check-token',
+      );
       final enquiry = UserEnquiry(
         submissionId: 'sub-999',
         name: 'Bob',
@@ -95,12 +126,64 @@ void main() {
       expect(result.isDuplicate, isFalse);
     });
 
+    test('Returns failure when App Check token is unavailable', () async {
+      final service = FirebaseEnquiryService(
+        httpClient: MockClient((request) async {
+          return http.Response('{}', 200);
+        }),
+        appCheckTokenProvider: () async => throw Exception('App Check unavailable'),
+      );
+      final enquiry = UserEnquiry(
+        submissionId: 'sub-app-check-fail',
+        name: 'Bob',
+        email: 'test@sitelens.app',
+        category: EnquiryCategory.general,
+        message: 'General enquiry text over 10 chars.',
+      );
+
+      final result = await service.submitEnquiry(enquiry);
+      expect(result.isSuccess, isFalse);
+      expect(result.errorMessage, contains('App integrity check unavailable'));
+    });
+
+    test('Attaches Firebase Auth ID token when user is signed in', () async {
+      final fakeUser = _FakeUser(uid: 'inspector_123', idToken: 'fake-id-token');
+      final fakeAuth = _FakeFirebaseAuth(signedIn: fakeUser);
+
+      final mockClient = MockClient((request) async {
+        expect(request.headers['Authorization'], 'Bearer fake-id-token');
+        return http.Response(
+          jsonEncode({'result': {'success': true}}),
+          200,
+        );
+      });
+
+      final service = FirebaseEnquiryService(
+        httpClient: mockClient,
+        firebaseAuth: fakeAuth,
+        appCheckTokenProvider: () async => 'fake-app-check-token',
+      );
+      final enquiry = UserEnquiry(
+        submissionId: 'sub-auth-token',
+        name: 'Bob',
+        email: 'test@sitelens.app',
+        category: EnquiryCategory.general,
+        message: 'General enquiry text over 10 chars.',
+      );
+
+      final result = await service.submitEnquiry(enquiry);
+      expect(result.isSuccess, isTrue);
+    });
+
     test('Handles rate-limiting 429 response', () async {
       final mockClient = MockClient((request) async {
         return http.Response('Rate limit exceeded', 429);
       });
 
-      final service = FirebaseEnquiryService(httpClient: mockClient);
+      final service = FirebaseEnquiryService(
+        httpClient: mockClient,
+        appCheckTokenProvider: () async => 'fake-app-check-token',
+      );
       final enquiry = UserEnquiry(
         submissionId: 'sub-rate-limit',
         name: 'Bob',
@@ -119,7 +202,10 @@ void main() {
         throw http.ClientException('Connection failed');
       });
 
-      final service = FirebaseEnquiryService(httpClient: mockClient);
+      final service = FirebaseEnquiryService(
+        httpClient: mockClient,
+        appCheckTokenProvider: () async => 'fake-app-check-token',
+      );
       final enquiry = UserEnquiry(
         submissionId: 'sub-net-err',
         name: 'Bob',
@@ -149,7 +235,10 @@ void main() {
         );
       });
 
-      final service = FirebaseEnquiryService(httpClient: mockClient);
+      final service = FirebaseEnquiryService(
+        httpClient: mockClient,
+        appCheckTokenProvider: () async => 'fake-app-check-token',
+      );
       final controller = EnquiryController(service);
 
       expect(controller.state.status, EnquiryStatus.initial);
@@ -181,7 +270,10 @@ void main() {
         );
       });
 
-      final service = FirebaseEnquiryService(httpClient: mockClient);
+      final service = FirebaseEnquiryService(
+        httpClient: mockClient,
+        appCheckTokenProvider: () async => 'fake-app-check-token',
+      );
       final controller = EnquiryController(service);
 
       final first = controller.submitEnquiry(

@@ -51,16 +51,26 @@ class E2ETestHarness {
   }) async {
     await initializeFirebaseIfNeeded();
 
-    // 1. Establish deterministic SharedPreferences state
+    // 1. Establish deterministic SharedPreferences state (per-user scoped keys)
     SharedPreferences.setMockInitialValues({
       'sitelens_onboarding_completed_${user.uid}': true,
-      'sitelens_active_site_id': activeSite.id,
+      'sitelens_active_site_id_${user.uid}': activeSite.id,
     });
 
-    // 2. Initialize test doubles
+    // 2. Initialize test doubles (sites recorded under the session creator)
+    SiteModel owned(SiteModel s) => SiteModel(
+          id: s.id,
+          siteCode: s.siteCode,
+          name: s.name,
+          address: s.address,
+          creatorId: user.uid,
+        );
+
     fakeAuthService = FakeAuthService(user);
     fakePermissionService = FakePermissionService();
-    fakeSiteRepository = FakeSiteRepository(initialSites: [activeSite, ...additionalSites]);
+    fakeSiteRepository = FakeSiteRepository(
+      initialSites: [owned(activeSite), ...additionalSites.map(owned)],
+    );
 
     // 3. Create isolated ProviderContainer with explicit overrides
     container = ProviderContainer(

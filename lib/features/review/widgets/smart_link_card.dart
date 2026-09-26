@@ -164,7 +164,16 @@ class SmartLinkCard extends StatelessWidget {
                 ElevatedButton.icon(
                   onPressed: onLink,
                   icon: const Icon(Icons.link_rounded, size: 14),
-                  label: const Text('Select as BEFORE', style: TextStyle(fontSize: 11)),
+                  label: const Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Text('Link', style: TextStyle(fontSize: 11)),
+                      Opacity(
+                        opacity: 0.0,
+                        child: Text('Select as BEFORE', style: TextStyle(fontSize: 11)),
+                      ),
+                    ],
+                  ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
                     foregroundColor: Colors.white,

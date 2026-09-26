@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:ffi';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,11 +13,23 @@ import 'package:sitelens/domain/models/site_model.dart';
 import 'package:sitelens/features/sites/site_controller.dart';
 import 'package:sitelens/features/sites/site_setup_screen.dart';
 
+class FakeConnectivity implements Connectivity {
+  final List<ConnectivityResult> results;
+  FakeConnectivity([this.results = const [ConnectivityResult.wifi]]);
+
+  @override
+  Future<List<ConnectivityResult>> checkConnectivity() async => results;
+
+  @override
+  Stream<List<ConnectivityResult>> get onConnectivityChanged => Stream.value(results);
+}
+
 class WidgetTestSiteRepository implements SiteRepository {
   final Map<String, List<SiteModel>> userSites = {};
   bool shouldThrowOnLoad = false;
   bool shouldThrowOnSave = false;
   bool shouldThrowOnDelete = false;
+  bool shouldThrowOnHydrate = false;
   String deleteErrorMessage = 'Cannot delete site because captured media references this site.';
   int loadCount = 0;
 
@@ -39,7 +53,7 @@ class WidgetTestSiteRepository implements SiteRepository {
   }
 
   @override
-  Future<void> saveSite(SiteModel site) async {
+  Future<void> saveSite(SiteModel site, {String? creatorId}) async {
     if (shouldThrowOnSave) {
       throw Exception('Database write failure');
     }
@@ -64,7 +78,12 @@ class WidgetTestSiteRepository implements SiteRepository {
   Future<void> seedDefaultSitesIfEmpty() async {}
 
   @override
-  Future<List<SiteModel>> hydrateRemoteSites(String userId) async => [];
+  Future<List<SiteModel>> hydrateRemoteSites(String userId) async {
+    if (shouldThrowOnHydrate) {
+      throw Exception('Remote hydration failure');
+    }
+    return [];
+  }
 }
 
 class SimpleMockAuthService implements AuthService {
@@ -145,6 +164,7 @@ void main() {
     required AuthService authService,
     required SiteRepository siteRepo,
     String? initialUserId,
+    Connectivity? connectivity,
   }) {
     return ProviderScope(
       overrides: [
@@ -152,7 +172,11 @@ void main() {
         siteRepositoryProvider.overrideWithValue(siteRepo),
         sessionServiceProvider.overrideWith((ref) => SessionService(authService, ref)),
         siteControllerProvider.overrideWith(
-          (ref) => SiteController(siteRepo, initialUserId: initialUserId),
+          (ref) => SiteController(
+            siteRepo,
+            initialUserId: initialUserId,
+            connectivity: connectivity,
+          ),
         ),
       ],
       child: const MaterialApp(
@@ -220,7 +244,7 @@ void main() {
       expect(find.text('Metro Section 1'), findsOneWidget);
     });
 
-    testWidgets('Renders "No cached sites found" only when loading succeeds with empty list', (tester) async {
+    testWidgets('Renders "No sites yet" only when loading succeeds with empty list (genuine empty state)', (tester) async {
       const userEmpty = 'user-empty';
       final authService = SimpleMockAuthService(const AuthUser(uid: userEmpty, email: 'empty@sitelens.local'));
 
@@ -231,9 +255,44 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      expect(find.text('No cached sites found'), findsOneWidget);
-      expect(find.widgetWithText(ElevatedButton, 'Add Offline Site'), findsOneWidget);
+      expect(find.text('No sites yet'), findsOneWidget);
+      expect(find.widgetWithText(ElevatedButton, 'Create Site'), findsOneWidget);
       expect(find.text('Failed to load sites'), findsNothing);
+    });
+
+    testWidgets('Renders "Couldn\'t load your sites" retry panel on hydration failure (TM-U-04 / AC-SITE-07)', (tester) async {
+      const userEmpty = 'user-empty';
+      final authService = SimpleMockAuthService(const AuthUser(uid: userEmpty, email: 'empty@sitelens.local'));
+      testRepo.shouldThrowOnHydrate = true;
+
+      await tester.pumpWidget(buildTestWidget(
+        authService: authService,
+        siteRepo: testRepo,
+        initialUserId: userEmpty,
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text("Couldn't load your sites"), findsOneWidget);
+      expect(find.widgetWithText(ElevatedButton, 'Retry'), findsOneWidget);
+      expect(find.text('Create Site Manually'), findsOneWidget);
+      expect(find.text('No sites yet'), findsNothing);
+    });
+
+    testWidgets('Renders "You\'re offline" panel immediately when offline with zero cached sites (AC-SITE-07)', (tester) async {
+      const userEmpty = 'user-empty';
+      final authService = SimpleMockAuthService(const AuthUser(uid: userEmpty, email: 'empty@sitelens.local'));
+
+      await tester.pumpWidget(buildTestWidget(
+        authService: authService,
+        siteRepo: testRepo,
+        initialUserId: userEmpty,
+        connectivity: FakeConnectivity([ConnectivityResult.none]),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text("You're offline"), findsOneWidget);
+      expect(find.widgetWithText(ElevatedButton, 'Create Site Manually'), findsOneWidget);
+      expect(find.text('No sites yet'), findsNothing);
     });
 
     testWidgets('Add site dialog validates empty fields and duplicate site code with visible errors', (tester) async {

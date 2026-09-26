@@ -135,7 +135,7 @@ void main() {
         'sitelens_onboarding_completed_test-uid': false,
       });
 
-      const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local');
+      const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local', isEmailVerified: true);
       mockAuth.emitUser(user);
 
       await tester.pumpWidget(createTestWidget(home: const SessionRouter()));
@@ -154,7 +154,7 @@ void main() {
         location: PermissionStatus.granted,
       );
 
-      const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local');
+      const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local', isEmailVerified: true);
       mockAuth.emitUser(user);
 
       await tester.pumpWidget(createTestWidget(home: const SessionRouter()));
@@ -174,7 +174,7 @@ void main() {
         location: PermissionStatus.denied,
       );
 
-      const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local');
+      const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local', isEmailVerified: true);
       mockAuth.emitUser(user);
 
       await tester.pumpWidget(createTestWidget(home: const SessionRouter()));
@@ -194,7 +194,7 @@ void main() {
         location: PermissionStatus.denied,
       );
 
-      const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local');
+      const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local', isEmailVerified: true);
       mockAuth.emitUser(user);
 
       await tester.pumpWidget(createTestWidget(home: const PermissionRecoveryScreen()));
@@ -225,7 +225,7 @@ void main() {
         location: PermissionStatus.granted,
       );
 
-      const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local');
+      const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local', isEmailVerified: true);
       mockAuth.emitUser(user);
 
       final navObserver = TestNavigatorObserver();
@@ -271,7 +271,7 @@ void main() {
         location: PermissionStatus.permanentlyDenied,
       );
 
-      const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local');
+      const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local', isEmailVerified: true);
       mockAuth.emitUser(user);
 
       final navObserver = TestNavigatorObserver();
@@ -347,7 +347,7 @@ void main() {
         location: PermissionStatus.granted,
       );
 
-      const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local');
+      const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local', isEmailVerified: true);
       mockAuth.emitUser(user);
 
       final navObserver = TestNavigatorObserver();
@@ -392,7 +392,7 @@ void main() {
         location: PermissionStatus.granted,
       );
 
-      const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local');
+      const user = AuthUser(uid: 'test-uid', email: 'inspector@sitelens.local', isEmailVerified: true);
       mockAuth.emitUser(user);
 
       final navObserver = TestNavigatorObserver();

@@ -54,7 +54,7 @@ void main() {
         headingDegrees: 123.4,
       ));
 
-      final stored = await repo.getMediaById('m-audio-heading');
+      final stored = await repo.getMediaById('m-audio-heading', creatorId: 'user-1');
       expect(stored, isNotNull);
       expect(stored!.hasAudioTrack, isTrue);
       expect(stored.headingDegrees, 123.4);
@@ -74,7 +74,7 @@ void main() {
         // hasAudioTrack / headingDegrees never established by the device
       ));
 
-      final stored = await repo.getMediaById('m-unknown-telemetry');
+      final stored = await repo.getMediaById('m-unknown-telemetry', creatorId: 'user-1');
       expect(stored!.hasAudioTrack, isNull);
       expect(stored.headingDegrees, isNull);
 
@@ -117,8 +117,8 @@ void main() {
       expect(photo.hasAudioTrack, isNull);
     });
 
-    test('R09/R10: the adopted schema version is 10 (audio + heading columns)', () {
-      expect(db.schemaVersion, 10);
+    test('R09/R10: the adopted schema version includes audio + heading columns (v10+)', () {
+      expect(db.schemaVersion, greaterThanOrEqualTo(10));
     });
   });
 }

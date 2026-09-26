@@ -260,7 +260,8 @@ class MockSiteRepository implements SiteRepository {
   Future<SiteModel?> getSiteById(String id, {String? creatorId}) async => site.id == id ? site : null;
 
   @override
-  Future<void> saveSite(SiteModel site) async {}
+  Future<void> saveSite(SiteModel site, {String? creatorId}) async {}
+
 
   @override
   Future<void> deleteSite(String id, {String? creatorId}) async {}
@@ -325,7 +326,8 @@ class FakeMediaRepository implements MediaRepository {
   Future<List<MediaItem>> getPendingOrFailedMedia({String? creatorId}) async => [];
 
   @override
-  Future<void> resetStuckSyncingMedia() async {}
+  Future<void> resetStuckSyncingMedia({String? creatorId}) async {}
+
 }
 
 class FakeCloudSyncService implements CloudSyncService {

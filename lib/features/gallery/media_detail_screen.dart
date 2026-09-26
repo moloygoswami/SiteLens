@@ -45,6 +45,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   bool _isOriginalShaExpanded = false;
   bool _isEvidenceShaExpanded = false;
   bool _isRecovering = false;
+  IntegrityVerificationResult _evidenceIntegrity = IntegrityVerificationResult.unverified;
+  IntegrityVerificationResult _originalIntegrity = IntegrityVerificationResult.unverified;
 
   /// Canonical persisted site code for [_item]'s site, resolved from the site
   /// repository by [MediaItem.siteId]. Used only for the user-facing metadata
@@ -85,6 +87,15 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     final evidAbs = await storage.resolveAbsolutePath(_item.uri);
     final origAbs = await storage.resolveAbsolutePath(_item.originalUri);
 
+    final evidIntegrity = await storage.verifyArtifactIntegrity(
+      relativePath: _item.uri,
+      expectedSha256: _item.evidenceSha256Hash,
+    );
+    final origIntegrity = await storage.verifyArtifactIntegrity(
+      relativePath: _item.originalUri,
+      expectedSha256: _item.sha256Hash,
+    );
+
     final session = ref.read(sessionServiceProvider);
     final currentUserId = session.user?.uid;
     final site = _item.siteId.isEmpty
@@ -93,7 +104,7 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
 
     MediaItem? linked;
     if (_item.observationType == ObservationType.closed && _item.linkedMediaId != null) {
-      linked = await mediaRepo.getMediaById(_item.linkedMediaId!);
+      linked = await mediaRepo.getMediaById(_item.linkedMediaId!, creatorId: currentUserId ?? _item.creatorId);
     }
 
     if (mounted) {
@@ -101,6 +112,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
       setState(() {
         _resolvedEvidencePath = evidAbs;
         _resolvedOriginalPath = origAbs;
+        _evidenceIntegrity = evidIntegrity;
+        _originalIntegrity = origIntegrity;
         _linkedItem = linked;
         _siteCode = site?.siteCode;
         _siteName = site?.name;
@@ -307,7 +320,9 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
     final updated = await MediaTagEditModal.show(context, _item);
     if (updated == true && mounted) {
       final mediaRepo = ref.read(mediaRepositoryProvider);
-      final refreshed = await mediaRepo.getMediaById(_item.id);
+      final session = ref.read(sessionServiceProvider);
+      final currentUserId = session.user?.uid;
+      final refreshed = await mediaRepo.getMediaById(_item.id, creatorId: currentUserId ?? _item.creatorId);
       if (refreshed != null && mounted) {
         setState(() {
           _item = refreshed;
@@ -318,22 +333,53 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   }
 
   Future<void> _handleDelete() async {
+    final isSynced = _item.syncStatus == SyncStatusType.synced;
     final confirm = await ConfirmationDialog.show(
       context,
       title: 'Delete Media',
       message: 'Are you sure you want to delete this media?',
       confirmLabel: 'Delete',
+      extraContent: !isSynced
+          ? Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.statusRed.withAlpha(25),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppColors.statusRed.withAlpha(80)),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: AppColors.statusRed, size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Warning: This media has not been synced to the cloud. Deleting it now will permanently and irrecoverably lose this evidence.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.statusRed,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            )
+          : null,
     );
 
     if (confirm == true && mounted) {
       final repo = ref.read(mediaRepositoryProvider);
+      final session = ref.read(sessionServiceProvider);
+      final currentUserId = session.user?.uid;
+      final effectiveCreatorId = currentUserId ?? _item.creatorId;
       if (_item.syncStatus == SyncStatusType.synced) {
         // Synced: remove from local gallery/device, cloud copy remains safely stored
-        await repo.removeFromGallery(_item.id);
+        await repo.removeFromGallery(_item.id, creatorId: effectiveCreatorId);
       } else {
         // Unsynced: permanently delete from device and SQLite
-        await repo.deletePermanently(_item.id);
+        await repo.deletePermanently(_item.id, creatorId: effectiveCreatorId);
       }
+
 
       if (mounted) {
         Navigator.of(context).pop(true);
@@ -464,12 +510,13 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
             ],
           ),
           const SizedBox(height: 8),
-          Text(
-            isVideo
-                ? 'The video original has been safely stored in cloud storage and cleared locally.'
-                : 'The high-resolution original has been safely stored in cloud storage and cleared locally.',
-            style:
-                const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+          const Text(
+            'Original cleared locally — recover from cloud to verify',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: AppColors.primaryLight,
+            ),
           ),
           const SizedBox(height: 10),
           SizedBox(
@@ -988,6 +1035,10 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                         _buildHashRow(
                           label: 'ORIGINAL SHA-256',
                           hash: originalSha,
+                          integrity: _originalIntegrity,
+                          isClearedLocally: _item.syncStatus == SyncStatusType.synced &&
+                              _resolvedOriginalPath != null &&
+                              !File(_resolvedOriginalPath!).existsSync(),
                           isExpanded: _isOriginalShaExpanded,
                           onToggleExpand: () => setState(() =>
                               _isOriginalShaExpanded = !_isOriginalShaExpanded),
@@ -998,6 +1049,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
                         _buildHashRow(
                           label: 'EVIDENCE SHA-256',
                           hash: evidenceSha,
+                          integrity: _evidenceIntegrity,
+                          isClearedLocally: false,
                           isExpanded: _isEvidenceShaExpanded,
                           onToggleExpand: () => setState(() =>
                               _isEvidenceShaExpanded = !_isEvidenceShaExpanded),
@@ -1106,6 +1159,8 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
   Widget _buildHashRow({
     required String label,
     required String? hash,
+    required IntegrityVerificationResult integrity,
+    required bool isClearedLocally,
     required bool isExpanded,
     required VoidCallback onToggleExpand,
     required VoidCallback onCopy,
@@ -1117,39 +1172,105 @@ class _MediaDetailScreenState extends ConsumerState<MediaDetailScreen> {
             ? '$label:\n$hash'
             : '$label: ${hash.length > 16 ? hash.substring(0, 16) : hash}...';
 
-    return InkWell(
-      onTap: onToggleExpand,
-      borderRadius: BorderRadius.circular(6),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        decoration: BoxDecoration(
-          color: AppColors.surfaceContainerHigh,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: AppColors.border),
+    final (badgeFg, badgeBg, badgeBorder, badgeText, badgeIcon) = switch (integrity) {
+      IntegrityVerificationResult.verified => (
+          AppColors.statusGreen,
+          AppColors.statusGreenLight,
+          AppColors.statusGreen.withAlpha(100),
+          'VERIFIED',
+          Icons.check_circle_outline_rounded,
         ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                valueText,
-                style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.primaryLight,
-                  height: 1.3,
+      IntegrityVerificationResult.unverified => (
+          AppColors.statusAmber,
+          AppColors.statusAmberLight,
+          AppColors.statusAmber.withAlpha(100),
+          'UNVERIFIED',
+          Icons.warning_amber_rounded,
+        ),
+      IntegrityVerificationResult.unavailable => (
+          AppColors.textMuted,
+          AppColors.surfaceContainer,
+          AppColors.border,
+          'UNAVAILABLE',
+          Icons.help_outline_rounded,
+        ),
+    };
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: InkWell(
+                  onTap: onToggleExpand,
+                  borderRadius: BorderRadius.circular(6),
+                  child: Text(
+                    valueText,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.primaryLight,
+                      height: 1.3,
+                    ),
+                  ),
                 ),
               ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.copy_rounded,
-                  size: 16, color: AppColors.textSecondary),
-              tooltip: 'Copy $label Hash',
-              onPressed: onCopy,
-              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: badgeBg,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: badgeBorder),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(badgeIcon, size: 10, color: badgeFg),
+                    const SizedBox(width: 4),
+                    Text(
+                      badgeText,
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        color: badgeFg,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.copy_rounded,
+                    size: 16, color: AppColors.textSecondary),
+                tooltip: 'Copy $label Hash',
+                onPressed: onCopy,
+                constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+              ),
+            ],
+          ),
+          if (isClearedLocally) ...[
+            const SizedBox(height: 4),
+            const Text(
+              'Original cleared locally — recover from cloud to verify',
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 9,
+                fontWeight: FontWeight.w600,
+                color: AppColors.statusAmber,
+              ),
             ),
           ],
-        ),
+        ],
       ),
     );
   }

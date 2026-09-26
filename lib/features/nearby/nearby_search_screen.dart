@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/theme.dart';
 import '../../core/services/auth_service.dart';
+import '../../core/utils/gps_utils.dart';
+import '../../data/repositories/media_repository.dart';
 import '../../data/repositories/site_repository.dart';
 import '../../domain/models/enums.dart';
 import '../../domain/models/media_item.dart';
@@ -726,9 +728,16 @@ class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
     }
 
     // View Mode Switch: Grouped Results List (PRD Section 11.3)
-    return ListView(
+    final suggestedPair = _getSuggestedOppositeCandidate(state);
+
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
-      children: [
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (suggestedPair != null)
+            _buildSuggestedPairingCard(suggestedPair, state, controller),
+
         // Group 1: Before (Open Non-Conformities)
         if (state.beforeResults.isNotEmpty)
           _buildGroupSection(
@@ -764,7 +773,8 @@ class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
             items: state.otherResults,
             searchState: state,
           ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -830,6 +840,160 @@ class _NearbySearchScreenState extends ConsumerState<NearbySearchScreen> {
             ),
             const SizedBox(height: 8),
           ],
+        ],
+      ),
+    );
+  }
+
+  NearbyMediaResult? _getSuggestedOppositeCandidate(NearbySearchState state) {
+    final source = widget.sourceMedia;
+    if (source == null) return null;
+
+    if (source.observationType == ObservationType.nonConformity) {
+      // Source is Before. Find nearest After (Closed) captured strictly after source and unlinked.
+      for (final res in state.afterResults) {
+        final capturedAt = res.item.capturedAt;
+        if (capturedAt.toUtc().isAfter(source.capturedAt.toUtc()) &&
+            (res.item.linkedMediaId == null || res.item.linkedMediaId!.isEmpty)) {
+          return res;
+        }
+      }
+    } else if (source.observationType == ObservationType.closed) {
+      // Source is After. Find nearest Before (Non-Conformity) captured strictly before source and open.
+      for (final res in state.beforeResults) {
+        final capturedAt = res.item.capturedAt;
+        if (capturedAt.toUtc().isBefore(source.capturedAt.toUtc()) &&
+            !state.resolvedMediaIds.contains(res.item.id)) {
+          return res;
+        }
+      }
+    }
+    return null;
+  }
+
+  Widget _buildSuggestedPairingCard(
+    NearbyMediaResult match,
+    NearbySearchState state,
+    NearbySearchNotifier controller,
+  ) {
+    final source = widget.sourceMedia!;
+    final isSourceBefore = source.observationType == ObservationType.nonConformity;
+    final pairTitle = isSourceBefore
+        ? 'SUGGESTED RESOLUTION PAIRING'
+        : 'SUGGESTED DEFECT PAIRING';
+    final distanceStr = GPSUtils.formatDistanceWithUncertainty(
+      match.distanceMeters,
+      accuracyMeters: match.item.accuracyM,
+    );
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withAlpha(20),
+        borderRadius: BorderRadius.circular(AppRadii.card),
+        border: Border.all(color: AppColors.primary.withAlpha(80), width: 1.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.auto_awesome_rounded,
+                  color: AppColors.primary, size: 16),
+              const SizedBox(width: 6),
+              Text(
+                pairTitle,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.primary,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            isSourceBefore
+                ? 'Nearby Closed resolution ($distanceStr away) captured after this defect — link as resolution?'
+                : 'Nearby Non-Conformity defect ($distanceStr away) captured prior to this resolution — link as defect?',
+            style: const TextStyle(
+              fontSize: 12,
+              color: AppColors.textPrimary,
+              height: 1.3,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text(
+                  match.item.activityTag != null && match.item.activityTag!.isNotEmpty
+                      ? match.item.activityTag!
+                      : 'Observation • ${match.item.capturedAt.toIso8601String().substring(0, 10)}',
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textSecondary,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                onPressed: () async {
+                  final uid = ref.read(authServiceProvider).currentUser?.uid ??
+                      controller.creatorId;
+                  final repo = ref.read(mediaRepositoryProvider);
+                  try {
+                    if (isSourceBefore) {
+                      await repo.linkMedia(
+                        mediaId: match.item.id,
+                        linkedMediaId: source.id,
+                        creatorId: uid,
+                      );
+                    } else {
+                      await repo.linkMedia(
+                        mediaId: source.id,
+                        linkedMediaId: match.item.id,
+                        creatorId: uid,
+                      );
+                    }
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Evidence linked successfully'),
+                          backgroundColor: AppColors.statusGreen,
+                        ),
+                      );
+                    }
+                    await controller.executeSearch();
+                  } catch (e) {
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Failed to link: $e'),
+                          backgroundColor: AppColors.statusRed,
+                        ),
+                      );
+                    }
+                  }
+                },
+                icon: const Icon(Icons.link_rounded, size: 14),
+                label: const Text('Link', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );

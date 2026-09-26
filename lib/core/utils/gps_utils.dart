@@ -1,3 +1,5 @@
+import '../constants/app_constants.dart';
+
 enum GPSFixStatus {
   searching,
   high,
@@ -24,17 +26,45 @@ enum GpsBlockReason {
   /// Only a cached/last-known location is available — no live fix has been
   /// received yet. Cached coordinates never unlock evidence capture.
   lastKnownOnly,
+
+  /// A previously live fix was held, but has gone stale without fresh stream emissions.
+  liveGoneStale,
+}
+
+/// Re-entrancy guard ensuring strict serialized capture execution (AC-GPS-12, PRD §9.4).
+class ShutterReentrancyGuard {
+  bool _isExecuting = false;
+
+  bool get isExecuting => _isExecuting;
+
+  /// Attempts to acquire the capture lock. Returns true if lock was successfully
+  /// acquired; returns false if a capture is already in-flight.
+  bool tryAcquire() {
+    if (_isExecuting) return false;
+    _isExecuting = true;
+    return true;
+  }
+
+  /// Releases the capture lock upon completion of processing and persistence.
+  void release() {
+    _isExecuting = false;
+  }
 }
 
 class GPSUtils {
-  /// Evaluates the GPS Fix Status based on accuracy in meters
-  static GPSFixStatus evaluateAccuracy(double? accuracyMeters, {bool hasFix = true}) {
+  /// Evaluates the GPS Fix Status based on accuracy in meters against the single
+  /// authoritative configurable threshold (AC-GPS-05, TM-U-05).
+  static GPSFixStatus evaluateAccuracy(
+    double? accuracyMeters, {
+    bool hasFix = true,
+    double lowAccuracyThresholdMeters = AppConstants.gpsDefaultLowAccuracyThresholdMeters,
+  }) {
     if (!hasFix || accuracyMeters == null) {
       return GPSFixStatus.searching;
     }
-    if (accuracyMeters <= 5.0) {
+    if (accuracyMeters <= AppConstants.gpsHighAccuracyThresholdMeters) {
       return GPSFixStatus.high;
-    } else if (accuracyMeters <= 20.0) {
+    } else if (accuracyMeters <= lowAccuracyThresholdMeters) {
       return GPSFixStatus.weak;
     } else {
       return GPSFixStatus.poor;

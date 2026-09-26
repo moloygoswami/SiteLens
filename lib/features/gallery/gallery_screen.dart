@@ -18,6 +18,7 @@ import 'widgets/gallery_empty_view.dart';
 import 'widgets/gallery_filter_bar.dart';
 import 'widgets/gallery_filter_modal.dart';
 import 'widgets/gallery_media_tile.dart';
+import 'widgets/media_tag_edit_modal.dart';
 import 'widgets/single_item_share_sheet.dart';
 import '../nearby/nearby_search_screen.dart';
 import '../sync/widgets/sync_status_badge.dart';
@@ -572,7 +573,18 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
                 },
               ),
 
-              // 4. Share & Export Single File (M4-D)
+              // 4. Edit Tags (AC-GAL-05)
+              ListTile(
+                leading: const Icon(Icons.edit_note_rounded, color: AppColors.textPrimary),
+                title: const Text('Edit Tags', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.textPrimary)),
+                subtitle: const Text('Update observation type, activity tag or note', style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+                onTap: () async {
+                  Navigator.of(ctx).pop();
+                  await MediaTagEditModal.show(context, item);
+                },
+              ),
+
+              // 5. Share & Export Single File (M4-D, AC-GAL-05)
               ListTile(
                 leading: const Icon(Icons.share_rounded, color: AppColors.textPrimary),
                 title: const Text('Share & Export Single File', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.textPrimary)),
@@ -582,11 +594,82 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
                   SingleItemShareSheet.show(context, item);
                 },
               ),
+
+              // 6. Delete from Device / Remove from Gallery (AC-GAL-05)
+              ListTile(
+                leading: const Icon(Icons.delete_outline_rounded, color: AppColors.statusRed),
+                title: const Text('Delete from Device / Remove from Gallery', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: AppColors.statusRed)),
+                subtitle: Text(
+                  item.syncStatus == SyncStatusType.synced
+                      ? 'Remove from Gallery (preserves cloud backup)'
+                      : 'Delete from Device (permanent local deletion)',
+                  style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                ),
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  _handleSingleItemDelete(item);
+                },
+              ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  Future<void> _handleSingleItemDelete(MediaItem item) async {
+    final isSynced = item.syncStatus == SyncStatusType.synced;
+    final confirmed = await ConfirmationDialog.show(
+      context,
+      title: isSynced ? 'Remove from Gallery' : 'Delete Media',
+      message: 'Are you sure you want to delete this media?',
+      confirmLabel: isSynced ? 'Remove' : 'Delete',
+      extraContent: !isSynced
+          ? Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.statusRed.withAlpha(25),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppColors.statusRed.withAlpha(80)),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: AppColors.statusRed, size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Warning: This media has not been synced to the cloud. Deleting it now will permanently and irrecoverably lose this evidence.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.statusRed,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            )
+          : null,
+    );
+
+    if (confirmed == true && mounted) {
+      final repo = ref.read(mediaRepositoryProvider);
+      if (isSynced) {
+        await repo.removeFromGallery(item.id, creatorId: item.creatorId);
+      } else {
+        await repo.deletePermanently(item.id, creatorId: item.creatorId);
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(isSynced ? 'Removed from gallery' : 'Media deleted'),
+            duration: const Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _handleBatchDelete(List<MediaItem> selectedItems) async {
@@ -608,11 +691,12 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
       final repo = ref.read(mediaRepositoryProvider);
       for (final item in selectedItems) {
         if (item.syncStatus == SyncStatusType.synced) {
-          await repo.removeFromGallery(item.id);
+          await repo.removeFromGallery(item.id, creatorId: item.creatorId);
         } else {
-          await repo.deletePermanently(item.id);
+          await repo.deletePermanently(item.id, creatorId: item.creatorId);
         }
       }
+
       if (mounted) {
         ref.read(gallerySelectionProvider.notifier).exitSelectMode();
         ScaffoldMessenger.of(context).showSnackBar(

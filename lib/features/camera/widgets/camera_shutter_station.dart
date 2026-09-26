@@ -7,8 +7,11 @@ class CameraShutterStation extends StatelessWidget {
   final CameraUiState state;
   final CameraStatus cameraStatus;
   final bool isCapturePermitted;
+  final bool hasAuthenticatedCreator;
+  final bool hasActiveSite;
   final bool isRecordingVideo;
   final String recordingDurationFormatted;
+  final bool? recordingHasAudioTrack;
   final bool isExecutingCapture;
   final VoidCallback onShutterPressed;
   final VoidCallback onGalleryPressed;
@@ -20,8 +23,11 @@ class CameraShutterStation extends StatelessWidget {
     required this.state,
     this.cameraStatus = CameraStatus.ready,
     this.isCapturePermitted = true,
+    this.hasAuthenticatedCreator = true,
+    this.hasActiveSite = true,
     this.isRecordingVideo = false,
     this.recordingDurationFormatted = '00:00',
+    this.recordingHasAudioTrack,
     this.isExecutingCapture = false,
     required this.onShutterPressed,
     required this.onGalleryPressed,
@@ -74,6 +80,20 @@ class CameraShutterStation extends StatelessWidget {
                       letterSpacing: 0.5,
                     ),
                   ),
+                  if (recordingHasAudioTrack == false) ...[
+                    const SizedBox(width: 8),
+                    const Icon(Icons.mic_off, size: 12, color: AppColors.statusAmber),
+                    const SizedBox(width: 4),
+                    const Text(
+                      'MUTED (NO MIC)',
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.statusAmber,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             )
@@ -82,6 +102,8 @@ class CameraShutterStation extends StatelessWidget {
               gps: state.gps,
               cameraStatus: cameraStatus,
               isCapturePermitted: isCapturePermitted,
+              hasAuthenticatedCreator: hasAuthenticatedCreator,
+              hasActiveSite: hasActiveSite,
             ),
 
           const Divider(height: 1, color: AppColors.border),
@@ -138,7 +160,8 @@ class CameraShutterStation extends StatelessWidget {
                     alignment: Alignment.centerRight,
                     child: CameraSwitcher(
                       isFrontCamera: state.isFrontCamera,
-                      onTap: isRecordingVideo ? () {} : onFlipCameraPressed,
+                      isLocked: isRecordingVideo,
+                      onTap: onFlipCameraPressed,
                     ),
                   ),
                 ),
@@ -155,12 +178,16 @@ class ReadinessBanner extends StatelessWidget {
   final GpsUiFixture gps;
   final CameraStatus cameraStatus;
   final bool isCapturePermitted;
+  final bool hasAuthenticatedCreator;
+  final bool hasActiveSite;
 
   const ReadinessBanner({
     super.key,
     required this.gps,
     required this.cameraStatus,
     required this.isCapturePermitted,
+    this.hasAuthenticatedCreator = true,
+    this.hasActiveSite = true,
   });
 
   @override
@@ -196,6 +223,14 @@ class ReadinessBanner extends StatelessWidget {
     } else if (cameraStatus == CameraStatus.capturing) {
       text = 'Capturing evidence frame…';
       dotColor = AppColors.primary;
+      bgColor = AppColors.surfaceContainerHigh;
+    } else if (!hasAuthenticatedCreator) {
+      text = 'Authentication required to capture evidence';
+      dotColor = AppColors.statusRed;
+      bgColor = AppColors.surfaceContainerHigh;
+    } else if (!hasActiveSite) {
+      text = 'Active site required — select a site to capture evidence';
+      dotColor = AppColors.statusRed;
       bgColor = AppColors.surfaceContainerHigh;
     } else if (!isCapturePermitted) {
       // Cause-specific GPS guidance lives on the GPS pill; the banner stays
@@ -251,12 +286,14 @@ class ModeSwitcher extends StatelessWidget {
   final CameraCaptureMode currentMode;
   final ValueChanged<CameraCaptureMode> onModeChanged;
   final bool isDark;
+  final bool isLocked;
 
   const ModeSwitcher({
     super.key,
     required this.currentMode,
     required this.onModeChanged,
     this.isDark = false,
+    this.isLocked = false,
   });
 
   @override
@@ -279,11 +316,14 @@ class ModeSwitcher extends StatelessWidget {
             padding: EdgeInsets.symmetric(horizontal: isDark ? 1 : 2),
             child: Semantics(
               button: true,
+              enabled: !isLocked,
               selected: isSelected,
               label: '${mode.label} capture mode',
-              hint: isSelected ? 'Currently active' : 'Switch to ${mode.label} capture mode',
+              hint: isLocked
+                  ? 'Disabled during video recording'
+                  : (isSelected ? 'Currently active' : 'Switch to ${mode.label} capture mode'),
               child: InkWell(
-                onTap: () => onModeChanged(mode),
+                onTap: isLocked ? null : () => onModeChanged(mode),
                 borderRadius: BorderRadius.circular(AppRadii.xs),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 150),
@@ -517,23 +557,27 @@ class CameraSwitcher extends StatelessWidget {
   final bool isFrontCamera;
   final VoidCallback onTap;
   final bool isDark;
+  final bool isLocked;
 
   const CameraSwitcher({
     super.key,
     required this.isFrontCamera,
     required this.onTap,
     this.isDark = false,
+    this.isLocked = false,
   });
 
   @override
   Widget build(BuildContext context) {
     return Semantics(
       button: true,
+      enabled: !isLocked,
       label: isFrontCamera ? 'Switch to rear camera' : 'Switch to front camera',
+      hint: isLocked ? 'Disabled during video recording' : null,
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          onTap: onTap,
+          onTap: isLocked ? null : onTap,
           borderRadius: BorderRadius.circular(24),
           child: Container(
             width: 48,
@@ -551,7 +595,9 @@ class CameraSwitcher extends StatelessWidget {
               duration: const Duration(milliseconds: 300),
               child: Icon(
                 Icons.flip_camera_android_rounded,
-                color: isDark ? Colors.white : AppColors.textSecondary,
+                color: isLocked
+                    ? (isDark ? Colors.white24 : AppColors.textMuted)
+                    : (isDark ? Colors.white : AppColors.textSecondary),
                 size: 22,
               ),
             ),

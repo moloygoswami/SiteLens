@@ -32,6 +32,7 @@ class MockAuthService implements AuthService {
       uid: 'uid-test-123',
       email: email,
       displayName: 'Inspector Test',
+      isEmailVerified: true,
     );
     emitUser(user);
     return user;
@@ -46,6 +47,7 @@ class MockAuthService implements AuthService {
       uid: 'uid-test-123',
       email: 'google-user@sitelens.local',
       displayName: 'Google Inspector',
+      isEmailVerified: true,
     );
     emitUser(user);
     return user;
@@ -141,7 +143,7 @@ void main() {
     });
 
     test('2. Authenticated first login routes to onboarding when incomplete', () async {
-      const user = AuthUser(uid: 'uid-new-user', email: 'new@sitelens.local');
+      const user = AuthUser(uid: 'uid-new-user', email: 'new@sitelens.local', isEmailVerified: true);
       mockAuth.emitUser(user);
       await pumpEventQueue();
 
@@ -157,7 +159,7 @@ void main() {
         location: PermissionStatus.granted,
       );
 
-      const user = AuthUser(uid: 'uid-incomplete', email: 'user@sitelens.local');
+      const user = AuthUser(uid: 'uid-incomplete', email: 'user@sitelens.local', isEmailVerified: true);
       mockAuth.emitUser(user);
       await pumpEventQueue();
 
@@ -175,7 +177,7 @@ void main() {
         location: PermissionStatus.granted,
       );
 
-      const user = AuthUser(uid: 'uid-existing', email: 'existing@sitelens.local');
+      const user = AuthUser(uid: 'uid-existing', email: 'existing@sitelens.local', isEmailVerified: true);
       mockAuth.emitUser(user);
       await pumpEventQueue();
 
@@ -195,7 +197,7 @@ void main() {
         location: PermissionStatus.denied,
       );
 
-      const user = AuthUser(uid: 'uid-revoked', email: 'revoked@sitelens.local');
+      const user = AuthUser(uid: 'uid-revoked', email: 'revoked@sitelens.local', isEmailVerified: true);
       mockAuth.emitUser(user);
       await pumpEventQueue();
 
@@ -209,7 +211,7 @@ void main() {
         'sitelens_onboarding_completed_uid-session-restored': true,
       });
 
-      const user = AuthUser(uid: 'uid-session-restored', email: 'restored@sitelens.local');
+      const user = AuthUser(uid: 'uid-session-restored', email: 'restored@sitelens.local', isEmailVerified: true);
       mockAuth.emitUser(user);
       await pumpEventQueue();
 
@@ -223,7 +225,7 @@ void main() {
         'sitelens_onboarding_completed_uid-resumed': true,
       });
 
-      const user = AuthUser(uid: 'uid-resumed', email: 'resumed@sitelens.local');
+      const user = AuthUser(uid: 'uid-resumed', email: 'resumed@sitelens.local', isEmailVerified: true);
       mockAuth.emitUser(user);
       await pumpEventQueue();
 
@@ -243,7 +245,7 @@ void main() {
     });
 
     test('6. Logout transitions back to unauthenticated state', () async {
-      const user = AuthUser(uid: 'uid-logout', email: 'logout@sitelens.local');
+      const user = AuthUser(uid: 'uid-logout', email: 'logout@sitelens.local', isEmailVerified: true);
       mockAuth.emitUser(user);
       await pumpEventQueue();
 

@@ -252,6 +252,12 @@ class GpsStatusPill extends StatelessWidget {
       borderCol = AppColors.statusAmber.withAlpha(80);
       semanticLabel =
           'GPS has only a last-known location. Waiting for a live fix. Evidence capture locked.';
+    } else if (gps.blockReason == GpsBlockReason.liveGoneStale) {
+      bg = AppColors.statusAmberLight;
+      fg = AppColors.statusAmber;
+      borderCol = AppColors.statusAmber.withAlpha(80);
+      semanticLabel =
+          'GPS live fix lost. Waiting for satellite lock. Evidence capture locked.';
     } else if (gps.isSearching) {
       bg = AppColors.statusAmberLight;
       fg = AppColors.statusAmber;

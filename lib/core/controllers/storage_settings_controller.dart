@@ -5,6 +5,7 @@ import '../services/storage_cleanup_service.dart';
 class StorageSettingsState {
   final bool isLoading;
   final bool isCleaning;
+  final bool isRegenerating;
   final StorageCleanupSummary summary;
   final StorageCleanupResult? lastResult;
   final String? message;
@@ -12,6 +13,7 @@ class StorageSettingsState {
   const StorageSettingsState({
     this.isLoading = false,
     this.isCleaning = false,
+    this.isRegenerating = false,
     this.summary = const StorageCleanupSummary(),
     this.lastResult,
     this.message,
@@ -20,6 +22,7 @@ class StorageSettingsState {
   StorageSettingsState copyWith({
     bool? isLoading,
     bool? isCleaning,
+    bool? isRegenerating,
     StorageCleanupSummary? summary,
     StorageCleanupResult? lastResult,
     bool clearLastResult = false,
@@ -29,6 +32,7 @@ class StorageSettingsState {
     return StorageSettingsState(
       isLoading: isLoading ?? this.isLoading,
       isCleaning: isCleaning ?? this.isCleaning,
+      isRegenerating: isRegenerating ?? this.isRegenerating,
       summary: summary ?? this.summary,
       lastResult: clearLastResult ? null : (lastResult ?? this.lastResult),
       message: clearMessage ? null : (message ?? this.message),
@@ -104,6 +108,33 @@ class StorageSettingsNotifier extends StateNotifier<StorageSettingsState> {
         );
       }
       return null;
+    }
+  }
+
+  Future<int> regenerateThumbnails({String? creatorId}) async {
+    if (state.isRegenerating) return 0;
+    state = state.copyWith(isRegenerating: true, clearMessage: true);
+
+    try {
+      final count = await _cleanupService.regenerateThumbnails(creatorId: creatorId);
+      final updatedSummary = await _cleanupService.getCleanupSummary(creatorId: creatorId);
+
+      if (mounted) {
+        state = state.copyWith(
+          isRegenerating: false,
+          summary: updatedSummary,
+          message: 'Regenerated $count thumbnails successfully.',
+        );
+      }
+      return count;
+    } catch (e) {
+      if (mounted) {
+        state = state.copyWith(
+          isRegenerating: false,
+          message: 'Failed to regenerate thumbnails: $e',
+        );
+      }
+      return 0;
     }
   }
 }

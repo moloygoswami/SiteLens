@@ -137,6 +137,7 @@ void main() {
             GooglePhotosSyncEntriesCompanion.insert(
               mediaId: 'media-gp-1',
               status: const drift.Value('pending'),
+              creatorId: const drift.Value('test-user-1'),
             ),
           );
 
@@ -144,6 +145,7 @@ void main() {
       expect(entries.length, equals(1));
       expect(entries.first.mediaId, equals('media-gp-1'));
       expect(entries.first.status, equals('pending'));
+      expect(entries.first.creatorId, equals('test-user-1'));
 
       // Update to uploaded
       await (db.update(db.googlePhotosSyncEntries)
@@ -158,6 +160,7 @@ void main() {
       entries = await db.select(db.googlePhotosSyncEntries).get();
       expect(entries.first.status, equals('uploaded'));
       expect(entries.first.googlePhotosMediaId, equals('gp_item_999'));
+      expect(entries.first.creatorId, equals('test-user-1'));
     });
   });
 }

@@ -34,6 +34,12 @@ class GpsHardwareState {
   /// evidence (D-SPAT-001).
   final bool isLastKnownSeed;
 
+  /// True when a previously live fix has expired/timed out without a fresh
+  /// position stream emission. Represents the 6th normative fix-availability
+  /// state (live-gone-stale, AC-GPS-04) and blocks capture without conflating
+  /// with initial acquiring.
+  final bool isLiveFixStale;
+
   const GpsHardwareState({
     this.fixStatus = GPSFixStatus.searching,
     this.hasValidFix = false,
@@ -53,12 +59,13 @@ class GpsHardwareState {
     this.resolvedLocationLon,
     this.gnssSnapshot,
     this.isLastKnownSeed = false,
+    this.isLiveFixStale = false,
   });
 
   /// Capture eligibility requires a fix of live provenance. A last-known
   /// cached seed may power the map pin and HUD, but the shutter must treat it
   /// exactly like a missing fix (D-SPAT-001).
-  bool get hasLiveFix => hasValidFix && !isLastKnownSeed;
+  bool get hasLiveFix => hasValidFix && !isLastKnownSeed && !isLiveFixStale;
 
   bool get isSearching => fixStatus == GPSFixStatus.searching || !hasValidFix;
   bool get isDegraded => hasValidFix && fixStatus == GPSFixStatus.poor;
@@ -85,6 +92,7 @@ class GpsHardwareState {
     if (isPermissionUnknown) return GpsBlockReason.permissionUnknown;
     if (!isPermissionGranted) return GpsBlockReason.permissionDenied;
     if (isLastKnownSeed) return GpsBlockReason.lastKnownOnly;
+    if (isLiveFixStale) return GpsBlockReason.liveGoneStale;
     return GpsBlockReason.searching;
   }
 
@@ -130,6 +138,9 @@ class GpsHardwareState {
     if (isLastKnownSeed) {
       return 'GPS: Last known';
     }
+    if (isLiveFixStale) {
+      return 'GPS: Fix lost';
+    }
     return GPSUtils.formatStatusLabel(fixStatus, hasValidFix ? accuracyMeters : null);
   }
 
@@ -158,6 +169,7 @@ class GpsHardwareState {
     bool clearFix = false,
     bool clearError = false,
     bool? isLastKnownSeed,
+    bool? isLiveFixStale,
   }) {
     return GpsHardwareState(
       fixStatus: fixStatus ?? this.fixStatus,
@@ -180,6 +192,7 @@ class GpsHardwareState {
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
       gnssSnapshot: clearFix || clearGnss ? null : (gnssSnapshot ?? this.gnssSnapshot),
       isLastKnownSeed: clearFix ? false : (isLastKnownSeed ?? this.isLastKnownSeed),
+      isLiveFixStale: isLiveFixStale ?? this.isLiveFixStale,
     );
   }
 }

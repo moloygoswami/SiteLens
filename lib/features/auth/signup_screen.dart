@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/theme.dart';
 import '../../core/services/auth_service.dart';
+import '../../core/utils/auth_error_mapper.dart';
 import '../../shared/widgets/primary_button.dart';
 import '../settings/widgets/legal_doc_modal.dart';
 
@@ -37,20 +38,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
   }
 
   String _parseAuthError(Object error) {
-    final str = error.toString();
-    if (str.contains('email-already-in-use')) {
-      return 'An account already exists for this email address. Please sign in.';
-    }
-    if (str.contains('invalid-email')) {
-      return 'Please enter a valid work email address.';
-    }
-    if (str.contains('weak-password')) {
-      return 'Password is too weak. Please use at least 6 characters.';
-    }
-    if (str.contains('network-request-failed')) {
-      return 'Network connection failed. Please check your internet connection.';
-    }
-    return 'Sign up failed: ${str.replaceAll(RegExp(r'\[.*?\]'), '').trim()}';
+    return mapAuthErrorToMessage(error, context: AuthErrorContext.signUp);
   }
 
   Future<void> _handleSignUp() async {
@@ -204,30 +192,33 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                 const SizedBox(height: 24),
 
                 if (_errorMessage != null) ...[
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: AppColors.statusRedLight,
-                      borderRadius: BorderRadius.circular(AppRadii.md),
-                      border: Border.all(color: AppColors.statusRed.withAlpha(70)),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Icon(Icons.error_outline_rounded, color: AppColors.statusRed, size: 22),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            _errorMessage!,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: AppColors.statusRed,
-                              fontWeight: FontWeight.w500,
-                              height: 1.4,
+                  Semantics(
+                    liveRegion: true,
+                    child: Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: AppColors.statusRedLight,
+                        borderRadius: BorderRadius.circular(AppRadii.md),
+                        border: Border.all(color: AppColors.statusRed.withAlpha(70)),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.error_outline_rounded, color: AppColors.statusRed, size: 22),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              _errorMessage!,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                color: AppColors.statusRed,
+                                fontWeight: FontWeight.w500,
+                                height: 1.4,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                   const SizedBox(height: 20),
@@ -244,7 +235,9 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                 const SizedBox(height: 6),
                 TextFormField(
                   controller: _nameController,
+                  enabled: !_isLoading,
                   textCapitalization: TextCapitalization.words,
+                  textInputAction: TextInputAction.next,
                   decoration: InputDecoration(
                     hintText: 'John Doe',
                     prefixIcon: const Icon(Icons.person_outline_rounded, color: AppColors.textSecondary, size: 20),
@@ -284,7 +277,9 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                 const SizedBox(height: 6),
                 TextFormField(
                   controller: _emailController,
+                  enabled: !_isLoading,
                   keyboardType: TextInputType.emailAddress,
+                  textInputAction: TextInputAction.next,
                   autocorrect: false,
                   decoration: InputDecoration(
                     hintText: 'engineer@company.com',
@@ -328,7 +323,9 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                 const SizedBox(height: 6),
                 TextFormField(
                   controller: _passwordController,
+                  enabled: !_isLoading,
                   obscureText: _obscurePassword,
+                  textInputAction: TextInputAction.next,
                   decoration: InputDecoration(
                     hintText: 'At least 6 characters',
                     prefixIcon: const Icon(Icons.lock_outline_rounded, color: AppColors.textSecondary, size: 20),
@@ -338,7 +335,11 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                         color: AppColors.textSecondary,
                         size: 20,
                       ),
-                      onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                      tooltip: _obscurePassword ? 'Show password' : 'Hide password',
+                      constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                      onPressed: _isLoading
+                          ? null
+                          : () => setState(() => _obscurePassword = !_obscurePassword),
                     ),
                     filled: true,
                     fillColor: AppColors.surface,
@@ -376,7 +377,14 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                 const SizedBox(height: 6),
                 TextFormField(
                   controller: _confirmPasswordController,
+                  enabled: !_isLoading,
                   obscureText: _obscureConfirmPassword,
+                  textInputAction: TextInputAction.done,
+                  onFieldSubmitted: (_) {
+                    if (!_isLoading) {
+                      _handleSignUp();
+                    }
+                  },
                   decoration: InputDecoration(
                     hintText: 'Re-enter password',
                     prefixIcon: const Icon(Icons.lock_outline_rounded, color: AppColors.textSecondary, size: 20),
@@ -386,7 +394,11 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                         color: AppColors.textSecondary,
                         size: 20,
                       ),
-                      onPressed: () => setState(() => _obscureConfirmPassword = !_obscureConfirmPassword),
+                      tooltip: _obscureConfirmPassword ? 'Show password' : 'Hide password',
+                      constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                      onPressed: _isLoading
+                          ? null
+                          : () => setState(() => _obscureConfirmPassword = !_obscureConfirmPassword),
                     ),
                     filled: true,
                     fillColor: AppColors.surface,
@@ -418,23 +430,26 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     SizedBox(
-                      width: 24,
-                      height: 24,
+                      width: 48,
+                      height: 48,
                       child: Checkbox(
                         value: _agreedToTerms,
                         activeColor: AppColors.primary,
+                        materialTapTargetSize: MaterialTapTargetSize.padded,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(4),
                         ),
-                        onChanged: (val) {
-                          setState(() {
-                            _agreedToTerms = val ?? false;
-                            if (_agreedToTerms) _errorMessage = null;
-                          });
-                        },
+                        onChanged: _isLoading
+                            ? null
+                            : (val) {
+                                setState(() {
+                                  _agreedToTerms = val ?? false;
+                                  if (_agreedToTerms) _errorMessage = null;
+                                });
+                              },
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 4),
                     Expanded(
                       child: RichText(
                         text: TextSpan(
@@ -489,14 +504,22 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                       'Already have an account? ',
                       style: AppTypography.bodyMedium.copyWith(fontSize: 13, color: AppColors.textSecondary),
                     ),
-                    GestureDetector(
-                      onTap: () => Navigator.of(context).pop(),
-                      child: Text(
-                        'Sign In',
-                        style: AppTypography.bodyMedium.copyWith(
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.primary,
+                    Semantics(
+                      button: true,
+                      label: 'Sign In',
+                      child: InkWell(
+                        onTap: _isLoading ? null : () => Navigator.of(context).pop(),
+                        borderRadius: BorderRadius.circular(4),
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                          child: Text(
+                            'Sign In',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.primary,
+                            ),
+                          ),
                         ),
                       ),
                     ),

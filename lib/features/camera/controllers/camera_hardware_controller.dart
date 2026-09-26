@@ -165,11 +165,25 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
     final isFrontCamera = cameraDesc.lensDirection == CameraLensDirection.front;
     final resolvedFlashMode = isFrontCamera ? CameraFlashMode.off : state.flashMode;
 
-    final presetsToTry = [
-      (ResolutionPreset.max, true),
-      (ResolutionPreset.veryHigh, false),
-      (ResolutionPreset.high, false),
-    ];
+    bool canEnableAudio = true;
+    if (_permissionService != null) {
+      final micPerm = await _permissionService.checkMicrophonePermission();
+      if (!micPerm.isGranted && !micPerm.isLimited) {
+        canEnableAudio = false;
+      }
+    }
+
+    final presetsToTry = canEnableAudio
+        ? [
+            (ResolutionPreset.max, true),
+            (ResolutionPreset.veryHigh, false),
+            (ResolutionPreset.high, false),
+          ]
+        : [
+            (ResolutionPreset.max, false),
+            (ResolutionPreset.veryHigh, false),
+            (ResolutionPreset.high, false),
+          ];
 
     CameraController? initializedController;
     Object? lastError;
@@ -433,6 +447,12 @@ class CameraHardwareNotifier extends StateNotifier<CameraHardwareState> {
   }) async {
     if (_controller == null) return false;
     if (_service.isRecordingVideo(_controller) || state.isRecordingVideo) return false;
+    if (state.status != CameraStatus.ready) return false;
+
+    // Enforce critical capture invariants below UI boundary
+    if (recordingCreatorId == null || recordingCreatorId.isEmpty) return false;
+    if (recordingSiteId == null || recordingSiteId.isEmpty) return false;
+    if (recordingGpsState == null || !recordingGpsState.hasLiveFix) return false;
 
     try {
       await _service.startVideoRecording(_controller!);

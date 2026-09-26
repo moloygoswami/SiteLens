@@ -214,7 +214,8 @@ class MockSiteRepository implements SiteRepository {
   Future<SiteModel?> getSiteById(String id, {String? creatorId}) async => site.id == id ? site : null;
 
   @override
-  Future<void> saveSite(SiteModel site) async {}
+  Future<void> saveSite(SiteModel site, {String? creatorId}) async {}
+
 
   @override
   Future<void> deleteSite(String id, {String? creatorId}) async {}

@@ -8,6 +8,8 @@ const {
   handleUserEnquiry,
   VALID_CATEGORIES,
   extractClientIp,
+  GLOBAL_RATE_LIMIT_CAP,
+  GLOBAL_RATE_LIMIT_ALERT,
 } = require('../index.js');
 
 /**
@@ -164,18 +166,88 @@ describe('Backend: User Enquiry System', () => {
       }
     });
 
-    test('rejects invalid or unknown category', () => {
+    test('validates and accepts every currently supported category in VALID_CATEGORIES', () => {
+      for (const [catKey, expectedLabel] of Object.entries(VALID_CATEGORIES)) {
+        const payload = {
+          submissionId: 'test-uuid-1234-5678-abcdef',
+          name: 'Jane Doe',
+          email: 'jane@example.com',
+          category: catKey,
+          message: 'Valid category enquiry message comfortably over 10 chars.',
+        };
+        const result = validateEnquiryPayload(payload);
+        assert.strictEqual(result.category, catKey);
+        assert.strictEqual(result.categoryLabel, expectedLabel);
+      }
+    });
+
+    test('rejects prototype property constructor cleanly (vuln-0019)', () => {
       assert.throws(
         () =>
           validateEnquiryPayload({
             submissionId: 'test-uuid-1234',
             name: 'John',
             email: 'john@example.com',
-            category: 'unauthorized_hack_category',
+            category: 'constructor',
             message: '1234567890',
           }),
-        { code: 'invalid-argument' }
+        (err) => err.code === 'invalid-argument' && err.message.includes('Category must be one of')
       );
+    });
+
+    test('rejects prototype property toString cleanly (vuln-0019)', () => {
+      assert.throws(
+        () =>
+          validateEnquiryPayload({
+            submissionId: 'test-uuid-1234',
+            name: 'John',
+            email: 'john@example.com',
+            category: 'toString',
+            message: '1234567890',
+          }),
+        (err) => err.code === 'invalid-argument' && err.message.includes('Category must be one of')
+      );
+    });
+
+    test('rejects prototype property __proto__ cleanly (vuln-0019)', () => {
+      assert.throws(
+        () =>
+          validateEnquiryPayload({
+            submissionId: 'test-uuid-1234',
+            name: 'John',
+            email: 'john@example.com',
+            category: '__proto__',
+            message: '1234567890',
+          }),
+        (err) => err.code === 'invalid-argument' && err.message.includes('Category must be one of')
+      );
+    });
+
+    test('rejects other prototype properties and unknown categories (vuln-0019)', () => {
+      const invalidCategories = [
+        'valueOf',
+        'hasOwnProperty',
+        'isPrototypeOf',
+        'propertyIsEnumerable',
+        'toLocaleString',
+        'unauthorized_hack_category',
+        ' GENERAL ',
+        '',
+      ];
+      for (const badCategory of invalidCategories) {
+        assert.throws(
+          () =>
+            validateEnquiryPayload({
+              submissionId: 'test-uuid-1234',
+              name: 'John',
+              email: 'john@example.com',
+              category: badCategory,
+              message: '1234567890',
+            }),
+          (err) => err.code === 'invalid-argument' && err.message.includes('Category must be one of'),
+          `Expected bad category '${badCategory}' to be rejected`
+        );
+      }
     });
 
     test('rejects messages shorter than 10 characters', () => {
@@ -527,29 +599,29 @@ describe('Backend: User Enquiry System', () => {
       assert.strictEqual(ip2Res.success, true);
     });
 
-    test('enforces global non-IP aggregate rate limit across all callers', async () => {
+    test('one caller or abusive set cannot exhaust capacity for unrelated callers (vuln-0018 remediation)', async () => {
       const mockFetch = async () => ({
         ok: true,
         status: 200,
-        json: async () => ({ id: 're_global' }),
+        json: async () => ({ id: 're_global_no_dos' }),
       });
 
-      // Submit 100 requests across distinct IPs (1 request each, below 10/IP limit)
+      // Submit 100 requests across distinct IPs from automated traffic
       for (let i = 1; i <= 100; i++) {
         const ip = `10.0.${Math.floor(i / 250)}.${i % 250}`;
         const req = {
           app: { appId: 'com.sitelens.app' },
-          auth: { uid: `global_user_${i}` },
+          auth: { uid: `bulk_user_${i}` },
           rawRequest: {
             headers: { 'x-forwarded-for': ip },
             socket: { remoteAddress: ip },
           },
           data: {
-            submissionId: `sub-global-${i}`,
+            submissionId: `sub-bulk-${i}`,
             name: `User ${i}`,
             email: `user${i}@example.com`,
             category: 'general',
-            message: 'Testing global aggregate submission limits.',
+            message: 'Testing bulk submissions do not block unrelated callers.',
           },
         };
 
@@ -562,34 +634,411 @@ describe('Backend: User Enquiry System', () => {
         assert.strictEqual(res.success, true);
       }
 
-      // 101st request from a fresh IP and fresh UID must be rejected by global_total
-      const freshReq = {
+      // 101st request from a fresh IP and fresh UID (unrelated legitimate caller)
+      // MUST NOT be blocked by an arbitrary shared global counter!
+      const legitimateReq = {
         app: { appId: 'com.sitelens.app' },
-        auth: { uid: 'fresh_user_101' },
+        auth: { uid: 'legitimate_fresh_user_101' },
         rawRequest: {
           headers: { 'x-forwarded-for': '198.51.100.200' },
           socket: { remoteAddress: '198.51.100.200' },
         },
         data: {
-          submissionId: 'sub-global-101',
-          name: 'Fresh User',
-          email: 'fresh@example.com',
+          submissionId: 'sub-legitimate-101',
+          name: 'Legitimate Fresh User',
+          email: 'legit@example.com',
           category: 'general',
-          message: 'Should be blocked by global_total rate limit.',
+          message: 'This enquiry must be accepted despite previous bulk traffic.',
+        },
+      };
+
+      const legitimateRes = await handleUserEnquiry(legitimateReq, {
+        db: mockDb,
+        resendApiKey: 're_test_key',
+        fetch: mockFetch,
+        enforceAppCheck: true,
+      });
+      assert.strictEqual(legitimateRes.success, true);
+    });
+
+    test('enforces global non-IP aggregate rate limit (G=200, rejection at 201) and logs high-water alert at 160', async () => {
+      assert.strictEqual(GLOBAL_RATE_LIMIT_CAP, 200);
+      assert.strictEqual(GLOBAL_RATE_LIMIT_ALERT, 160);
+
+      const mockFetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ id: 're_global_200' }),
+      });
+
+      const warnLogs = [];
+      const originalWarn = console.warn;
+      console.warn = (...args) => {
+        warnLogs.push(args.join(' '));
+        originalWarn(...args);
+      };
+
+      try {
+        // Submit 200 requests across distinct IPs and distinct UIDs (below 10/IP and 5/UID limits)
+        for (let i = 1; i <= 200; i++) {
+          const ip = `10.2.${Math.floor(i / 250)}.${i % 250}`;
+          const req = {
+            app: { appId: 'com.sitelens.app' },
+            auth: { uid: `global_cap_user_${i}` },
+            rawRequest: {
+              headers: { 'x-forwarded-for': ip },
+              socket: { remoteAddress: ip },
+            },
+            data: {
+              submissionId: `sub-global-cap-${i}`,
+              name: `User ${i}`,
+              email: `globaluser${i}@example.com`,
+              category: 'general',
+              message: 'Testing three-tier global aggregate submission limits.',
+            },
+          };
+
+          const res = await handleUserEnquiry(req, {
+            db: mockDb,
+            resendApiKey: 're_test_key',
+            fetch: mockFetch,
+            enforceAppCheck: true,
+          });
+          assert.strictEqual(res.success, true);
+        }
+
+        // Verify high-water alert was logged starting at submission 160
+        const alertLogs = warnLogs.filter((log) =>
+          log.includes("[RateLimitAlert] High-water mark reached for 'global_total'")
+        );
+        assert.strictEqual(alertLogs.length >= 41, true, 'Alert should be emitted from request 160 to 200 (41 times)');
+        assert.match(alertLogs[0], /160\/200/);
+
+        // 201st request from a fresh IP and fresh UID must be rejected by global_total
+        const overLimitReq = {
+          app: { appId: 'com.sitelens.app' },
+          auth: { uid: 'over_limit_user_201' },
+          rawRequest: {
+            headers: { 'x-forwarded-for': '198.51.100.201' },
+            socket: { remoteAddress: '198.51.100.201' },
+          },
+          data: {
+            submissionId: 'sub-global-cap-201',
+            name: 'Over Limit User',
+            email: 'overlimit@example.com',
+            category: 'general',
+            message: 'Should be rejected at the 201st global submission threshold.',
+          },
+        };
+
+        await assert.rejects(
+          async () => {
+            await handleUserEnquiry(overLimitReq, {
+              db: mockDb,
+              resendApiKey: 're_test_key',
+              fetch: mockFetch,
+              enforceAppCheck: true,
+            });
+          },
+          (err) => {
+            assert.strictEqual(err.code, 'resource-exhausted');
+            assert.match(err.message, /Rate limit exceeded/);
+            return true;
+          }
+        );
+      } finally {
+        console.warn = originalWarn;
+      }
+    });
+
+    test('single abusive caller is throttled by granular tiers and cannot starve independent callers through global tier', async () => {
+      const mockFetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ id: 're_abusive_isolation' }),
+      });
+
+      const abusiveIp = '203.0.113.88';
+      const abusiveUid = 'abusive_flooder_uid';
+
+      // Abusive caller makes 15 attempts
+      // Attempts 1-5 succeed
+      for (let i = 1; i <= 5; i++) {
+        const req = {
+          app: { appId: 'com.sitelens.app' },
+          auth: { uid: abusiveUid },
+          rawRequest: {
+            headers: { 'x-forwarded-for': abusiveIp },
+            socket: { remoteAddress: abusiveIp },
+          },
+          data: {
+            submissionId: `sub-abusive-${i}`,
+            name: 'Abusive Flooder',
+            email: 'abuser@example.com',
+            category: 'general',
+            message: 'Flooding request attempt from single abuser.',
+          },
+        };
+        const res = await handleUserEnquiry(req, {
+          db: mockDb,
+          resendApiKey: 're_test_key',
+          fetch: mockFetch,
+          enforceAppCheck: true,
+        });
+        assert.strictEqual(res.success, true);
+      }
+
+      // Attempts 6 through 15 are blocked at the granular UID tier
+      for (let i = 6; i <= 15; i++) {
+        const req = {
+          app: { appId: 'com.sitelens.app' },
+          auth: { uid: abusiveUid },
+          rawRequest: {
+            headers: { 'x-forwarded-for': abusiveIp },
+            socket: { remoteAddress: abusiveIp },
+          },
+          data: {
+            submissionId: `sub-abusive-${i}`,
+            name: 'Abusive Flooder',
+            email: 'abuser@example.com',
+            category: 'general',
+            message: 'Flooding request attempt from single abuser.',
+          },
+        };
+        await assert.rejects(
+          async () => {
+            await handleUserEnquiry(req, {
+              db: mockDb,
+              resendApiKey: 're_test_key',
+              fetch: mockFetch,
+              enforceAppCheck: true,
+            });
+          },
+          { code: 'resource-exhausted' }
+        );
+      }
+
+      // Check global_total document in Firestore: it only recorded the 5 allowed attempts
+      const globalDoc = await mockDb.collection('_system_rate_limits').doc('enquiry_global_total').get();
+      assert.strictEqual(globalDoc.exists, true);
+      assert.strictEqual(globalDoc.data().timestamps.length, 5);
+
+      // An unrelated innocent caller on a distinct IP can submit with zero starvation
+      const innocentReq = {
+        app: { appId: 'com.sitelens.app' },
+        auth: { uid: 'innocent_bystander' },
+        rawRequest: {
+          headers: { 'x-forwarded-for': '198.51.100.77' },
+          socket: { remoteAddress: '198.51.100.77' },
+        },
+        data: {
+          submissionId: 'sub-innocent-bystander',
+          name: 'Innocent Bystander',
+          email: 'innocent@example.com',
+          category: 'general',
+          message: 'Legitimate request completely unblocked by abusive caller.',
+        },
+      };
+
+      const innocentRes = await handleUserEnquiry(innocentReq, {
+        db: mockDb,
+        resendApiKey: 're_test_key',
+        fetch: mockFetch,
+        enforceAppCheck: true,
+      });
+      assert.strictEqual(innocentRes.success, true);
+
+      // Global count is now 6
+      const globalDocAfter = await mockDb.collection('_system_rate_limits').doc('enquiry_global_total').get();
+      assert.strictEqual(globalDocAfter.data().timestamps.length, 6);
+    });
+
+    test('enforces per-caller rate limit across rotated IPs for authenticated user', async () => {
+      const mockFetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ id: 're_ip_rotation' }),
+      });
+
+      const singleUid = 'attacker_rotating_ips';
+
+      // Attacker uses 5 distinct IPs, each with 1 submission
+      for (let i = 1; i <= 5; i++) {
+        const rotatingIp = `192.0.2.${i}`;
+        const req = {
+          app: { appId: 'com.sitelens.app' },
+          auth: { uid: singleUid },
+          rawRequest: {
+            headers: { 'x-forwarded-for': rotatingIp },
+            socket: { remoteAddress: rotatingIp },
+          },
+          data: {
+            submissionId: `sub-rotated-${i}`,
+            name: 'Rotating Attacker',
+            email: 'attacker@example.com',
+            category: 'general',
+            message: 'Attempting to bypass rate limiting by rotating source IPs.',
+          },
+        };
+
+        const res = await handleUserEnquiry(req, {
+          db: mockDb,
+          resendApiKey: 're_test_key',
+          fetch: mockFetch,
+          enforceAppCheck: true,
+        });
+        assert.strictEqual(res.success, true);
+      }
+
+      // 6th attempt from a 6th distinct IP must still be BLOCKED by per-UID limit
+      const sixthReq = {
+        app: { appId: 'com.sitelens.app' },
+        auth: { uid: singleUid },
+        rawRequest: {
+          headers: { 'x-forwarded-for': '192.0.2.6' },
+          socket: { remoteAddress: '192.0.2.6' },
+        },
+        data: {
+          submissionId: 'sub-rotated-6',
+          name: 'Rotating Attacker',
+          email: 'attacker@example.com',
+          category: 'general',
+          message: '6th attempt from 6th IP should be rejected by uid limit.',
         },
       };
 
       await assert.rejects(
         async () => {
-          await handleUserEnquiry(freshReq, {
+          await handleUserEnquiry(sixthReq, {
             db: mockDb,
             resendApiKey: 're_test_key',
             fetch: mockFetch,
             enforceAppCheck: true,
           });
         },
-        { code: 'resource-exhausted' }
+        (err) => {
+          assert.strictEqual(err.code, 'resource-exhausted');
+          assert.match(err.message, /Rate limit exceeded\. Please wait/);
+          return true;
+        }
       );
+
+      // Meanwhile, an unrelated legitimate caller on that 6th IP still succeeds
+      const unrelatedReq = {
+        app: { appId: 'com.sitelens.app' },
+        auth: { uid: 'innocent_user_on_ip_6' },
+        rawRequest: {
+          headers: { 'x-forwarded-for': '192.0.2.6' },
+          socket: { remoteAddress: '192.0.2.6' },
+        },
+        data: {
+          submissionId: 'sub-innocent-ip-6',
+          name: 'Innocent User',
+          email: 'innocent@example.com',
+          category: 'general',
+          message: 'Legitimate message from distinct user on 6th IP.',
+        },
+      };
+
+      const unrelatedRes = await handleUserEnquiry(unrelatedReq, {
+        db: mockDb,
+        resendApiKey: 're_test_key',
+        fetch: mockFetch,
+        enforceAppCheck: true,
+      });
+      assert.strictEqual(unrelatedRes.success, true);
+    });
+
+    test('unauthenticated callers are rate-limited per-IP while unrelated IPs remain serviceable', async () => {
+      const mockFetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ id: 're_unauth_limits' }),
+      });
+
+      const ipA = '198.51.100.11';
+      const ipB = '198.51.100.22';
+
+      // 5 unauthenticated requests from ipA
+      for (let i = 1; i <= 5; i++) {
+        const req = {
+          app: { appId: 'com.sitelens.app' },
+          rawRequest: {
+            headers: { 'x-forwarded-for': ipA },
+            socket: { remoteAddress: ipA },
+          },
+          data: {
+            submissionId: `sub-unauth-a-${i}`,
+            name: 'Unauth User A',
+            email: 'unauth_a@example.com',
+            category: 'general',
+            message: 'Unauthenticated valid submission meeting length requirements.',
+          },
+        };
+        const res = await handleUserEnquiry(req, {
+          db: mockDb,
+          resendApiKey: 're_test_key',
+          fetch: mockFetch,
+          enforceAppCheck: true,
+        });
+        assert.strictEqual(res.success, true);
+      }
+
+      // 6th unauthenticated request from ipA must be rejected
+      const sixthReqA = {
+        app: { appId: 'com.sitelens.app' },
+        rawRequest: {
+          headers: { 'x-forwarded-for': ipA },
+          socket: { remoteAddress: ipA },
+        },
+        data: {
+          submissionId: 'sub-unauth-a-6',
+          name: 'Unauth User A',
+          email: 'unauth_a@example.com',
+          category: 'general',
+          message: 'Exceeding unauthenticated rate limit on IP A.',
+        },
+      };
+
+      await assert.rejects(
+        async () => {
+          await handleUserEnquiry(sixthReqA, {
+            db: mockDb,
+            resendApiKey: 're_test_key',
+            fetch: mockFetch,
+            enforceAppCheck: true,
+          });
+        },
+        (err) => {
+          assert.strictEqual(err.code, 'resource-exhausted');
+          assert.match(err.message, /Rate limit exceeded\. Please wait/);
+          return true;
+        }
+      );
+
+      // Unauthenticated caller from ipB is completely unaffected and succeeds
+      const reqB = {
+        app: { appId: 'com.sitelens.app' },
+        rawRequest: {
+          headers: { 'x-forwarded-for': ipB },
+          socket: { remoteAddress: ipB },
+        },
+        data: {
+          submissionId: 'sub-unauth-b-1',
+          name: 'Unauth User B',
+          email: 'unauth_b@example.com',
+          category: 'general',
+          message: 'Valid unauthenticated enquiry from unaffected IP B.',
+        },
+      };
+
+      const resB = await handleUserEnquiry(reqB, {
+        db: mockDb,
+        resendApiKey: 're_test_key',
+        fetch: mockFetch,
+        enforceAppCheck: true,
+      });
+      assert.strictEqual(resB.success, true);
     });
 
     test('rate-limit failure remains fail-closed when database transaction throws', async () => {
@@ -958,6 +1407,103 @@ describe('Backend: User Enquiry System', () => {
       assert.strictEqual(secondResponse.success, true);
       assert.strictEqual(secondResponse.idempotencyDuplicate, true);
       assert.strictEqual(emailSendCount, 1); // Email was NOT sent a second time!
+    });
+
+    test('rejects prototype-chain categories without unhandled TypeError or persistence (vuln-0019)', async () => {
+      let emailCallCount = 0;
+      const mockFetch = async () => {
+        emailCallCount++;
+        return { ok: true, status: 200, json: async () => ({ id: 're_123' }) };
+      };
+
+      const prototypeCategories = ['constructor', 'toString', '__proto__'];
+      for (const protoCat of prototypeCategories) {
+        const request = {
+          app: { appId: 'com.sitelens.app' },
+          auth: { uid: 'user_attacker' },
+          data: {
+            submissionId: `sub-proto-${protoCat}`,
+            name: 'Attacker',
+            email: 'attacker@example.com',
+            category: protoCat,
+            message: 'Testing prototype-chain injection resistance.',
+          },
+        };
+
+        await assert.rejects(
+          async () => {
+            await handleUserEnquiry(request, {
+              db: mockDb,
+              resendApiKey: 're_test_key',
+              fetch: mockFetch,
+              enforceAppCheck: true,
+            });
+          },
+          (err) => {
+            // Must be an HttpsError with code 'invalid-argument', NOT a TypeError or generic internal error
+            return err.code === 'invalid-argument' && err.message.includes('Category must be one of');
+          },
+          `Expected prototype category '${protoCat}' to throw invalid-argument HttpsError`
+        );
+
+        // Verify no enquiry was persisted
+        const savedDoc = await mockDb.collection('enquiries').doc(`sub-proto-${protoCat}`).get();
+        assert.strictEqual(savedDoc.exists, false, `Enquiry for ${protoCat} must not be saved to Firestore`);
+      }
+
+      // Verify no emails were dispatched
+      assert.strictEqual(emailCallCount, 0, 'No emails should be dispatched for prototype categories');
+    });
+
+    test('processes all valid categories end-to-end with persistence and email dispatch', async () => {
+      const dispatchedEmails = [];
+      const mockFetch = async (url, options) => {
+        const body = JSON.parse(options.body);
+        dispatchedEmails.push(body);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: `re_${dispatchedEmails.length}` }),
+        };
+      };
+
+      for (const [catKey, expectedLabel] of Object.entries(VALID_CATEGORIES)) {
+        const subId = `sub-valid-${catKey}`;
+        const request = {
+          app: { appId: 'com.sitelens.app' },
+          auth: { uid: `user_${catKey}` },
+          data: {
+            submissionId: subId,
+            name: `User for ${catKey}`,
+            email: `${catKey}@example.com`,
+            category: catKey,
+            message: `Detailed enquiry message for category ${catKey} exceeding ten chars.`,
+          },
+        };
+
+        const response = await handleUserEnquiry(request, {
+          db: mockDb,
+          resendApiKey: 're_test_key',
+          fetch: mockFetch,
+          enforceAppCheck: true,
+        });
+
+        assert.strictEqual(response.success, true);
+        assert.strictEqual(response.submissionId, subId);
+
+        // Verify Firestore persistence
+        const doc = await mockDb.collection('enquiries').doc(subId).get();
+        assert.strictEqual(doc.exists, true);
+        assert.strictEqual(doc.data().category, catKey);
+        assert.strictEqual(doc.data().categoryLabel, expectedLabel);
+      }
+
+      // All categories were dispatched
+      assert.strictEqual(dispatchedEmails.length, Object.keys(VALID_CATEGORIES).length);
+      for (let i = 0; i < dispatchedEmails.length; i++) {
+        const expectedLabel = Object.values(VALID_CATEGORIES)[i];
+        assert.strictEqual(dispatchedEmails[i].subject.includes(`[${expectedLabel}]`), true);
+      }
     });
   });
 });

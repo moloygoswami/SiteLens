@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/services/auth_service.dart';
@@ -70,8 +71,12 @@ class GooglePhotosSettingsNotifier extends StateNotifier<GooglePhotosSettings> {
   GooglePhotosSettings get currentSettings => state;
 
   Future<void> switchUser(String? newUserId, {bool isEmailVerified = false}) async {
+    final endingUid = _currentUserId;
     _currentUserId = newUserId;
     _isEmailVerified = isEmailVerified;
+    if (endingUid != null && endingUid != newUserId) {
+      await revokeAndClearForUser(endingUid);
+    }
     if (!_readyCompleter.isCompleted) {
       _readyCompleter.complete();
     }
@@ -132,9 +137,9 @@ class GooglePhotosSettingsNotifier extends StateNotifier<GooglePhotosSettings> {
         }
       });
 
-      // Listen to repository entry changes
+      // Listen to repository entry changes scoped to active creator
       _repoSub?.cancel();
-      _repoSub = _repository.watchAllEntries().listen((entries) {
+      _repoSub = _repository.watchAllEntries(creatorId: _currentUserId!).listen((entries) {
         if (!mounted) return;
         int pending = 0;
         int uploaded = 0;
@@ -166,11 +171,20 @@ class GooglePhotosSettingsNotifier extends StateNotifier<GooglePhotosSettings> {
   }
 
   Future<void> _refreshCounts() async {
-    if (!mounted) return;
-    final pending = await _repository.countByStatus(GooglePhotosSyncStatus.pending);
-    final uploading = await _repository.countByStatus(GooglePhotosSyncStatus.uploading);
-    final uploaded = await _repository.countByStatus(GooglePhotosSyncStatus.uploaded);
-    final failed = await _repository.countByStatus(GooglePhotosSyncStatus.failed);
+    if (!mounted || _currentUserId == null || !_isEmailVerified) {
+      if (mounted) {
+        state = state.copyWith(
+          pendingCount: 0,
+          uploadedCount: 0,
+          failedCount: 0,
+        );
+      }
+      return;
+    }
+    final pending = await _repository.countByStatus(GooglePhotosSyncStatus.pending, creatorId: _currentUserId!);
+    final uploading = await _repository.countByStatus(GooglePhotosSyncStatus.uploading, creatorId: _currentUserId!);
+    final uploaded = await _repository.countByStatus(GooglePhotosSyncStatus.uploaded, creatorId: _currentUserId!);
+    final failed = await _repository.countByStatus(GooglePhotosSyncStatus.failed, creatorId: _currentUserId!);
 
     if (!mounted) return;
     state = state.copyWith(
@@ -216,23 +230,37 @@ class GooglePhotosSettingsNotifier extends StateNotifier<GooglePhotosSettings> {
     }
   }
 
-  Future<void> disconnect() async {
+  /// Idempotently revokes the Google Photos grant and clears all user-scoped
+  /// Photos state for [uid]. Safe to call when no connection existed.
+  Future<void> revokeAndClearForUser(String uid) async {
     try {
       await _authService.disconnect();
-      if (_currentUserId != null) {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.remove(_getKey(keyOwnerUid));
-        await prefs.setBool(_getKey(keyConnected), false);
-        await prefs.remove(_getKey(keyEmail));
-      }
+    } catch (e) {
+      debugPrint('Google Photos revoke disconnect error for $uid: $e');
+    }
 
-      if (!mounted) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('${keyOwnerUid}_$uid');
+    await prefs.setBool('${keyConnected}_$uid', false);
+    await prefs.remove('${keyEmail}_$uid');
+    await prefs.remove('${keyAutoUpload}_$uid');
+
+    if (_currentUserId == uid && mounted) {
       state = state.copyWith(
         isConnected: false,
         clearAccountEmail: true,
         overallStatus: GooglePhotosSyncStatus.disabled,
         clearLastError: true,
       );
+    }
+  }
+
+  Future<void> disconnect() async {
+    try {
+      final uid = _currentUserId;
+      if (uid != null) {
+        await revokeAndClearForUser(uid);
+      }
     } catch (e) {
       if (!mounted) return;
       state = state.copyWith(lastError: 'Google Photos disconnect failed: $e');

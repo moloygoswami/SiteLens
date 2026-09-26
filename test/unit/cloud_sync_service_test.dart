@@ -202,7 +202,8 @@ class FakeSiteRepository implements SiteRepository {
   Future<SiteModel?> getSiteById(String id, {String? creatorId}) async => sites[id];
 
   @override
-  Future<void> saveSite(SiteModel site) async => sites[site.id] = site;
+  Future<void> saveSite(SiteModel site, {String? creatorId}) async => sites[site.id] = site;
+
 
   @override
   Future<List<SiteModel>> getAllSites({String? creatorId}) async => sites.values.toList();

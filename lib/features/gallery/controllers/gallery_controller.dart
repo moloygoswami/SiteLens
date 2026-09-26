@@ -92,7 +92,9 @@ final galleryViewModeProvider = StateProvider<GalleryViewMode>((ref) {
 final filteredGalleryMediaProvider = StreamProvider<List<MediaItem>>((ref) {
   final mediaRepo = ref.watch(mediaRepositoryProvider);
   final filter = ref.watch(galleryFilterProvider);
-  final activeSite = ref.watch(siteControllerProvider).activeSite;
+  final siteState = ref.watch(siteControllerProvider);
+  final activeSite = siteState.activeSite;
+  final siteMap = {for (final s in siteState.availableSites) s.id: s};
   String? currentUserId;
   try {
     final session = ref.watch(sessionServiceProvider);
@@ -112,14 +114,17 @@ final filteredGalleryMediaProvider = StreamProvider<List<MediaItem>>((ref) {
   // watchAllMedia strictly excludes is_deleted = 1 and scopes to active user session (vuln-0003)
   return mediaRepo.watchAllMedia(siteId: targetSiteId, creatorId: currentUserId).map((items) {
     return items.where((item) {
-      // 1. Metadata Search Filter
+      // 1. Metadata Search Filter (AC-GAL-04: site name, note text, reference code)
       if (filter.searchQuery != null && filter.searchQuery!.isNotEmpty) {
         final q = filter.searchQuery!.toLowerCase();
         final noteMatch = item.note?.toLowerCase().contains(q) ?? false;
         final activityMatch = item.activityTag?.toLowerCase().contains(q) ?? false;
         final obsMatch = item.observationType.label.toLowerCase().contains(q);
         final idMatch = item.id.toLowerCase().contains(q);
-        final siteMatch = item.siteId.toLowerCase().contains(q);
+        final site = siteMap[item.siteId];
+        final siteNameMatch = site?.name.toLowerCase().contains(q) ?? false;
+        final siteCodeMatch = site?.siteCode.toLowerCase().contains(q) ?? false;
+        final siteMatch = item.siteId.toLowerCase().contains(q) || siteNameMatch || siteCodeMatch;
 
         if (!noteMatch && !activityMatch && !obsMatch && !idMatch && !siteMatch) {
           return false;

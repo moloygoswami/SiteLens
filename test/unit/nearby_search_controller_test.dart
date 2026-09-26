@@ -857,26 +857,49 @@ void main() {
       expect(userAController.state.results.any((r) => r.item.id == 'item-B-owned'), isFalse);
     });
 
-    test('19. LAT-001: legacy NULL-creator co-located row is visible to an authenticated nearby search', () async {
-      // Pre-attribution legacy row: NULL creator_id, same site, same location.
-      await mediaRepo.insertMedia(MediaItem(
-        id: 'item-legacy-null-creator',
-        siteId: testSiteA,
-        originalUri: 'media/orig_legacy.jpg',
-        uri: 'media/evid_legacy.jpg',
-        thumbUri: 'media/thumb_legacy.jpg',
-        type: MediaItemType.photo,
-        lat: centerLat + (2.0 / 111320.0),
-        lon: centerLon,
-        accuracyM: 1.0,
-        lowAccuracy: false,
-        activityTag: 'Excavation',
-        observationType: ObservationType.progress,
-        capturedAt: DateTime.utc(2026, 8, 15, 11, 0, 0),
-        creatorId: null,
-        syncStatus: SyncStatusType.pending,
-        isDeleted: false,
-      ));
+    test('19. LAT-001: legacy NULL-creator co-located row is excluded from creator-scoped search', () async {
+      // Pre-attribution legacy row without creatorId cannot be inserted via repository
+      expect(
+        () => mediaRepo.insertMedia(MediaItem(
+          id: 'item-legacy-null-creator',
+          siteId: testSiteA,
+          originalUri: 'media/orig_legacy.jpg',
+          uri: 'media/evid_legacy.jpg',
+          thumbUri: 'media/thumb_legacy.jpg',
+          type: MediaItemType.photo,
+          lat: centerLat + (2.0 / 111320.0),
+          lon: centerLon,
+          accuracyM: 1.0,
+          lowAccuracy: false,
+          activityTag: 'Excavation',
+          observationType: ObservationType.progress,
+          capturedAt: DateTime.utc(2026, 8, 15, 11, 0, 0),
+          creatorId: null,
+          syncStatus: SyncStatusType.pending,
+          isDeleted: false,
+        )),
+        throwsA(isA<MediaIsolationException>()),
+      );
+
+      // Even if inserted via raw SQLite (representing pre-migration legacy row)
+      await db.into(db.media).insert(
+            MediaCompanion.insert(
+              id: 'item-legacy-null-creator',
+              siteId: drift.Value(testSiteA),
+              originalUri: const drift.Value('media/orig_legacy.jpg'),
+              uri: 'media/evid_legacy.jpg',
+              thumbUri: const drift.Value('media/thumb_legacy.jpg'),
+              type: const drift.Value('photo'),
+              lat: centerLat + (2.0 / 111320.0),
+              lon: centerLon,
+              accuracyM: const drift.Value(1.0),
+              lowAccuracy: const drift.Value(0),
+              activityTag: const drift.Value('Excavation'),
+              observationType: const drift.Value('progress'),
+              capturedAt: '2026-08-15T11:00:00Z',
+              creatorId: const drift.Value(null),
+            ),
+          );
 
       await mediaRepo.insertMedia(MediaItem(
         id: 'item-B-intruder',
@@ -906,8 +929,8 @@ void main() {
       );
 
       final ids = results.map((r) => r.item.id).toSet();
-      // NULL-creator legacy row stays visible (ownership parity with sync queries).
-      expect(ids.contains('item-legacy-null-creator'), isTrue);
+      // 02_ARCHITECTURE.MD §11.2: Unattributed record is NEVER exposed to creator-scoped queries
+      expect(ids.contains('item-legacy-null-creator'), isFalse);
       // Cross-creator isolation is unchanged.
       expect(ids.contains('item-B-intruder'), isFalse);
       // The source photo itself is still excluded.

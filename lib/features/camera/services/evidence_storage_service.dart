@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import '../../../core/utils/crypto_utils.dart';
+import '../../../domain/models/enums.dart';
 
 final evidenceStorageServiceProvider = Provider<EvidenceStorageService>((ref) {
   return EvidenceStorageService();
@@ -34,14 +35,59 @@ class EvidenceStorageService {
   String getEvidenceRelativePath(String mediaId) => 'media/evid_$mediaId.jpg';
   String getThumbnailRelativePath(String mediaId) => 'media/thumb_$mediaId.jpg';
 
-  // Resolves any relative path (e.g. "media/orig_xxx.jpg") to its absolute filesystem path
+  /// Resolves any relative path (e.g. "media/orig_xxx.jpg") to its absolute filesystem path.
+  /// Rejects null bytes and normalizes traversal sequences so the resolved target
+  /// resides strictly within the application-private base directory (AC-SECB-05, TM-U-17).
   Future<String> resolveAbsolutePath(String relativePath) async {
+    if (relativePath.contains('\x00')) {
+      throw ArgumentError('Path traversal rejected: null byte detected in path');
+    }
     final base = await getBaseDirectory();
-    final sanitized = relativePath
-        .replaceAll('\\', '/')
-        .replaceAll(RegExp(r'(\.\./|\.\.)'), '')
-        .replaceAll(RegExp(r'^/+'), '');
-    return '${base.path}/$sanitized';
+    var sanitized = relativePath.replaceAll('\\', '/');
+    sanitized = sanitized.replaceAll(RegExp(r'^/+'), '');
+    while (sanitized.contains('..')) {
+      sanitized = sanitized.replaceAll('..', '');
+    }
+    sanitized = sanitized.replaceAll(RegExp(r'/+'), '/');
+    if (sanitized.startsWith('/')) {
+      sanitized = sanitized.substring(1);
+    }
+    final target = '${base.path}/$sanitized';
+    if (!target.startsWith(base.path)) {
+      throw ArgumentError('Path traversal rejected: target path escapes base directory');
+    }
+    return target;
+  }
+
+  /// Forensically verifies an on-disk artifact against an expected SHA-256 hash (AC-EVID-08, TM-U-11).
+  /// Reads physical on-disk bytes, computes SHA-256, and compares with expected.
+  /// Returns [IntegrityVerificationResult]:
+  /// - verified: on-disk file exists, is read, and computed SHA-256 matches expected.
+  /// - unverified: on-disk file exists, but computed SHA-256 does NOT match expected.
+  /// - unavailable: on-disk file does not exist, or expected hash is null/empty.
+  Future<IntegrityVerificationResult> verifyArtifactIntegrity({
+    required String relativePath,
+    required String? expectedSha256,
+  }) async {
+    if (expectedSha256 == null || expectedSha256.trim().isEmpty) {
+      return IntegrityVerificationResult.unavailable;
+    }
+    try {
+      final absPath = await resolveAbsolutePath(relativePath);
+      final file = File(absPath);
+      if (!file.existsSync() || file.lengthSync() == 0) {
+        return IntegrityVerificationResult.unavailable;
+      }
+      final bytes = file.readAsBytesSync();
+      final computed = CryptoUtils.computeSha256(bytes);
+      if (computed.toLowerCase() == expectedSha256.trim().toLowerCase()) {
+        return IntegrityVerificationResult.verified;
+      } else {
+        return IntegrityVerificationResult.unverified;
+      }
+    } catch (_) {
+      return IntegrityVerificationResult.unavailable;
+    }
   }
 
   /// Atomically writes bytes to [targetFile] by first writing to a temporary file in the same directory,

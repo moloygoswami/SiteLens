@@ -347,6 +347,7 @@ void main() {
         linkedMediaId: null,
         note: 'Evid_ID: residual-item-999\nMaterial verified on truck',
         capturedAt: DateTime.utc(2026, 8, 15, 10, 0, 0),
+        creatorId: 'inspector-current-uid',
       );
 
       await mediaRepo.insertMedia(directItem);
@@ -504,7 +505,7 @@ void main() {
           );
 
       expect(
-        () => mediaRepo.linkMedia(mediaId: 'user1-closed-item', linkedMediaId: 'user2-nc-item'),
+        () => mediaRepo.linkMedia(mediaId: 'user1-closed-item', linkedMediaId: 'user2-nc-item', creatorId: 'user-1'),
         throwsA(
           isA<MediaPersistenceException>().having(
             (e) => e.message,
@@ -550,6 +551,7 @@ void main() {
           activityTag: 'Audit',
           observationType: ObservationType.closed,
           linkedMediaId: 'user2-nc-target',
+          creatorId: 'user-1',
         ),
         throwsA(
           isA<MediaPersistenceException>().having(

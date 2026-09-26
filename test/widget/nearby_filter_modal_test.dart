@@ -27,6 +27,7 @@ void main() {
 
   final sourceItem = MediaItem(
     id: 'source-1',
+    creatorId: 'user-nearby',
     siteId: testSiteId,
     originalUri: 'media/orig_source1.jpg',
     uri: 'media/evid_source1.jpg',
@@ -55,6 +56,7 @@ void main() {
     await db.into(db.sites).insert(
           SitesCompanion.insert(
             id: testSiteId,
+            creatorId: const drift.Value('user-nearby'),
             siteCode: const drift.Value('101'),
             name: const drift.Value('Test Site Alpha'),
             address: const drift.Value('123 Main Road'),

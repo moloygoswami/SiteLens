@@ -1,3 +1,4 @@
+import '../../../data/repositories/media_repository.dart';
 import '../../../domain/models/enums.dart';
 import '../../../domain/models/media_item.dart';
 
@@ -16,6 +17,9 @@ class ReviewTagState {
   final bool isSearchingSmartLink;
   final bool isSaving;
   final String? errorMessage;
+  final bool hasSiteOpenNonConformities;
+  final List<NearbyMediaResult> siteWideCandidates;
+  final bool isSiteWideSearchExpanded;
 
   const ReviewTagState({
     this.activityTag = '',
@@ -28,6 +32,9 @@ class ReviewTagState {
     this.isSearchingSmartLink = false,
     this.isSaving = false,
     this.errorMessage,
+    this.hasSiteOpenNonConformities = true,
+    this.siteWideCandidates = const [],
+    this.isSiteWideSearchExpanded = false,
   });
 
   bool get isLinked =>
@@ -49,6 +56,9 @@ class ReviewTagState {
     bool? isSaving,
     String? errorMessage,
     bool clearErrorMessage = false,
+    bool? hasSiteOpenNonConformities,
+    List<NearbyMediaResult>? siteWideCandidates,
+    bool? isSiteWideSearchExpanded,
   }) {
     return ReviewTagState(
       activityTag: activityTag ?? this.activityTag,
@@ -67,6 +77,11 @@ class ReviewTagState {
       isSearchingSmartLink: isSearchingSmartLink,
       isSaving: isSaving ?? this.isSaving,
       errorMessage: clearErrorMessage ? null : (errorMessage ?? this.errorMessage),
+      hasSiteOpenNonConformities:
+          hasSiteOpenNonConformities ?? this.hasSiteOpenNonConformities,
+      siteWideCandidates: siteWideCandidates ?? this.siteWideCandidates,
+      isSiteWideSearchExpanded:
+          isSiteWideSearchExpanded ?? this.isSiteWideSearchExpanded,
     );
   }
 }

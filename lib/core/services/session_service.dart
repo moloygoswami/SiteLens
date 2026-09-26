@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
 import 'permission_service.dart';
+import 'session_end_teardown.dart';
 
 enum SessionStatus {
   loading,
@@ -53,15 +54,58 @@ class UserSessionState {
 class SessionService extends StateNotifier<UserSessionState> with WidgetsBindingObserver {
   final AuthService _authService;
   final Ref _ref;
+  final List<SessionEndTeardown> _sessionEndTeardowns;
   StreamSubscription<AuthUser?>? _authSubscription;
   static const String _onboardingPrefix = 'sitelens_onboarding_completed_';
 
   Future<SessionVerificationResult>? _activeVerificationFuture;
   bool _isDisposed = false;
 
-  SessionService(this._authService, this._ref)
-      : super(const UserSessionState(status: SessionStatus.loading)) {
+  /// Monotonic session-generation token (`02_ARCHITECTURE.MD` §6.2,
+  /// `04_SECURITY.MD` §9).
+  ///
+  /// Advanced on every session transition — a new sign-in, a sign-out, or an
+  /// authoritative invalidation. Any asynchronous work that began under an
+  /// earlier generation is discarded on arrival, so a stale result produced for
+  /// a previous session can never become authoritative for the current one.
+  int _sessionGeneration = 0;
+
+  /// The current session generation. See [_sessionGeneration].
+  int get sessionGeneration => _sessionGeneration;
+
+  /// Whether [generation] is still the active session generation.
+  bool isCurrentGeneration(int generation) => generation == _sessionGeneration;
+
+  SessionService(
+    this._authService,
+    this._ref, {
+    List<SessionEndTeardown> sessionEndTeardowns = const [],
+  })  : _sessionEndTeardowns = sessionEndTeardowns,
+        super(const UserSessionState(status: SessionStatus.loading)) {
     _init();
+  }
+
+  /// Awaits every registered [SessionEndTeardown] for [endingUid], logging but
+  /// never rethrowing individual teardown failures so that session termination
+  /// remains deterministic and the user is never left in a partial state.
+  Future<void> _runSessionEndTeardowns(String endingUid) async {
+    for (final teardown in _sessionEndTeardowns) {
+      try {
+        await teardown.onSessionEnded(endingUid);
+      } catch (e) {
+        debugPrint('SessionEndTeardown error for uid $endingUid: $e');
+      }
+    }
+  }
+
+  /// Opens a new session generation, superseding every in-flight operation that
+  /// was tagged with the previous one. Returns the new generation.
+  int _beginSessionTransition() {
+    _sessionGeneration++;
+    // A verification in flight for the previous generation must never be
+    // shared with, or awaited by, the new one.
+    _activeVerificationFuture = null;
+    return _sessionGeneration;
   }
 
   void _init() {
@@ -79,7 +123,8 @@ class SessionService extends StateNotifier<UserSessionState> with WidgetsBinding
         isOnboardingCompleted: false,
       );
     } else {
-      _evaluateUserState(initial).then((_) {
+      final generation = _sessionGeneration;
+      _evaluateUserState(initial, generation).then((_) {
         if (mounted && !_isDisposed && state.user != null) {
           unawaited(verifySession());
         }
@@ -88,14 +133,25 @@ class SessionService extends StateNotifier<UserSessionState> with WidgetsBinding
 
     _authSubscription = _authService.authStateChanges.listen((authUser) async {
       if (!mounted || _isDisposed) return;
+      final endingUid = state.user?.uid;
+      final generation = _beginSessionTransition();
       if (authUser == null) {
-        state = const UserSessionState(
-          status: SessionStatus.unauthenticated,
-          user: null,
-          isOnboardingCompleted: false,
-        );
+        if (endingUid != null) {
+          await _runSessionEndTeardowns(endingUid);
+        }
+        if (!mounted || _isDisposed) return;
+        // A trailing sign-out echo after an authoritative termination
+        // (invalidateSession already cleared the user and recorded its
+        // reason) must neither re-run teardown nor clobber the reason.
+        if (state.user == null && state.status == SessionStatus.unauthenticated) {
+          return;
+        }
+        _applyUnauthenticatedState();
       } else {
-        await _evaluateUserState(authUser);
+        if (endingUid != null && endingUid != authUser.uid) {
+          await _runSessionEndTeardowns(endingUid);
+        }
+        await _evaluateUserState(authUser, generation);
       }
     }, onError: (err) {
       if (!mounted || _isDisposed) return;
@@ -106,6 +162,15 @@ class SessionService extends StateNotifier<UserSessionState> with WidgetsBinding
         errorMessage: err.toString(),
       );
     });
+  }
+
+  void _applyUnauthenticatedState() {
+    if (_isDisposed || !mounted) return;
+    state = const UserSessionState(
+      status: SessionStatus.unauthenticated,
+      user: null,
+      isOnboardingCompleted: false,
+    );
   }
 
   @override
@@ -134,8 +199,9 @@ class SessionService extends StateNotifier<UserSessionState> with WidgetsBinding
       return const SessionVerificationResult.networkUnreachable();
     }
 
-    if (_activeVerificationFuture != null) {
-      return await _activeVerificationFuture!;
+    final existing = _activeVerificationFuture;
+    if (existing != null) {
+      return await existing;
     }
 
     final future = _runVerification();
@@ -143,13 +209,23 @@ class SessionService extends StateNotifier<UserSessionState> with WidgetsBinding
     try {
       return await future;
     } finally {
-      _activeVerificationFuture = null;
+      // Only clear the slot if it still holds this future; a session transition
+      // may already have superseded it.
+      if (identical(_activeVerificationFuture, future)) {
+        _activeVerificationFuture = null;
+      }
     }
   }
 
   Future<SessionVerificationResult> _runVerification() async {
+    final generation = _sessionGeneration;
     final result = await _authService.verifySession();
     if (_isDisposed || !mounted) return result;
+
+    // A result produced for a superseded session generation is not
+    // authoritative for the current session and must not drive its state
+    // (`02_ARCHITECTURE.MD` §6.2).
+    if (!isCurrentGeneration(generation)) return result;
 
     if (!result.isValid && !result.isNetworkUnreachable) {
       await invalidateSession(
@@ -202,6 +278,17 @@ class SessionService extends StateNotifier<UserSessionState> with WidgetsBinding
     required SessionTerminationReason reason,
     String? message,
   }) async {
+    // Capture the ending identity before it can be superseded, then advance
+    // the generation so any in-flight work tagged with the prior generation
+    // is discarded on arrival rather than applied on top of this termination
+    // (`02_ARCHITECTURE.MD` §6.2, `04_SECURITY.MD` §9).
+    final endingUid = state.user?.uid;
+    _beginSessionTransition();
+
+    if (endingUid != null) {
+      await _runSessionEndTeardowns(endingUid);
+    }
+
     try {
       await _authService.signOut();
     } catch (e) {
@@ -219,7 +306,23 @@ class SessionService extends StateNotifier<UserSessionState> with WidgetsBinding
     );
   }
 
-  Future<void> _evaluateUserState(AuthUser authUser) async {
+  Future<void> _evaluateUserState(AuthUser authUser, int generation) async {
+    // Authoritative session boundary (`04_SECURITY.MD` §2, `05_ACCEPTANCE.MD`
+    // AC-AUTH-04/AC-AUTH-05). Every accepted application session — email or
+    // Google sign-in, persisted-session restoration, cold start, or any auth
+    // state hydration — funnels through here, so gating on the identity's
+    // `emailVerified` claim at this single point prevents an unverified user
+    // from obtaining an accepted session by bypassing the UI. No partial
+    // authenticated state is created: the identity is torn down and the session
+    // is rejected.
+    if (!authUser.isEmailVerified) {
+      await invalidateSession(
+        reason: SessionTerminationReason.emailNotVerified,
+        message: kEmailNotVerifiedExceptionMessage,
+      );
+      return;
+    }
+
     bool isCompleted = false;
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -233,6 +336,7 @@ class SessionService extends StateNotifier<UserSessionState> with WidgetsBinding
       }
 
       if (!mounted || _isDisposed) return;
+      if (!isCurrentGeneration(generation)) return;
       if (_authService.currentUser?.uid != authUser.uid ||
           state.terminationReason != null) {
         return;
@@ -253,6 +357,7 @@ class SessionService extends StateNotifier<UserSessionState> with WidgetsBinding
       }
     } catch (e) {
       if (!mounted || _isDisposed) return;
+      if (!isCurrentGeneration(generation)) return;
       if (_authService.currentUser?.uid != authUser.uid ||
           state.terminationReason != null) {
         return;
@@ -309,5 +414,6 @@ class SessionService extends StateNotifier<UserSessionState> with WidgetsBinding
 final sessionServiceProvider =
     StateNotifierProvider<SessionService, UserSessionState>((ref) {
   final authService = ref.watch(authServiceProvider);
-  return SessionService(authService, ref);
+  final teardowns = ref.watch(sessionEndTeardownsProvider);
+  return SessionService(authService, ref, sessionEndTeardowns: teardowns);
 });

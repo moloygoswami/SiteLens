@@ -127,6 +127,7 @@ void main() {
 
   final testPhotoItem = MediaItem(
     id: 'm1',
+    creatorId: 'test-inspector-uid',
     siteId: 'site-alpha',
     type: MediaItemType.photo,
     uri: 'media/evid_m1.jpg',
@@ -148,6 +149,7 @@ void main() {
 
   final testSyncedPhotoItem = MediaItem(
     id: 'm2',
+    creatorId: 'test-inspector-uid',
     siteId: 'site-alpha',
     type: MediaItemType.photo,
     uri: 'media/evid_m2.jpg',
@@ -169,6 +171,7 @@ void main() {
 
   final testSyncedVideoItem = MediaItem(
     id: 'v1',
+    creatorId: 'test-inspector-uid',
     siteId: 'site-alpha',
     type: MediaItemType.video,
     uri: 'media/orig_v1.mp4',
@@ -216,6 +219,7 @@ void main() {
       await db.into(db.media).insert(
             MediaCompanion.insert(
               id: item.id,
+              creatorId: drift.Value(item.creatorId),
               siteId: drift.Value(item.siteId),
               type: drift.Value(item.type.name),
               uri: item.uri,
@@ -493,6 +497,7 @@ void main() {
       // Seed a closed item linked to testPhotoItem ('m1')
       final closedItem = MediaItem(
         id: 'm_closed_1',
+        creatorId: 'test-inspector-uid',
         siteId: 'site-alpha',
         type: MediaItemType.photo,
         uri: 'media/evid_m1.jpg',
@@ -515,6 +520,7 @@ void main() {
       await db.into(db.media).insert(
             MediaCompanion.insert(
               id: closedItem.id,
+              creatorId: drift.Value(closedItem.creatorId),
               siteId: drift.Value(closedItem.siteId),
               type: drift.Value(closedItem.type.name),
               uri: closedItem.uri,
@@ -558,7 +564,7 @@ void main() {
       expect(find.text('LINKED BEFORE EVIDENCE (NON-CONFORMITY)'), findsNothing);
 
       // Verify database record has linkedMediaId == null and Evid_ID removed from note
-      final persisted = await mediaRepo.getMediaById('m_closed_1');
+      final persisted = await mediaRepo.getMediaById('m_closed_1', creatorId: 'test-inspector-uid');
       expect(persisted, isNotNull);
       expect(persisted!.observationType, equals(ObservationType.general));
       expect(persisted.linkedMediaId, isNull);
@@ -1367,7 +1373,8 @@ class MockSiteRepository implements SiteRepository {
       site.id == id ? site : null;
 
   @override
-  Future<void> saveSite(SiteModel site) async {}
+  Future<void> saveSite(SiteModel site, {String? creatorId}) async {}
+
 
   @override
   Future<void> deleteSite(String id, {String? creatorId}) async {}

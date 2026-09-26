@@ -11,6 +11,7 @@ final gpsSettingsProvider =
 
 class GpsSettingsNotifier extends StateNotifier<GpsSettings> {
   static const String keyLowAccuracyThreshold = 'setting_gps_low_accuracy_threshold';
+  static const String keyHighAccuracyMode = 'setting_gps_high_accuracy_mode';
   static const double defaultThreshold = AppConstants.gpsDefaultLowAccuracyThresholdMeters;
 
   // Standard preset thresholds for user convenience
@@ -24,11 +25,24 @@ class GpsSettingsNotifier extends StateNotifier<GpsSettings> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final savedVal = prefs.getDouble(keyLowAccuracyThreshold);
-      if (savedVal != null && savedVal > 0) {
-        state = GpsSettings(lowAccuracyThresholdMeters: savedVal);
-      }
+      final savedHighAcc = prefs.getBool(keyHighAccuracyMode);
+      state = GpsSettings(
+        lowAccuracyThresholdMeters: (savedVal != null && savedVal > 0) ? savedVal : defaultThreshold,
+        highAccuracyMode: savedHighAcc ?? true,
+      );
     } catch (e) {
       debugPrint('[GpsSettingsNotifier] Error loading GPS settings: $e');
+    }
+  }
+
+  Future<void> setHighAccuracyMode(bool enabled) async {
+    if (state.highAccuracyMode == enabled) return;
+    state = state.copyWith(highAccuracyMode: enabled);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(keyHighAccuracyMode, enabled);
+    } catch (e) {
+      debugPrint('[GpsSettingsNotifier] Error persisting high accuracy mode: $e');
     }
   }
 

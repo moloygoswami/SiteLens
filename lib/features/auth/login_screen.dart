@@ -4,11 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/theme.dart';
 import '../../app/router.dart';
 import '../../core/services/auth_service.dart';
+import '../../core/utils/auth_error_mapper.dart';
 import '../../shared/utils/responsive_layout.dart';
 import '../../shared/widgets/app_drawer_icon.dart';
 import '../../shared/widgets/primary_button.dart';
 import '../settings/widgets/legal_doc_modal.dart';
-import 'signup_screen.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -43,33 +43,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   }
 
   String _parseAuthError(Object error) {
+    // A pending-verification account carries a provider message that must be
+    // surfaced verbatim so the inline "Resend Verification Email" affordance
+    // remains available (PRD §9.1, AC-AUTH-06).
     if (error is EmailNotVerifiedException) {
       return error.message;
     }
-    final str = error.toString();
-    if (str.contains('email-not-verified')) {
-      return 'Please verify your email address before signing in. Check your inbox for the verification link.';
-    }
-    if (str.contains('CONFIGURATION_NOT_FOUND') || str.contains('configuration-not-found')) {
-      return 'Firebase Authentication notice: The Email/Password sign-in provider is not yet enabled in the Firebase Console.\n\n'
-          'To resolve:\n'
-          '1. Open Firebase Console (project: sitelens-prod-80e7b)\n'
-          '2. Navigate to Authentication > Sign-in method\n'
-          '3. Enable "Email/Password" and save.';
-    }
-    if (str.contains('user-not-found') ||
-        str.contains('wrong-password') ||
-        str.contains('invalid-credential') ||
-        str.contains('user-disabled')) {
-      return 'Invalid email or password. Please verify your credentials.';
-    }
-    if (str.contains('invalid-email')) {
-      return 'Please enter a valid work email address.';
-    }
-    if (str.contains('network-request-failed')) {
-      return 'Network connection failed. Please check your internet connection.';
-    }
-    return 'Authentication failed: ${str.replaceAll(RegExp(r'\[.*?\]'), '').trim()}';
+    // All remaining failures are mapped by the shared, anti-enumeration-safe
+    // utility so that "no such account" and "wrong password" are
+    // indistinguishable (AC-AUTH-08).
+    return mapAuthErrorToMessage(error, context: AuthErrorContext.signIn);
   }
 
   Future<void> _handleResendVerification() async {
@@ -243,7 +226,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   const SizedBox(height: 6),
                   TextFormField(
                     controller: resetEmailController,
+                    enabled: !isSending,
                     keyboardType: TextInputType.emailAddress,
+                    textInputAction: TextInputAction.done,
                     autofocus: true,
                     decoration: InputDecoration(
                       hintText: 'name@company.com',
@@ -287,6 +272,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     onPressed: isSending ? null : () => Navigator.of(dialogCtx).pop(),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 12),
+                      minimumSize: const Size(0, 48),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(AppRadii.sm),
                       ),
@@ -343,6 +329,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 12),
+                      minimumSize: const Size(0, 48),
                       elevation: 0,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(AppRadii.sm),
@@ -544,51 +531,55 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
         // Error message banner
         if (_errorMessage != null) ...[
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: AppColors.statusRedLight,
-              borderRadius: BorderRadius.circular(AppRadii.md),
-              border: Border.all(color: AppColors.statusRed.withAlpha(70)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Icon(Icons.error_outline_rounded, color: AppColors.statusRed, size: 22),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        _errorMessage!,
-                        style: const TextStyle(fontSize: 13, color: AppColors.statusRed, fontWeight: FontWeight.w500, height: 1.4),
+          Semantics(
+            liveRegion: true,
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: AppColors.statusRedLight,
+                borderRadius: BorderRadius.circular(AppRadii.md),
+                border: Border.all(color: AppColors.statusRed.withAlpha(70)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.error_outline_rounded, color: AppColors.statusRed, size: 22),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          _errorMessage!,
+                          style: const TextStyle(fontSize: 13, color: AppColors.statusRed, fontWeight: FontWeight.w500, height: 1.4),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (_errorMessage!.contains('not been verified') || _errorMessage!.contains('verify your email')) ...[
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _isResendingVerification ? null : _handleResendVerification,
+                        icon: _isResendingVerification
+                            ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.send_rounded, size: 14),
+                        label: const Text(
+                          'Resend Verification Email',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppColors.statusRed,
+                          side: const BorderSide(color: AppColors.statusRed),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          minimumSize: const Size(double.infinity, 48),
+                        ),
                       ),
                     ),
                   ],
-                ),
-                if (_errorMessage!.contains('not been verified') || _errorMessage!.contains('verify your email')) ...[
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: _isResendingVerification ? null : _handleResendVerification,
-                      icon: _isResendingVerification
-                          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Icon(Icons.send_rounded, size: 14),
-                      label: const Text(
-                        'Resend Verification Email',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.statusRed,
-                        side: const BorderSide(color: AppColors.statusRed),
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                      ),
-                    ),
-                  ),
                 ],
-              ],
+              ),
             ),
           ),
           const SizedBox(height: 20),
@@ -605,7 +596,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         const SizedBox(height: 6),
         TextFormField(
           controller: _emailController,
+          enabled: !_isLoading && !_isGoogleLoading,
           keyboardType: TextInputType.emailAddress,
+          textInputAction: TextInputAction.next,
           autocorrect: false,
           decoration: InputDecoration(
             hintText: 'name@company.com',
@@ -646,14 +639,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 fontWeight: FontWeight.w700,
               ),
             ),
-            GestureDetector(
-              onTap: _showForgotPasswordDialog,
-              child: const Text(
-                'Forgot Password?',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.primary,
+            Semantics(
+              button: true,
+              label: 'Forgot Password',
+              child: InkWell(
+                onTap: (_isLoading || _isGoogleLoading) ? null : _showForgotPasswordDialog,
+                borderRadius: BorderRadius.circular(4),
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                  child: Text(
+                    'Forgot Password?',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.primary,
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -662,7 +663,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         const SizedBox(height: 6),
         TextFormField(
           controller: _passwordController,
+          enabled: !_isLoading && !_isGoogleLoading,
           obscureText: _obscurePassword,
+          textInputAction: TextInputAction.done,
+          onFieldSubmitted: (_) {
+            if (!_isLoading && !_isGoogleLoading) {
+              _handleEmailSignIn();
+            }
+          },
           decoration: InputDecoration(
             hintText: 'Enter password',
             prefixIcon: const Icon(Icons.lock_outline_rounded, color: AppColors.textSecondary, size: 20),
@@ -672,7 +680,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 color: AppColors.textSecondary,
                 size: 20,
               ),
-              onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+              tooltip: _obscurePassword ? 'Show password' : 'Hide password',
+              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+              onPressed: (_isLoading || _isGoogleLoading)
+                  ? null
+                  : () => setState(() => _obscurePassword = !_obscurePassword),
             ),
             filled: true,
             fillColor: AppColors.surface,
@@ -704,23 +716,26 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             SizedBox(
-              width: 24,
-              height: 24,
+              width: 48,
+              height: 48,
               child: Checkbox(
                 value: _agreedToTerms,
                 activeColor: AppColors.primary,
+                materialTapTargetSize: MaterialTapTargetSize.padded,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(4),
                 ),
-                onChanged: (val) {
-                  setState(() {
-                    _agreedToTerms = val ?? false;
-                    if (_agreedToTerms) _errorMessage = null;
-                  });
-                },
+                onChanged: (_isLoading || _isGoogleLoading)
+                    ? null
+                    : (val) {
+                        setState(() {
+                          _agreedToTerms = val ?? false;
+                          if (_agreedToTerms) _errorMessage = null;
+                        });
+                      },
               ),
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 4),
             Expanded(
               child: RichText(
                 text: TextSpan(
@@ -777,18 +792,26 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 'New to SiteLens? ',
                 style: AppTypography.bodyMedium.copyWith(fontSize: 13, color: AppColors.textSecondary),
               ),
-              GestureDetector(
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const SignupScreen()),
-                  );
-                },
-                child: Text(
-                  'Create an Account',
-                  style: AppTypography.bodyMedium.copyWith(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.primary,
+              Semantics(
+                button: true,
+                label: 'Create an Account',
+                child: InkWell(
+                  onTap: (_isLoading || _isGoogleLoading)
+                      ? null
+                      : () {
+                          Navigator.of(context).pushNamed(AppRoutes.signup);
+                        },
+                  borderRadius: BorderRadius.circular(4),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                    child: Text(
+                      'Create an Account',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.primary,
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -825,6 +848,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           style: OutlinedButton.styleFrom(
             backgroundColor: AppColors.surface,
             foregroundColor: AppColors.textPrimary,
+            minimumSize: const Size(double.infinity, 48),
             padding: const EdgeInsets.symmetric(vertical: 14),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(AppRadii.md),

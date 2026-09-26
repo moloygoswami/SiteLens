@@ -68,7 +68,8 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     with WidgetsBindingObserver, RouteAware {
   late CameraUiState _uiState;
   Timer? _countdownTimer;
-  bool _isExecutingCapture = false;
+  final _shutterGuard = ShutterReentrancyGuard();
+  bool get _isExecutingCapture => _shutterGuard.isExecuting;
   bool _isRecoveringInterruptedRecording = false;
 
   /// True while a covering [PageRoute] (gallery / video evidence / fullscreen /
@@ -109,7 +110,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     _subscribedRoute = null;
     _countdownTimer?.cancel();
     _countdownTimer = null;
-    _isExecutingCapture = false;
+    _shutterGuard.release();
     _isRecoveringInterruptedRecording = false;
     _isCoveredByRoute = false;
     WidgetsBinding.instance.removeObserver(this);
@@ -373,6 +374,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
   }
 
   void _handleToggleFlash() {
+    if (ref.read(cameraHardwareProvider).isRecordingVideo) return;
     final nextFlash = CameraFlashMode.values[
         (_uiState.flashMode.index + 1) % CameraFlashMode.values.length];
     setState(() {
@@ -461,16 +463,13 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     required String siteName,
     required bool isCapturePermitted,
   }) async {
-    if (_isExecutingCapture) return;
-
     final cameraState = ref.read(cameraHardwareProvider);
     final isVideo = _uiState.captureMode == CameraCaptureMode.video;
 
     // Video Recording Toggle Flow
     if (isVideo) {
       if (cameraState.isRecordingVideo) {
-        if (_isExecutingCapture) return;
-        _isExecutingCapture = true;
+        if (!_shutterGuard.tryAcquire()) return;
         if (mounted) setState(() {});
         try {
           // Stop recording
@@ -618,32 +617,29 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
             );
           }
         } finally {
-          _isExecutingCapture = false;
+          _shutterGuard.release();
           if (mounted) setState(() {});
         }
       } else {
         // Start recording
-        if (!isCapturePermitted) return;
-        // Simulation mode has no real camera — never start a "recording" that
-        // cannot produce valid evidence.
-        if (ref.read(cameraHardwareProvider).status == CameraStatus.unavailable) {
-          ScaffoldMessenger.of(context).removeCurrentSnackBar();
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Camera access is required to record video evidence.',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
-              ),
-              duration: Duration(seconds: 4),
-              behavior: SnackBarBehavior.floating,
-              backgroundColor: AppColors.surface,
-            ),
-          );
+        if (!isCapturePermitted) {
+          final activeSite = ref.read(siteControllerProvider).activeSite;
+          final currentUserId = ref.read(authServiceProvider).currentUser?.uid;
+          if (currentUserId == null || currentUserId.isEmpty) {
+            _showAuthRequired();
+          } else if (activeSite == null || activeSite.id.isEmpty) {
+            _showActiveSiteRequired();
+          } else if (ref.read(cameraHardwareProvider).status != CameraStatus.ready) {
+            _showCameraNotReady(ref.read(cameraHardwareProvider).status);
+          } else if (!gpsHardware.hasLiveFix) {
+            _showGpsCaptureBlocked();
+          }
           return;
         }
+
         // R12: recording start uses the same authoritative capture mutex as the
         // photo/stop paths, so a rapid double-tap cannot dispatch two starts.
-        _isExecutingCapture = true;
+        if (!_shutterGuard.tryAcquire()) return;
         if (mounted) setState(() {});
         try {
           final currentUserId = ref.read(authServiceProvider).currentUser?.uid;
@@ -655,7 +651,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
             recordingCreatorId: currentUserId,
           );
         } finally {
-          _isExecutingCapture = false;
+          _shutterGuard.release();
           if (mounted) setState(() {});
         }
         return;
@@ -663,6 +659,18 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     }
 
     if (!mounted || !isCapturePermitted) {
+      if (!mounted) return;
+      final activeSite = ref.read(siteControllerProvider).activeSite;
+      final currentUserId = ref.read(authServiceProvider).currentUser?.uid;
+      if (currentUserId == null || currentUserId.isEmpty) {
+        _showAuthRequired();
+      } else if (activeSite == null || activeSite.id.isEmpty) {
+        _showActiveSiteRequired();
+      } else if (ref.read(cameraHardwareProvider).status != CameraStatus.ready) {
+        _showCameraNotReady(ref.read(cameraHardwareProvider).status);
+      } else if (!gpsHardware.hasLiveFix) {
+        _showGpsCaptureBlocked();
+      }
       return;
     }
 
@@ -789,6 +797,74 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     );
   }
 
+  void _showAuthRequired() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Authentication required to capture evidence.',
+          style: TextStyle(fontFamily: 'monospace', fontSize: 11),
+        ),
+        backgroundColor: AppColors.statusAmber,
+        duration: Duration(seconds: 3),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  void _showActiveSiteRequired() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Active site required — select a site to capture evidence.',
+          style: TextStyle(fontFamily: 'monospace', fontSize: 11),
+        ),
+        backgroundColor: AppColors.statusAmber,
+        duration: Duration(seconds: 3),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  void _showCameraNotReady(CameraStatus currentCameraStatus) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
+    final String message;
+    if (currentCameraStatus == CameraStatus.permissionPermanentlyDenied) {
+      message = 'Camera permission blocked. Enable in settings to capture evidence.';
+    } else if (currentCameraStatus == CameraStatus.permissionRestricted) {
+      message = 'Camera access restricted by device policy.';
+    } else if (currentCameraStatus == CameraStatus.unavailable) {
+      message = 'Optical sensor is unavailable on this device.';
+    } else if (currentCameraStatus == CameraStatus.error) {
+      message = 'Camera hardware error. Restore camera to capture evidence.';
+    } else {
+      message = 'Camera access is required to capture evidence.';
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.warning_amber_rounded, color: AppColors.statusAmber, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+              ),
+            ),
+          ],
+        ),
+        duration: const Duration(seconds: 4),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: AppColors.surface,
+      ),
+    );
+  }
+
   /// Truthful feedback when a capture is refused because no LIVE fix exists
   /// (a cached/last-known seed is display-only and never unlocks capture).
   void _showGpsCaptureBlocked() {
@@ -812,13 +888,27 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     required String siteCode,
     required String siteName,
   }) async {
-    if (_isExecutingCapture) return;
-    _isExecutingCapture = true;
+    if (!_shutterGuard.tryAcquire()) return;
     if (mounted) {
       setState(() {});
     }
 
     try {
+      final activeSite = ref.read(siteControllerProvider).activeSite;
+      final currentUserId = ref.read(authServiceProvider).currentUser?.uid;
+      if (currentUserId == null || currentUserId.isEmpty) {
+        _showAuthRequired();
+        return;
+      }
+      if (activeSite == null || activeSite.id.isEmpty) {
+        _showActiveSiteRequired();
+        return;
+      }
+      if (ref.read(cameraHardwareProvider).status != CameraStatus.ready) {
+        _showCameraNotReady(ref.read(cameraHardwareProvider).status);
+        return;
+      }
+
       // Read the CURRENT GPS authority at the capture instant — never a
       // press-time snapshot. A fix lost during a countdown must not be sealed
       // (R02/R03).
@@ -835,7 +925,6 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       // The single production selection authority applies the best recent LIVE
       // position: cached seeds are excluded from selection by provenance and an
       // unestablished altitude is never substituted (R06/R10).
-      final currentUserId = ref.read(authServiceProvider).currentUser?.uid;
       final gpsSettings = ref.read(gpsSettingsProvider);
       final gpsNotifier = ref.read(gpsHardwareProvider.notifier);
       final effectiveGps = GpsHardwareNotifier.applyBestRecentPosition(
@@ -1025,7 +1114,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
         );
       }
     } finally {
-      _isExecutingCapture = false;
+      _shutterGuard.release();
       if (mounted) {
         setState(() {});
       }
@@ -1103,12 +1192,19 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       resolvedAddress: addressMatchesFix ? gpsHardware.resolvedLocationName : null,
     );
 
+    final hasActiveSite = activeSite != null && activeSite.id.isNotEmpty;
+    final currentUserId = ref.watch(authServiceProvider).currentUser?.uid;
+    final hasAuthenticatedCreator = currentUserId != null && currentUserId.isNotEmpty;
+
     // Combined Capture Readiness Decision:
-    // (Camera ready OR fallback mode) AND a LIVE GPS fix AND GPS != searching.
-    // Readiness uses live-fix provenance, not merely a latched fix: a
-    // cached/last-known seed is display-only and MUST NOT unlock capture.
-    final isCameraFunctional = cameraHardware.isReady || cameraHardware.isUnavailable;
+    // Camera MUST be ready (optical sensor available & initialized; camera
+    // unavailability never implicitly authorizes capture).
+    // An authenticated creator and valid active site are required.
+    // A live GPS fix is required; cached/stale/last-known GPS never unlocks capture.
+    final isCameraFunctional = cameraHardware.isReady;
     final isCapturePermitted = isCameraFunctional &&
+        hasAuthenticatedCreator &&
+        hasActiveSite &&
         gpsHardware.hasLiveFix &&
         gpsHardware.fixStatus != GPSFixStatus.searching;
 
@@ -1176,8 +1272,11 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
               ),
               cameraStatus: cameraHardware.status,
               isCapturePermitted: isCapturePermitted,
+              hasAuthenticatedCreator: hasAuthenticatedCreator,
+              hasActiveSite: hasActiveSite,
               isRecordingVideo: cameraHardware.isRecordingVideo,
               recordingDurationFormatted: cameraHardware.recordingDurationFormatted,
+              recordingHasAudioTrack: cameraHardware.recordingHasAudioTrack,
               isExecutingCapture: _isExecutingCapture,
               onShutterPressed: () => _handleShutterPressed(
                 gpsHardware: gpsHardware,

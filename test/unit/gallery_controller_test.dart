@@ -271,7 +271,7 @@ void main() {
       expect(items.length, equals(3));
 
       // Soft delete m1
-      await mediaRepo.softDeleteMedia('m1');
+      await mediaRepo.softDeleteMedia('m1', creatorId: 'user-alpha');
       await Future<void>.delayed(const Duration(milliseconds: 50));
       
       items = await container.read(filteredGalleryMediaProvider.future);
@@ -352,7 +352,7 @@ void main() {
 
       // Trigger another stream emission (unrelated update) and verify the order is
       // unchanged across reloads/emissions
-      await mediaRepo.updateSyncStatus('tie-b', SyncStatusType.synced);
+      await mediaRepo.updateSyncStatus('tie-b', SyncStatusType.synced, creatorId: 'user-alpha');
       await Future<void>.delayed(const Duration(milliseconds: 50));
       items = await container.read(filteredGalleryMediaProvider.future);
       expect(
@@ -388,7 +388,8 @@ class MockSiteRepository implements SiteRepository {
   Future<SiteModel?> getSiteById(String id, {String? creatorId}) async => site.id == id ? site : null;
 
   @override
-  Future<void> saveSite(SiteModel site) async {}
+  Future<void> saveSite(SiteModel site, {String? creatorId}) async {}
+
 
   @override
   Future<void> deleteSite(String id, {String? creatorId}) async {}

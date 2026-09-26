@@ -80,7 +80,7 @@ class _MediaTagEditModalState extends ConsumerState<MediaTagEditModal> {
   Future<void> _loadLinkedCandidate() async {
     setState(() => _isSearchingCandidate = true);
     final repo = ref.read(mediaRepositoryProvider);
-    final candidate = await repo.getMediaById(_linkedMediaId!);
+    final candidate = await repo.getMediaById(_linkedMediaId!, creatorId: widget.item.creatorId);
     if (!mounted) return;
     final dist = candidate != null
         ? SpatialMathUtils.haversineDistanceMeters(
@@ -235,7 +235,9 @@ class _MediaTagEditModalState extends ConsumerState<MediaTagEditModal> {
         observationType: _selectedObservation,
         note: validated.note,
         linkedMediaId: validated.linkedMediaId,
+        creatorId: widget.item.creatorId,
       );
+
 
       if (mounted) {
         Navigator.of(context).pop(true);

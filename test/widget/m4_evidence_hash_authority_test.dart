@@ -58,6 +58,13 @@ class TestEvidenceStorageService implements EvidenceStorageService {
       '${Directory.systemTemp.path}/$relativePath';
 
   @override
+  Future<IntegrityVerificationResult> verifyArtifactIntegrity({
+    required String relativePath,
+    required String? expectedSha256,
+  }) async =>
+      IntegrityVerificationResult.verified;
+
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
@@ -73,7 +80,8 @@ class TestSiteRepository implements SiteRepository {
       sites.where((s) => s.id == id).firstOrNull;
 
   @override
-  Future<void> saveSite(SiteModel site) async {}
+  Future<void> saveSite(SiteModel site, {String? creatorId}) async {}
+
 
   @override
   Future<void> deleteSite(String id, {String? creatorId}) async {}

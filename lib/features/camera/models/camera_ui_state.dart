@@ -204,6 +204,8 @@ class GpsUiFixture {
         return 'Location service is off — enable it to capture evidence';
       case GpsBlockReason.lastKnownOnly:
         return 'Last known location only — waiting for a live GPS fix';
+      case GpsBlockReason.liveGoneStale:
+        return 'GPS fix lost — waiting for a live GPS fix';
       case GpsBlockReason.searching:
       case null:
         break;
@@ -218,6 +220,7 @@ class GpsUiFixture {
     if (blockReason == GpsBlockReason.permissionUnknown) return 'GPS: Unknown';
     if (blockReason == GpsBlockReason.serviceDisabled) return 'GPS: Off';
     if (blockReason == GpsBlockReason.lastKnownOnly) return 'GPS: Last known';
+    if (blockReason == GpsBlockReason.liveGoneStale) return 'GPS: Fix lost';
     if (isSearching) return 'GPS: Searching…';
     final accStr = accuracyMeters != null
         ? '±${accuracyMeters! == accuracyMeters!.roundToDouble() ? accuracyMeters!.toInt() : accuracyMeters!.toStringAsFixed(1)}m'

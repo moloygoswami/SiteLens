@@ -3,6 +3,8 @@ import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
+import '../../../core/constants/app_constants.dart';
+import '../../../core/controllers/gps_settings_controller.dart';
 import '../../../core/services/geocoding_service.dart';
 import '../../../core/utils/gps_utils.dart';
 import '../../../core/utils/haversine.dart';
@@ -18,7 +20,13 @@ final gpsHardwareProvider =
     StateNotifierProvider.autoDispose<GpsHardwareNotifier, GpsHardwareState>((ref) {
   final service = ref.watch(locationHardwareServiceProvider);
   final geocodingService = ref.watch(geocodingServiceProvider);
-  return GpsHardwareNotifier(service, geocodingService: geocodingService);
+  final gpsSettings = ref.watch(gpsSettingsProvider);
+  return GpsHardwareNotifier(
+    service,
+    geocodingService: geocodingService,
+    lowAccuracyThresholdMeters: gpsSettings.lowAccuracyThresholdMeters,
+    highAccuracyMode: gpsSettings.highAccuracyMode,
+  );
 });
 
 /// A buffered position together with its capture provenance and the altitude
@@ -51,6 +59,8 @@ class BufferedGpsPosition {
 class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
   final LocationHardwareService _service;
   final GeocodingService? _geocodingService;
+  final double lowAccuracyThresholdMeters;
+  final bool highAccuracyMode;
   StreamSubscription<Position>? _positionSubscription;
   Timer? _stalenessTimer;
   DateTime? _lastEmitTime;
@@ -84,6 +94,8 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
   GpsHardwareNotifier(
     this._service, {
     GeocodingService? geocodingService,
+    this.lowAccuracyThresholdMeters = AppConstants.gpsDefaultLowAccuracyThresholdMeters,
+    this.highAccuracyMode = true,
   })  : _geocodingService = geocodingService,
         super(const GpsHardwareState()) {
     initialize();
@@ -162,7 +174,7 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
   void _startStream() {
     _positionSubscription?.cancel();
     _isStreamPausedByLifecycle = false;
-    _positionSubscription = _service.getPositionStream().listen(
+    _positionSubscription = _service.getPositionStream(highAccuracy: highAccuracyMode).listen(
       (position) {
         _processPosition(position);
       },
@@ -253,7 +265,11 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
     }
     _lastEmitTime = now;
 
-    final fixStatus = GPSUtils.evaluateAccuracy(position.accuracy, hasFix: true);
+    final fixStatus = GPSUtils.evaluateAccuracy(
+      position.accuracy,
+      hasFix: true,
+      lowAccuracyThresholdMeters: lowAccuracyThresholdMeters,
+    );
 
     // Bearing 0.0 is the plugin's "unavailable" sentinel, not an established
     // north: geolocator_android's LocationMapper only puts `heading` into the
@@ -279,6 +295,7 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
     state = state.copyWith(
       fixStatus: fixStatus,
       hasValidFix: true,
+      isLiveFixStale: false,
       latitude: position.latitude,
       longitude: position.longitude,
       altitudeMeters: altitudeMeters,
@@ -409,7 +426,7 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
       if (elapsed >= stalenessTimeout) {
         _stalenessTimer?.cancel();
         _stalenessTimer = null;
-        setStaleOrSearching();
+        setStaleOrSearching(isLiveGoneStale: true);
       }
     });
   }
@@ -432,13 +449,14 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
     }
   }
 
-  void setStaleOrSearching() {
+  void setStaleOrSearching({bool isLiveGoneStale = false}) {
     _stalenessTimer?.cancel();
     _stalenessTimer = null;
     _recentPositions.clear();
     state = state.copyWith(
       fixStatus: GPSFixStatus.searching,
       hasValidFix: false,
+      isLiveFixStale: isLiveGoneStale,
       clearFix: true,
     );
   }
@@ -505,6 +523,7 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
         fixStatus: GPSFixStatus.searching,
         hasValidFix: false,
         isLastKnownSeed: false,
+        isLiveFixStale: false,
         clearFix: true,
       );
       return;
@@ -533,6 +552,7 @@ class GpsHardwareNotifier extends StateNotifier<GpsHardwareState> {
         fixStatus: GPSFixStatus.searching,
         hasValidFix: false,
         isLastKnownSeed: false,
+        isLiveFixStale: false,
         clearFix: true,
       );
     }

@@ -61,9 +61,10 @@ class MockEvidenceStorageService extends EvidenceStorageService {
 
 class FailingInsertMediaRepository implements MediaRepository {
   @override
-  Future<void> insertMedia(MediaItem item) async {
+  Future<void> insertMedia(MediaItem item, {String? creatorId}) async {
     throw Exception('Simulated SQLite insert failure');
   }
+
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -114,6 +115,7 @@ void main() {
       capturedAtUtc: DateTime.utc(2026, 8, 15, 2, 24, 55),
       canonicalTimestampUtc: '2026-08-15 02:24:55 UTC',
       resolvedAddress: 'Sonar Kella Apartment, Kolkata',
+      creatorId: 'user-001',
     );
 
     final validPayload = ProcessedEvidencePayload(
@@ -315,8 +317,9 @@ void main() {
       expect(item.creatorId, 'user-42');
 
       // The row is queryable through the repository (the gallery's data source).
-      final viaRepo = await mediaRepo.getMediaById('interrupted-video-1');
+      final viaRepo = await mediaRepo.getMediaById('interrupted-video-1', creatorId: 'user-42');
       expect(viaRepo, isNotNull);
+
       expect(viaRepo!.type, MediaItemType.video);
       expect(viaRepo.syncStatus, SyncStatusType.pending);
     });
@@ -377,8 +380,9 @@ void main() {
       expect(item.observationType, ObservationType.progress);
       expect(item.note, 'Poured foundation curing as expected');
 
-      final persisted = await mediaRepo.getMediaById('interrupted-video-1');
+      final persisted = await mediaRepo.getMediaById('interrupted-video-1', creatorId: 'user-42');
       expect(persisted, isNotNull);
+
       expect(persisted!.activityTag, 'Foundation Inspection');
     });
 
@@ -711,21 +715,22 @@ void main() {
       await seedRow(id: 'm-pending-del', status: SyncStatusType.pending, deleted: false);
       await seedRow(id: 'm-failed-del', status: SyncStatusType.failed, deleted: false);
 
-      await mediaRepo.deletePermanently('m-pending-del');
-      await mediaRepo.deletePermanently('m-failed-del');
+      await mediaRepo.deletePermanently('m-pending-del', creatorId: 'user-1');
+      await mediaRepo.deletePermanently('m-failed-del', creatorId: 'user-1');
 
       // Rows survive as hidden tombstones so the B-1 pipeline can always
       // reconcile the cloud ledger (or verify it never existed). Physical row
       // removal would strand an already-published ledger as live forever.
-      final pendingRow = await mediaRepo.getMediaById('m-pending-del');
+      final pendingRow = await mediaRepo.getMediaById('m-pending-del', creatorId: 'user-1');
       expect(pendingRow, isNotNull);
       expect(pendingRow!.isDeleted, isTrue);
       expect(pendingRow.syncStatus, SyncStatusType.pending);
 
-      final failedRow = await mediaRepo.getMediaById('m-failed-del');
+      final failedRow = await mediaRepo.getMediaById('m-failed-del', creatorId: 'user-1');
       expect(failedRow, isNotNull);
       expect(failedRow!.isDeleted, isTrue);
       expect(failedRow.syncStatus, SyncStatusType.failed);
+
 
       // Both are discoverable by the tombstone synchronization.
       final candidates = await mediaRepo.getTombstoneSyncCandidates(creatorId: 'user-1');

@@ -6,6 +6,8 @@ import '../../../core/utils/crypto_utils.dart';
 import '../../../data/repositories/site_repository.dart';
 import '../../../domain/models/enums.dart';
 import '../../../domain/models/media_item.dart';
+import '../utils/sync_utils.dart';
+export '../utils/sync_utils.dart';
 
 class PermanentSyncException implements Exception {
   final String message;
@@ -110,7 +112,11 @@ class CloudSyncService {
 
       // 2. Firestore: Metadata Document Sync (Create / Update / Conflict Check)
       // Must execute BEFORE storage uploads so Storage Security Rules can verify doc creator_id (vuln-0001)
-      await _ensureFirestoreDocSynced(item, currentUserId);
+      await _ensureFirestoreDocSynced(
+        item,
+        currentUserId,
+        tolerateAbsentLedger: true,
+      );
 
       // 3. Storage: Original File Upload (Idempotent)
       await _ensureOriginalUploaded(item, origFile);
@@ -391,16 +397,34 @@ class CloudSyncService {
     await storageRef.putFile(thumbFile, metadata);
   }
 
-  Future<void> _ensureFirestoreDocSynced(MediaItem item, String currentUserId) async {
+  Future<void> _ensureFirestoreDocSynced(
+    MediaItem item,
+    String currentUserId, {
+    bool tolerateAbsentLedger = false,
+  }) async {
     final docRef = _firestore
         .collection('sites')
         .doc(item.siteId)
         .collection('media')
         .doc(item.id);
 
-    final snapshot = await docRef.get();
+    DocumentSnapshot<Map<String, dynamic>>? snapshot;
+    try {
+      snapshot = await docRef.get();
+    } on FirebaseException catch (e) {
+      // P2-E Finding 2: for the artifact-publication path, a permission-denied
+      // on a non-existent media document is indistinguishable from absence.
+      // Treat it as "not yet published" and fall through to set(); the server
+      // still validates the write via its Create rule. Tombstone path keeps
+      // strict semantics by passing tolerateAbsentLedger: false (default).
+      if (tolerateAbsentLedger && e.code == 'permission-denied') {
+        snapshot = null;
+      } else {
+        rethrow;
+      }
+    }
 
-    if (!snapshot.exists) {
+    if (snapshot == null || !snapshot.exists) {
       // 1. Create new evidence document
       final payload = {
         'id': item.id,
@@ -605,15 +629,11 @@ class CloudSyncService {
         );
       }
 
-      // Check for mutable differences
-      final updates = <String, dynamic>{};
-      if (data['note'] != item.note) updates['note'] = item.note;
-      if (data['activity_tag'] != item.activityTag) updates['activity_tag'] = item.activityTag;
-      if (data['observation_type'] != item.observationType.name) updates['observation_type'] = item.observationType.name;
-      if (data['linked_media_id'] != item.linkedMediaId) updates['linked_media_id'] = item.linkedMediaId;
-      if (data['is_deleted'] != item.isDeleted) updates['is_deleted'] = item.isDeleted;
+      // Check for mutable differences using normative field set
+      final updates = computeMutableFieldDiff(data, item);
 
       if (updates.isNotEmpty) {
+        validateMutableFieldUpdate(updates);
         updates['updated_at'] = FieldValue.serverTimestamp();
         await docRef.update(updates);
       }

@@ -29,7 +29,7 @@ final googlePhotosApiServiceProvider = Provider<GooglePhotosApiService>((ref) {
 class GooglePhotosApiService {
   final GooglePhotosAuthService _authService;
   final HttpClient _httpClient;
-  String? _cachedAlbumId;
+  final Map<String, String?> _cachedAlbumIds = {};
 
   GooglePhotosApiService({
     required GooglePhotosAuthService authService,
@@ -150,15 +150,25 @@ class GooglePhotosApiService {
 
   static const String keyAlbumId = 'setting_google_photos_album_id';
 
+  String _albumCacheKey(String? ownerUid) => ownerUid ?? '';
+
+  String _albumPrefsKey(String? ownerUid) =>
+      ownerUid != null ? '${keyAlbumId}_$ownerUid' : keyAlbumId;
+
   /// Gets or creates the 'SiteLens Evidence' album and returns its ID.
-  Future<String?> getOrCreateAlbum(String albumTitle) async {
-    if (_cachedAlbumId != null) return _cachedAlbumId;
+  /// [ownerUid] scopes the cached/persisted album ID so a second user never
+  /// inherits the first user's album.
+  Future<String?> getOrCreateAlbum(String albumTitle, {String? ownerUid}) async {
+    final cacheKey = _albumCacheKey(ownerUid);
+    final cached = _cachedAlbumIds[cacheKey];
+    if (cached != null) return cached;
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      final persistedId = prefs.getString(keyAlbumId);
+      final prefsKey = _albumPrefsKey(ownerUid);
+      final persistedId = prefs.getString(prefsKey);
       if (persistedId != null && persistedId.isNotEmpty) {
-        _cachedAlbumId = persistedId;
+        _cachedAlbumIds[cacheKey] = persistedId;
         return persistedId;
       }
 
@@ -181,8 +191,8 @@ class GooglePhotosApiService {
         final data = jsonDecode(responseBody) as Map<String, dynamic>;
         final id = data['id'] as String?;
         if (id != null && id.isNotEmpty) {
-          _cachedAlbumId = id;
-          await prefs.setString(keyAlbumId, id);
+          _cachedAlbumIds[cacheKey] = id;
+          await prefs.setString(prefsKey, id);
           return id;
         }
       }
@@ -193,11 +203,13 @@ class GooglePhotosApiService {
   }
 
   /// Invalidates cached album ID if Google Photos reports invalid/deleted album.
-  Future<void> invalidateAlbumId() async {
-    _cachedAlbumId = null;
+  /// Pass [ownerUid] to scope the invalidation to one user; omit to clear the
+  /// legacy global entry.
+  Future<void> invalidateAlbumId({String? ownerUid}) async {
+    _cachedAlbumIds.remove(_albumCacheKey(ownerUid));
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(keyAlbumId);
+      await prefs.remove(_albumPrefsKey(ownerUid));
     } catch (_) {}
   }
 

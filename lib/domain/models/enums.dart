@@ -164,3 +164,11 @@ enum AppMapType {
   }
 }
 
+enum IntegrityVerificationResult {
+  verified,
+  unverified,
+  unavailable;
+
+  String get label => name.toUpperCase();
+}
+

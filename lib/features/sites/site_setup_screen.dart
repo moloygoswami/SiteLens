@@ -348,22 +348,66 @@ class _SiteSetupScreenState extends ConsumerState<SiteSetupScreen> {
     }
 
     if (siteState.availableSites.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.location_off_rounded, size: 48, color: AppColors.textMuted),
-            const SizedBox(height: 12),
-            const Text('No cached sites found'),
-            const SizedBox(height: 12),
-            ElevatedButton(
-              onPressed: () => _showAddCustomSiteDialog(currentUserId),
-              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
-              child: const Text('Add Offline Site'),
+      // AC-SITE-07 / PRD §9.3: zero local sites must distinguish four genuinely
+      // different conditions — offline, hydration failure, a genuine
+      // zero-sites result, and an in-flight hydration — they never collapse
+      // into one another.
+      if (!siteState.isOnline) {
+        return _buildStatusPanel(
+          icon: Icons.cloud_off_rounded,
+          iconColor: AppColors.textMuted,
+          title: "You're offline",
+          message:
+              'No sites are cached on this device yet. Create a site manually to keep capturing — it will sync when you are back online.',
+          primaryLabel: 'Create Site Manually',
+          onPrimary: () => _showAddCustomSiteDialog(currentUserId),
+        );
+      }
+
+      switch (siteState.hydrationStatus) {
+        case SiteHydrationStatus.failed:
+          return _buildStatusPanel(
+            icon: Icons.sync_problem_rounded,
+            iconColor: AppColors.statusRed,
+            title: "Couldn't load your sites",
+            message:
+                'Something went wrong while loading your sites from the cloud. Check your connection and try again.',
+            primaryLabel: 'Retry',
+            primaryIcon: Icons.refresh_rounded,
+            onPrimary: () {
+              ref.read(siteControllerProvider.notifier).loadSitesAndActiveContext(
+                    currentUserId: currentUserId,
+                  );
+            },
+            secondaryLabel: 'Create Site Manually',
+            onSecondary: () => _showAddCustomSiteDialog(currentUserId),
+          );
+        case SiteHydrationStatus.hydrated:
+        case SiteHydrationStatus.idle:
+          return _buildStatusPanel(
+            icon: Icons.apartment_rounded,
+            iconColor: AppColors.primary,
+            title: 'No sites yet',
+            message: 'Create your first site to start capturing evidence.',
+            primaryLabel: 'Create Site',
+            primaryIcon: Icons.add_rounded,
+            onPrimary: () => _showAddCustomSiteDialog(currentUserId),
+          );
+        case SiteHydrationStatus.hydrating:
+          return const Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 12),
+                Text(
+                  'Loading your sites…',
+                  style: AppTypography.bodyMedium,
+                ),
+              ],
             ),
-          ],
-        ),
-      );
+          );
+      }
     }
 
     return ListView.separated(
@@ -385,6 +429,80 @@ class _SiteSetupScreenState extends ConsumerState<SiteSetupScreen> {
           onDelete: () => _confirmDeleteSite(site, currentUserId),
         );
       },
+    );
+  }
+
+  /// Shared status panel for the zero-local-site states (offline, hydration
+  /// failure, genuine empty). Rounded card, icon + title + message, and a
+  /// primary action with an optional secondary action.
+  Widget _buildStatusPanel({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String message,
+    required String primaryLabel,
+    IconData? primaryIcon,
+    required VoidCallback onPrimary,
+    String? secondaryLabel,
+    VoidCallback? onSecondary,
+  }) {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(AppRadii.card),
+            border: Border.all(color: AppColors.border, width: 1),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceContainer,
+                  borderRadius: BorderRadius.circular(AppRadii.lg),
+                ),
+                child: Icon(icon, size: 28, color: iconColor),
+              ),
+              const SizedBox(height: 12),
+              Text(title, style: AppTypography.titleMedium, textAlign: TextAlign.center),
+              const SizedBox(height: 6),
+              Text(
+                message,
+                style: AppTypography.bodyMedium,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: onPrimary,
+                  icon: Icon(primaryIcon ?? Icons.add_rounded, size: 18),
+                  label: Text(primaryLabel),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ),
+              if (secondaryLabel != null && onSecondary != null) ...[
+                const SizedBox(height: 6),
+                TextButton(
+                  onPressed: onSecondary,
+                  style: TextButton.styleFrom(foregroundColor: AppColors.primary),
+                  child: Text(
+                    secondaryLabel,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
     );
   }
 

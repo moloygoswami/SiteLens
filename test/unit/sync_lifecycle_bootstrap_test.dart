@@ -76,7 +76,7 @@ class RecordingMediaRepository implements MediaRepository {
   }
 
   @override
-  Future<void> resetStuckSyncingMedia() async {
+  Future<void> resetStuckSyncingMedia({String? creatorId}) async {
     resetCallCount++;
     for (int i = 0; i < items.length; i++) {
       if (items[i].syncStatus == SyncStatusType.syncing) {
@@ -102,13 +102,14 @@ class RecordingMediaRepository implements MediaRepository {
   }
 
   @override
-  Future<void> updateSyncStatus(String mediaId, SyncStatusType status) async {
+  Future<void> updateSyncStatus(String mediaId, SyncStatusType status, {String? creatorId}) async {
     final index = items.indexWhere((i) => i.id == mediaId);
     if (index != -1) {
       items[index] = items[index].copyWith(syncStatus: status);
     }
     _emitCount();
   }
+
 
   @override
   Future<List<MediaItem>> getTombstoneSyncCandidates({String? creatorId}) async => const [];
@@ -181,7 +182,7 @@ void main() {
   late Directory tempDir;
   int coordinatorInstanceCount = 0;
 
-  const testUser = AuthUser(uid: 'user-123', email: 'eng@sitelens.local');
+  const testUser = AuthUser(uid: 'user-123', email: 'eng@sitelens.local', isEmailVerified: true);
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});

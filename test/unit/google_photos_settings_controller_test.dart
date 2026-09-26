@@ -27,40 +27,51 @@ class FakeGooglePhotosRepository implements GooglePhotosRepository {
   final List<GooglePhotosSyncEntry> entries = [];
 
   @override
-  Future<int> countByStatus(GooglePhotosSyncStatus status) async {
-    return entries.where((e) => e.status == status).length;
+  Future<int> countByStatus(GooglePhotosSyncStatus status, {required String? creatorId}) async {
+    if (creatorId == null || creatorId.isEmpty) return 0;
+    return entries.where((e) => e.creatorId == creatorId && e.status == status).length;
   }
 
   @override
-  Future<void> deleteEntry(String mediaId) async {
-    entries.removeWhere((e) => e.mediaId == mediaId);
+  Future<void> deleteEntry(String mediaId, {required String? creatorId}) async {
+    if (creatorId == null || creatorId.isEmpty) return;
+    entries.removeWhere((e) => e.mediaId == mediaId && e.creatorId == creatorId);
   }
 
   @override
-  Future<GooglePhotosSyncEntry?> getEntryForMedia(String mediaId) async {
-    return entries.where((e) => e.mediaId == mediaId).firstOrNull;
+  Future<GooglePhotosSyncEntry?> getEntryForMedia(String mediaId, {required String? creatorId}) async {
+    if (creatorId == null || creatorId.isEmpty) return null;
+    return entries.where((e) => e.mediaId == mediaId && e.creatorId == creatorId).firstOrNull;
   }
 
   @override
-  Future<List<GooglePhotosSyncEntry>> getPendingOrFailedEntries() async {
-    return entries.where((e) => e.status == GooglePhotosSyncStatus.pending || e.status == GooglePhotosSyncStatus.failed).toList();
+  Future<List<GooglePhotosSyncEntry>> getPendingOrFailedEntries({required String? creatorId}) async {
+    if (creatorId == null || creatorId.isEmpty) return [];
+    return entries.where((e) => e.creatorId == creatorId && (e.status == GooglePhotosSyncStatus.pending || e.status == GooglePhotosSyncStatus.failed)).toList();
   }
 
   @override
-  Future<void> queueMedia(String mediaId) async {
-    entries.add(GooglePhotosSyncEntry(mediaId: mediaId, status: GooglePhotosSyncStatus.pending));
+  Future<void> queueMedia(String mediaId, {required String? creatorId}) async {
+    if (creatorId == null || creatorId.isEmpty) {
+      throw GooglePhotosIsolationException('creatorId required');
+    }
+    entries.add(GooglePhotosSyncEntry(mediaId: mediaId, creatorId: creatorId, status: GooglePhotosSyncStatus.pending));
   }
 
   @override
   Future<void> updateStatus({
     required String mediaId,
+    required String? creatorId,
     required GooglePhotosSyncStatus status,
     String? googlePhotosMediaId,
     DateTime? uploadedAt,
     String? errorMessage,
     bool incrementRetry = false,
   }) async {
-    final idx = entries.indexWhere((e) => e.mediaId == mediaId);
+    if (creatorId == null || creatorId.isEmpty) {
+      throw GooglePhotosIsolationException('creatorId required');
+    }
+    final idx = entries.indexWhere((e) => e.mediaId == mediaId && e.creatorId == creatorId);
     if (idx != -1) {
       entries[idx] = entries[idx].copyWith(
         status: status,
@@ -72,8 +83,14 @@ class FakeGooglePhotosRepository implements GooglePhotosRepository {
   }
 
   @override
-  Stream<List<GooglePhotosSyncEntry>> watchAllEntries() {
-    return Stream.value(entries);
+  Stream<List<GooglePhotosSyncEntry>> watchAllEntries({required String? creatorId}) {
+    if (creatorId == null || creatorId.isEmpty) return Stream.value(const []);
+    return Stream.value(entries.where((e) => e.creatorId == creatorId).toList());
+  }
+
+  @override
+  Future<void> clearQueueForCreator(String creatorId) async {
+    entries.removeWhere((e) => e.creatorId == creatorId);
   }
 }
 
@@ -191,7 +208,7 @@ void main() {
       newNotifier.dispose();
     });
 
-    test('Account switching: User A -> User B isolates state; switching back restores User A', () async {
+    test('Account switching: User A -> User B revokes A; B inherits nothing; A must reconnect', () async {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('${GooglePhotosSettingsNotifier.keyOwnerUid}_user_a', 'user_a');
       await prefs.setBool('${GooglePhotosSettingsNotifier.keyConnected}_user_a', true);
@@ -204,17 +221,21 @@ void main() {
       expect(notifier.state.isConnected, isTrue);
       expect(notifier.state.accountEmail, equals('user_a@gmail.com'));
 
-      // Switch to User B (unconnected)
+      // Switch to User B (unconnected): A's grant is revoked and cleared,
+      // and B inherits none of A's connection state.
       await notifier.switchUser('user_b', isEmailVerified: true);
       await notifier.ready;
       expect(notifier.state.isConnected, isFalse);
       expect(notifier.state.accountEmail, isNull);
+      expect(prefs.getBool('${GooglePhotosSettingsNotifier.keyConnected}_user_a'), isFalse);
+      expect(prefs.getString('${GooglePhotosSettingsNotifier.keyEmail}_user_a'), isNull);
 
-      // Switch back to User A
+      // Switch back to User A: the revoked grant is NOT silently restored;
+      // A must explicitly reconnect.
       await notifier.switchUser('user_a', isEmailVerified: true);
       await notifier.ready;
-      expect(notifier.state.isConnected, isTrue);
-      expect(notifier.state.accountEmail, equals('user_a@gmail.com'));
+      expect(notifier.state.isConnected, isFalse);
+      expect(notifier.state.accountEmail, isNull);
     });
 
     test('updateOverallStatus updates status and timestamps', () {

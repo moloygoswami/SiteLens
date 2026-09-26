@@ -24,6 +24,9 @@ class FakePermissionService extends StateNotifier<SiteLensPermissionStatus>
   Future<PermissionStatus> checkCameraPermission() async => state.camera;
 
   @override
+  Future<PermissionStatus> checkMicrophonePermission() async => state.microphone;
+
+  @override
   Future<PermissionStatus> requestCameraPermission() async => state.camera;
 
   @override

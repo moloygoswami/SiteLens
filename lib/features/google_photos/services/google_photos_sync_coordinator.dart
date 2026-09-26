@@ -51,8 +51,10 @@ class GooglePhotosSyncCoordinator {
   static const int maxRetryAttempts = 5;
 
   StreamSubscription? _connectivitySub;
+  StreamSubscription<AuthUser?>? _authSub;
   RemoveListener? _settingsSub;
   bool _prevConnected = false;
+  String? _activeUserId;
 
   GooglePhotosSyncCoordinator({
     required GooglePhotosApiService apiService,
@@ -85,6 +87,13 @@ class GooglePhotosSyncCoordinator {
       _isOnline = true;
     }
 
+    _authSub = _authService.authStateChanges.listen((user) {
+      if (user == null || user.uid != _activeUserId) {
+        resetSessionState();
+        _activeUserId = user?.uid;
+      }
+    });
+
     // When the account becomes connected, run a catch-up pass so any photos
     // captured before the connection was established still get uploaded.
     _prevConnected = _settingsNotifier.currentSettings.isConnected;
@@ -95,6 +104,14 @@ class GooglePhotosSyncCoordinator {
       }
       _prevConnected = settings.isConnected;
     }, fireImmediately: false);
+  }
+
+  /// Resets in-memory coordinator queue and retry state on sign-out / account switch.
+  void resetSessionState() {
+    _inFlightMediaIds.clear();
+    _retryCounts.clear();
+    _nextRetryTimes.clear();
+    _isProcessing = false;
   }
 
   /// Queues captured media for Google Photos auto-upload if feature is enabled.
@@ -111,12 +128,13 @@ class GooglePhotosSyncCoordinator {
     final settings = _settingsNotifier.currentSettings;
     if (!settings.isConnected || !settings.autoUpload) return;
 
-    final media = await _mediaRepo.getMediaById(mediaId);
+    final media = await _mediaRepo.getMediaById(mediaId, creatorId: authUser.uid);
     if (media == null) return;
+
     // 2. Enforce media was created by the active user
     if (media.creatorId != authUser.uid) return;
 
-    await _repository.queueMedia(mediaId);
+    await _repository.queueMedia(mediaId, creatorId: authUser.uid);
     await triggerSync();
   }
 
@@ -136,6 +154,7 @@ class GooglePhotosSyncCoordinator {
 
     if (_isProcessing) return;
     _isProcessing = true;
+    _activeUserId = currentUid;
 
     try {
       // 2. Enqueue only local media created by current authenticated user
@@ -144,13 +163,13 @@ class GooglePhotosSyncCoordinator {
         if (m.isDeleted) continue;
         if (m.creatorId != currentUid) continue; // STRICT CREATOR FILTER
 
-        final existing = await _repository.getEntryForMedia(m.id);
+        final existing = await _repository.getEntryForMedia(m.id, creatorId: currentUid);
         if (existing == null) {
-          await _repository.queueMedia(m.id);
+          await _repository.queueMedia(m.id, creatorId: currentUid);
         }
       }
 
-      final entries = await _repository.getPendingOrFailedEntries();
+      final entries = await _repository.getPendingOrFailedEntries(creatorId: currentUid);
       if (entries.isEmpty) return;
 
       for (final entry in entries) {
@@ -195,10 +214,10 @@ class GooglePhotosSyncCoordinator {
         return;
       }
 
-      final mediaItem = await _mediaRepo.getMediaById(entry.mediaId);
+      final mediaItem = await _mediaRepo.getMediaById(entry.mediaId, creatorId: expectedUserId);
       if (mediaItem == null) {
-        // Media item was deleted locally
-        await _repository.deleteEntry(entry.mediaId);
+        // Media item was deleted locally or does not belong to user
+        await _repository.deleteEntry(entry.mediaId, creatorId: expectedUserId);
         return;
       }
 
@@ -210,6 +229,7 @@ class GooglePhotosSyncCoordinator {
 
       await _repository.updateStatus(
         mediaId: entry.mediaId,
+        creatorId: expectedUserId,
         status: GooglePhotosSyncStatus.uploading,
       );
 
@@ -221,6 +241,7 @@ class GooglePhotosSyncCoordinator {
       if (!await evidFile.exists()) {
         await _repository.updateStatus(
           mediaId: entry.mediaId,
+          creatorId: expectedUserId,
           status: GooglePhotosSyncStatus.failed,
           errorMessage: 'Evidence file not found on disk.',
         );
@@ -232,6 +253,7 @@ class GooglePhotosSyncCoordinator {
       if (mediaItem.evidenceSha256Hash != null && computedSha != mediaItem.evidenceSha256Hash) {
         await _repository.updateStatus(
           mediaId: entry.mediaId,
+          creatorId: expectedUserId,
           status: GooglePhotosSyncStatus.failed,
           errorMessage: 'Evidence SHA-256 hash mismatch.',
         );
@@ -244,9 +266,13 @@ class GooglePhotosSyncCoordinator {
         mimeType: mediaItem.type.name == 'video' ? 'video/mp4' : 'image/jpeg',
       );
 
-      // Step 2: Get or create album
+      // Step 2: Get or create album (scoped to the expected user so the cache
+      // does not leak across account boundaries)
       final settings = _settingsNotifier.currentSettings;
-      final albumId = await _apiService.getOrCreateAlbum(settings.albumName);
+      final albumId = await _apiService.getOrCreateAlbum(
+        settings.albumName,
+        ownerUid: expectedUserId,
+      );
 
       // Step 3: Create Media Item in Album (using only user-authored note if provided)
       final fileName = mediaItem.uri.split('/').last;
@@ -265,10 +291,13 @@ class GooglePhotosSyncCoordinator {
       } catch (e) {
         if (albumId != null && e.toString().toLowerCase().contains('album')) {
           // Invalid/deleted cached album ID:
-          // 1. Invalidate cached album ID
-          await _apiService.invalidateAlbumId();
+          // 1. Invalidate cached album ID for this user
+          await _apiService.invalidateAlbumId(ownerUid: expectedUserId);
           // 2. Create a new "SiteLens Evidence" album (persisted automatically)
-          final newAlbumId = await _apiService.getOrCreateAlbum(settings.albumName);
+          final newAlbumId = await _apiService.getOrCreateAlbum(
+            settings.albumName,
+            ownerUid: expectedUserId,
+          );
           // 3. Retry the SAME pending media item using the new album ID (never outside the album)
           googlePhotosId = await _apiService.createMediaItem(
             uploadToken: uploadToken,
@@ -284,6 +313,7 @@ class GooglePhotosSyncCoordinator {
       // Success
       await _repository.updateStatus(
         mediaId: entry.mediaId,
+        creatorId: expectedUserId,
         status: GooglePhotosSyncStatus.uploaded,
         googlePhotosMediaId: googlePhotosId,
         uploadedAt: DateTime.now(),
@@ -295,6 +325,7 @@ class GooglePhotosSyncCoordinator {
     } on GooglePhotosAuthException catch (e) {
       await _repository.updateStatus(
         mediaId: entry.mediaId,
+        creatorId: expectedUserId,
         status: GooglePhotosSyncStatus.authRequired,
         errorMessage: e.message,
       );
@@ -307,6 +338,7 @@ class GooglePhotosSyncCoordinator {
         if (currentRetries >= maxRetryAttempts) {
           await _repository.updateStatus(
             mediaId: entry.mediaId,
+            creatorId: expectedUserId,
             status: GooglePhotosSyncStatus.failed,
             errorMessage: 'Max retry attempts ($maxRetryAttempts) exceeded: ${e.message}',
             incrementRetry: true,
@@ -317,6 +349,7 @@ class GooglePhotosSyncCoordinator {
           _nextRetryTimes[entry.mediaId] = DateTime.now().add(Duration(seconds: delaySeconds));
           await _repository.updateStatus(
             mediaId: entry.mediaId,
+            creatorId: expectedUserId,
             status: GooglePhotosSyncStatus.pending,
             errorMessage: e.message,
             incrementRetry: true,
@@ -325,6 +358,7 @@ class GooglePhotosSyncCoordinator {
       } else {
         await _repository.updateStatus(
           mediaId: entry.mediaId,
+          creatorId: expectedUserId,
           status: GooglePhotosSyncStatus.failed,
           errorMessage: e.message,
         );
@@ -333,6 +367,7 @@ class GooglePhotosSyncCoordinator {
     } catch (e) {
       await _repository.updateStatus(
         mediaId: entry.mediaId,
+        creatorId: expectedUserId,
         status: GooglePhotosSyncStatus.failed,
         errorMessage: e.toString(),
       );
@@ -345,5 +380,7 @@ class GooglePhotosSyncCoordinator {
   void dispose() {
     _connectivitySub?.cancel();
     _settingsSub?.call();
+    _authSub?.cancel();
+    resetSessionState();
   }
 }

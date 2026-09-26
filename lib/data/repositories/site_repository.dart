@@ -19,10 +19,17 @@ class DuplicateSiteCodeException implements Exception {
   String toString() => message;
 }
 
+class SiteIsolationException implements Exception {
+  final String message;
+  const SiteIsolationException([this.message = 'Creator isolation violation on site operation.']);
+  @override
+  String toString() => message;
+}
+
 abstract class SiteRepository {
   Future<List<SiteModel>> getAllSites({String? creatorId});
   Future<SiteModel?> getSiteById(String id, {String? creatorId});
-  Future<void> saveSite(SiteModel site);
+  Future<void> saveSite(SiteModel site, {String? creatorId});
   Future<void> deleteSite(String id, {String? creatorId});
   Future<bool> hasMediaForSite(String siteId, {String? creatorId});
   Future<void> seedDefaultSitesIfEmpty();
@@ -74,14 +81,34 @@ class LocalSiteRepository implements SiteRepository {
   }
 
   @override
-  Future<void> saveSite(SiteModel site) async {
+  Future<void> saveSite(SiteModel site, {String? creatorId}) async {
+    final effectiveCreatorId = creatorId ?? site.creatorId;
+    if (effectiveCreatorId == null || effectiveCreatorId.isEmpty) {
+      throw const SiteIsolationException('Fail closed: Site must have a valid non-empty creatorId.');
+    }
+    if (creatorId != null &&
+        site.creatorId != null &&
+        site.creatorId!.isNotEmpty &&
+        creatorId != site.creatorId) {
+      throw const SiteIsolationException('Creator isolation violation: Caller creatorId does not match site creatorId.');
+    }
+
+    final existing = await (_db.select(_db.sites)..where((tbl) => tbl.id.equals(site.id))).getSingleOrNull();
+    if (existing != null) {
+      if (existing.creatorId != null &&
+          existing.creatorId!.isNotEmpty &&
+          existing.creatorId != effectiveCreatorId) {
+        throw const SiteIsolationException('Creator isolation violation: Cannot overwrite or mutate site belonging to different creator');
+      }
+    }
+
     await _db.into(_db.sites).insertOnConflictUpdate(
           SitesCompanion.insert(
             id: site.id,
             siteCode: drift.Value(site.siteCode),
             name: drift.Value(site.name),
             address: drift.Value(site.address),
-            creatorId: drift.Value(site.creatorId),
+            creatorId: drift.Value(effectiveCreatorId),
           ),
         );
   }
@@ -185,42 +212,39 @@ class LocalSiteRepository implements SiteRepository {
       return [];
     }
 
-    try {
-      final hydratedSites = <String, SiteModel>{};
+    // Creator-scoped query: only sites recorded as created by this identity
+    // (v1 creator-owned domain). Errors deliberately propagate to the caller:
+    // a failed hydration is NOT evidence that the user has zero sites, and the
+    // two states must never be conflated (PRD §9.3, AC-SITE-07).
+    final createdSnap = await firestore
+        .collection('sites')
+        .where('creator_id', isEqualTo: userId)
+        .get();
 
-      // Discover sites created by this user only (v1 creator-owned domain)
-      try {
-        final createdSnap = await firestore
-            .collection('sites')
-            .where('creator_id', isEqualTo: userId)
-            .get();
-        for (final doc in createdSnap.docs) {
-          final data = doc.data();
-          final docCreatorId = (data['creator_id'] as String?) ?? '';
-          if (docCreatorId == userId) {
-            hydratedSites[doc.id] = SiteModel(
-              id: doc.id,
-              siteCode: (data['site_code'] as String?) ?? '',
-              name: (data['name'] as String?) ?? '',
-              address: (data['address'] as String?) ?? '',
-              creatorId: userId,
-            );
-          }
-        }
-      } catch (_) {
-        // Network or security error on creator query
-      }
-
-      // Upsert discovered remote sites into local Drift DB
-      for (final site in hydratedSites.values) {
-        await saveSite(site);
-      }
-
-      return hydratedSites.values.toList();
-    } catch (_) {
-      // Fail closed/safely: network or Firestore exceptions must never crash local workflow
-      return [];
+    final hydratedSites = <String, SiteModel>{};
+    for (final doc in createdSnap.docs) {
+      final data = doc.data();
+      final docCreatorId = (data['creator_id'] as String?) ?? '';
+      // Defense in depth: never adopt a row whose recorded creator differs,
+      // even if it somehow surfaces through the creator-scoped query.
+      if (docCreatorId != userId) continue;
+      hydratedSites[doc.id] = SiteModel(
+        id: doc.id,
+        siteCode: (data['site_code'] as String?) ?? '',
+        name: (data['name'] as String?) ?? '',
+        address: (data['address'] as String?) ?? '',
+        creatorId: userId,
+      );
     }
+
+    // Upsert discovered remote sites into the local Drift cache. saveSite
+    // rejects any attempt to re-stamp an existing row's creator identity
+    // (fail-closed), so hydration can never reassign site ownership.
+    for (final site in hydratedSites.values) {
+      await saveSite(site);
+    }
+
+    return hydratedSites.values.toList();
   }
 }
 

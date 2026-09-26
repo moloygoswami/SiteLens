@@ -5,11 +5,15 @@ import '../../../domain/models/enums.dart';
 class ObservationSelector extends StatelessWidget {
   final ObservationType selectedType;
   final ValueChanged<ObservationType> onSelected;
+  final bool isClosedDisabled;
+  final String? closedDisabledExplanation;
 
   const ObservationSelector({
     super.key,
     required this.selectedType,
     required this.onSelected,
+    this.isClosedDisabled = false,
+    this.closedDisabledExplanation,
   });
 
   Color _getBadgeColor(ObservationType type) {
@@ -55,48 +59,60 @@ class ObservationSelector extends StatelessWidget {
           child: Row(
             children: ObservationType.values.map((type) {
               final isSelected = type == selectedType;
+              final isDisabled = type == ObservationType.closed && isClosedDisabled;
               final color = _getBadgeColor(type);
 
               return Padding(
                 padding: const EdgeInsets.only(right: 8),
-                child: InkWell(
-                  onTap: () => onSelected(type),
-                  borderRadius: BorderRadius.circular(AppRadii.sm),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 150),
-                    constraints: const BoxConstraints(minHeight: 44),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: isSelected ? color : AppColors.surfaceContainer,
-                      borderRadius: BorderRadius.circular(AppRadii.sm),
-                      border: Border.all(
-                        color: isSelected ? color : AppColors.border,
-                        width: isSelected ? 1.5 : 1,
+                child: Opacity(
+                  opacity: isDisabled ? 0.5 : 1.0,
+                  child: InkWell(
+                    onTap: () => onSelected(type),
+                    borderRadius: BorderRadius.circular(AppRadii.sm),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      constraints: const BoxConstraints(minHeight: 44),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: isDisabled
+                            ? AppColors.surfaceContainerHigh
+                            : (isSelected ? color : AppColors.surfaceContainer),
+                        borderRadius: BorderRadius.circular(AppRadii.sm),
+                        border: Border.all(
+                          color: isDisabled
+                              ? AppColors.border
+                              : (isSelected ? color : AppColors.border),
+                          width: isSelected ? 1.5 : 1,
+                        ),
                       ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 8,
-                          height: 8,
-                          decoration: BoxDecoration(
-                            color: isSelected ? Colors.white : color,
-                            borderRadius: BorderRadius.circular(2),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              color: isDisabled
+                                  ? AppColors.textMuted
+                                  : (isSelected ? Colors.white : color),
+                              borderRadius: BorderRadius.circular(2),
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          type.label,
-                          style: TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 12,
-                            fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
-                            color: isSelected ? Colors.white : AppColors.textPrimary,
-                            letterSpacing: 0.2,
+                          const SizedBox(width: 8),
+                          Text(
+                            type.label,
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 12,
+                              fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                              color: isDisabled
+                                  ? AppColors.textMuted
+                                  : (isSelected ? Colors.white : AppColors.textPrimary),
+                              letterSpacing: 0.2,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -104,6 +120,36 @@ class ObservationSelector extends StatelessWidget {
             }).toList(),
           ),
         ),
+        if (isClosedDisabled) ...[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: AppColors.statusAmber.withAlpha(20),
+              borderRadius: BorderRadius.circular(AppRadii.sm),
+              border: Border.all(color: AppColors.statusAmber.withAlpha(60), width: 1),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.info_outline_rounded, size: 14, color: AppColors.statusAmber),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    closedDisabledExplanation ??
+                        'No open Non-Conformity exists on this site yet — capture one first',
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.statusAmber,
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ],
     );
   }

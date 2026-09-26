@@ -9,6 +9,7 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:share_plus/share_plus.dart';
+import '../../../core/utils/crypto_utils.dart';
 import '../../../core/utils/gps_utils.dart';
 import '../../../domain/models/enums.dart';
 import '../../../domain/models/media_item.dart';
@@ -116,6 +117,17 @@ class EvidenceExportService {
       } catch (_) {}
     }
 
+    var integrity = await _storageService.verifyArtifactIntegrity(
+      relativePath: item.uri,
+      expectedSha256: item.evidenceSha256Hash,
+    );
+    if (integrity == IntegrityVerificationResult.verified && imageBytes != null) {
+      final imageHash = CryptoUtils.computeSha256(imageBytes);
+      if (imageHash.toLowerCase() != item.evidenceSha256Hash!.trim().toLowerCase()) {
+        integrity = IntegrityVerificationResult.unverified;
+      }
+    }
+
     doc.addPage(
       _buildSingleReportPage(
         item: item,
@@ -127,6 +139,7 @@ class EvidenceExportService {
         pageIndex: 1,
         totalPages: 1,
         mode: mode,
+        integrity: integrity,
       ),
     );
 
@@ -257,6 +270,11 @@ class EvidenceExportService {
         }
       } catch (_) {}
 
+      final integrity = await _storageService.verifyArtifactIntegrity(
+        relativePath: item.uri,
+        expectedSha256: item.evidenceSha256Hash,
+      );
+
       doc.addPage(
         _buildSingleReportPage(
           item: item,
@@ -268,6 +286,7 @@ class EvidenceExportService {
           pageIndex: i + 1,
           totalPages: totalPages,
           mode: mode,
+          integrity: integrity,
         ),
       );
     }
@@ -488,6 +507,8 @@ class EvidenceExportService {
     required int pageIndex,
     required int totalPages,
     EvidenceReportMode mode = EvidenceReportMode.standardInspectionNote,
+    IntegrityVerificationResult integrity =
+        IntegrityVerificationResult.unavailable,
   }) {
     final capturedUtc = item.capturedAt.toUtc();
     final capturedUtcFormatted =
@@ -525,9 +546,23 @@ class EvidenceExportService {
     final reportTitle =
         isForensic ? 'FORENSIC EVIDENCE AUDIT REPORT' : 'INSPECTION NOTE';
     final reportIdPrefix = isForensic ? 'AUDIT ID' : 'NOTE ID';
-    final footerTitle = isForensic
-        ? 'SiteLens Forensic Evidence System • Immutable Pixel Integrity Verified'
-        : 'SiteLens Inspection System • Official Field Inspection Note';
+    final String footerTitle;
+    if (isForensic) {
+      switch (integrity) {
+        case IntegrityVerificationResult.verified:
+          footerTitle =
+              'SiteLens Forensic Evidence System • Immutable Pixel Integrity Verified';
+        case IntegrityVerificationResult.unverified:
+          footerTitle =
+              'SiteLens Forensic Evidence System • Pixel Integrity Unverified';
+        case IntegrityVerificationResult.unavailable:
+          footerTitle =
+              'SiteLens Forensic Evidence System • Pixel Integrity Unavailable';
+      }
+    } else {
+      footerTitle =
+          'SiteLens Inspection System • Official Field Inspection Note';
+    }
 
     pw.MemoryImage? pdfImage;
     if (imageBytes != null && imageBytes.isNotEmpty) {
@@ -726,6 +761,7 @@ class EvidenceExportService {
                         isHash: true),
                     _buildCryptoRow('Evidence SHA-256', fullEvidSha,
                         isHash: true),
+                    _buildCryptoRow('Evidence Integrity', integrity.label),
                     pw.Divider(color: PdfColors.grey300, height: 8),
                     _buildCryptoRow(
                         'Exported By (UID)', attribution.exporterUidLabel),

@@ -57,6 +57,7 @@ void main() {
               activityTag: const drift.Value('Excavation'),
               observationType: const drift.Value('nonConformity'),
               capturedAt: '2026-08-15T01:00:00Z',
+              creatorId: const drift.Value('user-1'),
             ),
           );
 
@@ -67,6 +68,7 @@ void main() {
         activityTag: 'Excavation',
         capturedBefore: DateTime.utc(2026, 8, 15, 2),
         radiusMeters: 10.0,
+        creatorId: 'user-1',
       );
 
       expect(match, isNotNull);
@@ -87,6 +89,7 @@ void main() {
               activityTag: const drift.Value('Excavation'),
               observationType: const drift.Value('nonConformity'),
               capturedAt: '2026-08-15T01:00:00Z',
+              creatorId: const drift.Value('user-1'),
             ),
           );
 
@@ -97,6 +100,7 @@ void main() {
         activityTag: 'Excavation',
         capturedBefore: DateTime.utc(2026, 8, 15, 2),
         radiusMeters: 10.0,
+        creatorId: 'user-1',
       );
 
       expect(match, isNull);
@@ -114,6 +118,7 @@ void main() {
               activityTag: const drift.Value('Excavation'),
               observationType: const drift.Value('nonConformity'),
               capturedAt: '2026-08-15T01:00:00Z',
+              creatorId: const drift.Value('user-1'),
             ),
           );
 
@@ -124,6 +129,7 @@ void main() {
         activityTag: 'Excavation',
         capturedBefore: DateTime.utc(2026, 8, 15, 2),
         radiusMeters: 10.0,
+        creatorId: 'user-1',
       );
 
       expect(match, isNull);
@@ -142,6 +148,7 @@ void main() {
               observationType: const drift.Value('nonConformity'),
               capturedAt: '2026-08-15T01:00:00Z',
               isDeleted: const drift.Value(1),
+              creatorId: const drift.Value('user-1'),
             ),
           );
 
@@ -152,6 +159,7 @@ void main() {
         activityTag: 'Excavation',
         capturedBefore: DateTime.utc(2026, 8, 15, 2),
         radiusMeters: 10.0,
+        creatorId: 'user-1',
       );
 
       expect(match, isNull);
@@ -169,6 +177,7 @@ void main() {
               activityTag: const drift.Value('Excavation'),
               observationType: const drift.Value('nonConformity'),
               capturedAt: '2026-08-15T01:00:00Z',
+              creatorId: const drift.Value('user-1'),
             ),
           );
 
@@ -180,6 +189,7 @@ void main() {
         capturedBefore: DateTime.utc(2026, 8, 15, 2),
         radiusMeters: 10.0,
         currentMediaId: 'current-item',
+        creatorId: 'user-1',
       );
 
       expect(match, isNull);
@@ -197,6 +207,7 @@ void main() {
               activityTag: const drift.Value('Rebar Inspection'),
               observationType: const drift.Value('nonConformity'),
               capturedAt: '2026-08-15T01:00:00Z',
+              creatorId: const drift.Value('user-1'),
             ),
           );
 
@@ -207,6 +218,7 @@ void main() {
         activityTag: '', // Blank activity
         capturedBefore: DateTime.utc(2026, 8, 15, 2),
         radiusMeters: 10.0,
+        creatorId: 'user-1',
       );
 
       expect(match, isNotNull);
@@ -226,6 +238,7 @@ void main() {
               activityTag: const drift.Value('Excavation'),
               observationType: const drift.Value('nonConformity'),
               capturedAt: '2026-08-15T01:00:00Z',
+              creatorId: const drift.Value('user-1'),
             ),
           );
 
@@ -241,6 +254,7 @@ void main() {
               activityTag: const drift.Value('Excavation'),
               observationType: const drift.Value('nonConformity'),
               capturedAt: '2026-08-14T01:00:00Z',
+              creatorId: const drift.Value('user-1'),
             ),
           );
 
@@ -251,6 +265,7 @@ void main() {
         activityTag: 'Excavation',
         capturedBefore: DateTime.utc(2026, 8, 15, 2),
         radiusMeters: 10.0,
+        creatorId: 'user-1',
       );
 
       expect(match, isNotNull);
@@ -319,6 +334,7 @@ void main() {
               observationType: const drift.Value('nonConformity'),
               // Captured AFTER the observation it would be linked to.
               capturedAt: '2026-08-16T01:00:00Z',
+              creatorId: const drift.Value('user-1'),
             ),
           );
 
@@ -329,6 +345,7 @@ void main() {
         activityTag: 'Excavation',
         capturedBefore: DateTime.utc(2026, 8, 15, 2),
         radiusMeters: 10.0,
+        creatorId: 'user-1',
       );
 
       expect(match, isNull,
@@ -347,6 +364,7 @@ void main() {
               activityTag: const drift.Value('Excavation'),
               observationType: const drift.Value('nonConformity'),
               capturedAt: '2026-08-15T02:00:00Z',
+              creatorId: const drift.Value('user-1'),
             ),
           );
 
@@ -357,6 +375,7 @@ void main() {
         activityTag: 'Excavation',
         capturedBefore: DateTime.utc(2026, 8, 15, 2),
         radiusMeters: 10.0,
+        creatorId: 'user-1',
       );
 
       expect(match, isNull);
@@ -404,6 +423,7 @@ void main() {
         activityTag: 'Excavation',
         observationType: ObservationType.general,
         linkedMediaId: null,
+        creatorId: 'user-1',
       );
 
       // Candidate status is restored without modifying the candidate record.
@@ -411,7 +431,7 @@ void main() {
         await mediaRepo.getResolvedMediaIds(siteId: 'SITE_A', creatorId: 'user-1'),
         isNot(contains('nc-r18')),
       );
-      final candidate = await mediaRepo.getMediaById('nc-r18');
+      final candidate = await mediaRepo.getMediaById('nc-r18', creatorId: 'user-1');
       expect(candidate, isNotNull);
       expect(candidate!.isDeleted, isFalse);
       expect(candidate.observationType, ObservationType.nonConformity);
@@ -433,6 +453,7 @@ void main() {
               activityTag: const drift.Value('Excavation'),
               observationType: const drift.Value('nonConformity'),
               capturedAt: '2026-08-15T01:00:00Z',
+              creatorId: const drift.Value('user-1'),
             ),
           );
 
@@ -443,6 +464,7 @@ void main() {
         activityTag: 'Excavation',
         capturedBefore: DateTime.utc(2026, 8, 15, 2),
         radiusMeters: 10.0,
+        creatorId: 'user-1',
       );
 
       expect(match, isNotNull, reason: 'R19: accuracy margin widens the radius bound');
@@ -461,6 +483,7 @@ void main() {
               activityTag: const drift.Value('Excavation'),
               observationType: const drift.Value('nonConformity'),
               capturedAt: '2026-08-15T01:00:00Z',
+              creatorId: const drift.Value('user-1'),
             ),
           );
 

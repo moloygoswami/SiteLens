@@ -3,6 +3,7 @@ import '../domain/models/media_item.dart';
 import '../features/auth/session_router.dart';
 import '../features/auth/welcome_screen.dart';
 import '../features/auth/login_screen.dart';
+import '../features/auth/signup_screen.dart';
 import '../features/onboarding/permission_onboarding_screen.dart';
 import '../features/onboarding/permission_recovery_screen.dart';
 import '../features/sites/site_setup_screen.dart';
@@ -28,6 +29,7 @@ class AppRoutes {
   static const String root = '/';
   static const String welcome = '/welcome';
   static const String login = '/login';
+  static const String signup = '/signup';
   static const String onboarding = '/onboarding';
   static const String recovery = '/recovery';
   static const String siteSetup = '/site-setup';
@@ -46,6 +48,8 @@ class AppRoutes {
         return MaterialPageRoute(builder: (_) => const WelcomeScreen());
       case login:
         return MaterialPageRoute(builder: (_) => const LoginScreen());
+      case signup:
+        return MaterialPageRoute(builder: (_) => const SignupScreen());
       case onboarding:
         return MaterialPageRoute(builder: (_) => const PermissionOnboardingScreen());
       case recovery:

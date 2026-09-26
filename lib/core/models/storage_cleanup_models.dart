@@ -4,6 +4,7 @@ class StorageCleanupSummary {
   final int totalPhotosCount;
   final int totalVideosCount;
   final int syncedPhotosCount;
+  final int cacheSizeBytes;
 
   const StorageCleanupSummary({
     this.eligiblePhotosCount = 0,
@@ -11,6 +12,7 @@ class StorageCleanupSummary {
     this.totalPhotosCount = 0,
     this.totalVideosCount = 0,
     this.syncedPhotosCount = 0,
+    this.cacheSizeBytes = 0,
   });
 
   String get formattedReclaimableSize {
@@ -23,12 +25,23 @@ class StorageCleanupSummary {
     }
   }
 
+  String get formattedCacheSize {
+    if (cacheSizeBytes < 1024) {
+      return '$cacheSizeBytes B';
+    } else if (cacheSizeBytes < 1024 * 1024) {
+      return '${(cacheSizeBytes / 1024).toStringAsFixed(1)} KB';
+    } else {
+      return '${(cacheSizeBytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+  }
+
   StorageCleanupSummary copyWith({
     int? eligiblePhotosCount,
     int? reclaimableBytes,
     int? totalPhotosCount,
     int? totalVideosCount,
     int? syncedPhotosCount,
+    int? cacheSizeBytes,
   }) {
     return StorageCleanupSummary(
       eligiblePhotosCount: eligiblePhotosCount ?? this.eligiblePhotosCount,
@@ -36,6 +49,7 @@ class StorageCleanupSummary {
       totalPhotosCount: totalPhotosCount ?? this.totalPhotosCount,
       totalVideosCount: totalVideosCount ?? this.totalVideosCount,
       syncedPhotosCount: syncedPhotosCount ?? this.syncedPhotosCount,
+      cacheSizeBytes: cacheSizeBytes ?? this.cacheSizeBytes,
     );
   }
 }

@@ -18,17 +18,22 @@ final evidenceProcessingServiceProvider =
   return EvidenceProcessingService(storageService);
 });
 
-class _IsolateInput {
+/// Canonical input payload crossing the background isolate boundary (AC-HUD-08, TM-U-09).
+/// Contains ONLY the three permitted fields: original bytes, HUD overlay bytes, and optional target aspect ratio.
+/// Zero Flutter-engine-dependent objects cross this boundary.
+class EvidenceIsolateInput {
   final Uint8List originalBytes;
   final Uint8List? hudPngBytes;
   final CameraAspectRatio? targetAspectRatio;
 
-  _IsolateInput({
+  const EvidenceIsolateInput({
     required this.originalBytes,
     this.hudPngBytes,
     this.targetAspectRatio,
   });
 }
+
+typedef _IsolateInput = EvidenceIsolateInput;
 
 class _IsolateOutput {
   final Uint8List evidenceBytes;

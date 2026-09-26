@@ -71,6 +71,7 @@ class Media extends Table {
 class GooglePhotosSyncEntries extends Table {
   TextColumn get mediaId => text().named('media_id').references(Media, #id)();
   TextColumn get status => text().withDefault(const Constant('pending'))();
+  TextColumn get creatorId => text().nullable().named('creator_id')(); // Creator user UID for per-user queue scoping
   TextColumn get googlePhotosMediaId => text().nullable().named('google_photos_media_id')();
   TextColumn get uploadedAt => text().nullable().named('uploaded_at')();
   TextColumn get errorMessage => text().nullable().named('error_message')();
@@ -91,7 +92,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? e]) : super(e ?? _openConnection());
 
   @override
-  int get schemaVersion => 10;
+  int get schemaVersion => 11;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -104,6 +105,28 @@ class AppDatabase extends _$AppDatabase {
       await customStatement('CREATE INDEX IF NOT EXISTS idx_media_obs ON media(observation_type);');
       await customStatement('CREATE INDEX IF NOT EXISTS idx_media_captured ON media(captured_at);');
       await customStatement('CREATE INDEX IF NOT EXISTS idx_gphotos_status ON google_photos_sync_entries(status);');
+      await customStatement('CREATE INDEX IF NOT EXISTS idx_gphotos_creator ON google_photos_sync_entries(creator_id);');
+      // Quarantine tables for unattributed / legacy records (02_ARCHITECTURE.MD §11.2/§11.3)
+      await customStatement('''
+        CREATE TABLE IF NOT EXISTS quarantined_sites (
+          id TEXT PRIMARY KEY,
+          site_code TEXT,
+          name TEXT,
+          address TEXT,
+          quarantined_at TEXT NOT NULL,
+          reason TEXT NOT NULL
+        );
+      ''');
+      await customStatement('''
+        CREATE TABLE IF NOT EXISTS quarantined_media (
+          id TEXT PRIMARY KEY,
+          site_id TEXT,
+          uri TEXT NOT NULL,
+          captured_at TEXT NOT NULL,
+          quarantined_at TEXT NOT NULL,
+          reason TEXT NOT NULL
+        );
+      ''');
     },
     onUpgrade: (Migrator m, int from, int to) async {
       if (from < 2) {
@@ -150,6 +173,11 @@ class AppDatabase extends _$AppDatabase {
         await m.addColumn(media, media.hasAudioTrack);
         await m.addColumn(media, media.headingDegrees);
       }
+      if (from < 11) {
+        // v11: creatorId for Google Photos sync queue scoping (remediates Strix finding 1)
+        await m.addColumn(googlePhotosSyncEntries, googlePhotosSyncEntries.creatorId);
+        await customStatement('CREATE INDEX IF NOT EXISTS idx_gphotos_creator ON google_photos_sync_entries(creator_id);');
+      }
     },
   );
 
@@ -160,6 +188,30 @@ class AppDatabase extends _$AppDatabase {
       await delete(media).go();
       await delete(sites).go();
     });
+  }
+
+  /// Ensures quarantine tables exist in the database.
+  Future<void> ensureQuarantineTablesExist() async {
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS quarantined_sites (
+        id TEXT PRIMARY KEY,
+        site_code TEXT,
+        name TEXT,
+        address TEXT,
+        quarantined_at TEXT NOT NULL,
+        reason TEXT NOT NULL
+      );
+    ''');
+    await customStatement('''
+      CREATE TABLE IF NOT EXISTS quarantined_media (
+        id TEXT PRIMARY KEY,
+        site_id TEXT,
+        uri TEXT NOT NULL,
+        captured_at TEXT NOT NULL,
+        quarantined_at TEXT NOT NULL,
+        reason TEXT NOT NULL
+      );
+    ''');
   }
 
   static LazyDatabase _openConnection() {

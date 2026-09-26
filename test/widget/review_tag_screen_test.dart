@@ -101,6 +101,7 @@ void main() {
     await db.into(db.sites).insert(
           SitesCompanion.insert(
             id: 'SITE_001',
+            creatorId: const drift.Value('user-test'),
             siteCode: const drift.Value('HOME'),
             name: const drift.Value('Sonar Kella Apartment'),
           ),
@@ -132,6 +133,7 @@ void main() {
   group('ReviewTagScreen Widget Tests', () {
     final testSnapshot = EvidenceMetadataSnapshot(
       mediaId: 'widget-test-1',
+      creatorId: 'user-test',
       siteId: 'SITE_001',
       siteCode: 'HOME',
       siteName: 'Sonar Kella Apartment',

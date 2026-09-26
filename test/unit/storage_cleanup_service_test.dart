@@ -36,12 +36,16 @@ class FakeMediaRepository implements MediaRepository {
   }
 
   @override
-  Future<void> insertMedia(MediaItem item) async => items.add(item);
+  Future<void> insertMedia(MediaItem item, {String? creatorId}) async => items.add(item);
 
   @override
-  Future<MediaItem?> getMediaById(String id) async {
+  Future<MediaItem?> getMediaById(String id, {String? creatorId}) async {
     try {
-      return items.firstWhere((i) => i.id == id);
+      final item = items.firstWhere((i) => i.id == id);
+      if (creatorId != null && creatorId.isNotEmpty && item.creatorId != null && item.creatorId != creatorId) {
+        return null;
+      }
+      return item;
     } catch (_) {
       return null;
     }
@@ -51,25 +55,25 @@ class FakeMediaRepository implements MediaRepository {
   Future<List<MediaItem>> searchMedia({required String query, String? siteId, String? creatorId}) async => [];
 
   @override
-  Future<void> softDeleteMedia(String mediaId) async {}
+  Future<void> softDeleteMedia(String mediaId, {String? creatorId}) async {}
 
   @override
-  Future<void> removeFromGallery(String mediaId) async {}
+  Future<void> removeFromGallery(String mediaId, {String? creatorId}) async {}
 
   @override
-  Future<void> deletePermanently(String mediaId) async {}
+  Future<void> deletePermanently(String mediaId, {String? creatorId}) async {}
 
   @override
   Future<Set<String>> getResolvedMediaIds({required String siteId, String? creatorId}) async => const {};
 
   @override
-  Future<void> updateSyncStatus(String mediaId, SyncStatusType status) async {}
+  Future<void> updateSyncStatus(String mediaId, SyncStatusType status, {String? creatorId}) async {}
 
   @override
-  Future<void> markTombstoneReconciled(String mediaId) async {}
+  Future<void> markTombstoneReconciled(String mediaId, {String? creatorId}) async {}
 
   @override
-  Future<void> updateTags({required String mediaId, required String activityTag, required ObservationType observationType, String? note, String? linkedMediaId}) async {}
+  Future<void> updateTags({required String mediaId, required String activityTag, required ObservationType observationType, String? note, String? linkedMediaId, String? creatorId}) async {}
 
   @override
   Stream<List<MediaItem>> watchAllMedia({String? siteId, String? activity, ObservationType? observationType, bool? lowAccuracyOnly, String? creatorId}) =>
@@ -97,10 +101,21 @@ class FakeMediaRepository implements MediaRepository {
   Future<List<MediaItem>> getUnsyncedMedia({String? creatorId}) async => [];
 
   @override
-  Future<void> linkMedia({required String mediaId, required String linkedMediaId}) async {}
+  Future<void> linkMedia({required String mediaId, required String linkedMediaId, String? creatorId}) async {}
 
   @override
-  Future<void> resetStuckSyncingMedia() async {}
+  Future<List<NearbyMediaResult>> findSiteWideCandidates({
+    required double centerLat,
+    required double centerLon,
+    required String siteId,
+    required DateTime capturedBefore,
+    String? currentMediaId,
+    String? creatorId,
+  }) async => [];
+
+  @override
+  Future<void> resetStuckSyncingMedia({String? creatorId}) async {}
+
 }
 
 void main() {

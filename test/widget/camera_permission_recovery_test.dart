@@ -58,7 +58,7 @@ class _MockCameraLocationService extends LocationHardwareService {
   @override
   Future<bool> isLocationServiceEnabled() async => true;
   @override
-  Future<Position> getCurrentPosition() async => Position(
+  Future<Position> getCurrentPosition({bool highAccuracy = true}) async => Position(
         latitude: 22.57264,
         longitude: 88.36391,
         timestamp: DateTime.now(),
@@ -71,7 +71,7 @@ class _MockCameraLocationService extends LocationHardwareService {
         headingAccuracy: 1.0,
       );
   @override
-  Stream<Position> getPositionStream({LocationSettings? locationSettings}) => Stream.value(
+  Stream<Position> getPositionStream({LocationSettings? locationSettings, bool highAccuracy = true}) => Stream.value(
         Position(
           latitude: 22.57264,
           longitude: 88.36391,
@@ -96,6 +96,7 @@ class _TestPermissionService extends PermissionService {
     this.mockStatus = const SiteLensPermissionStatus(
       camera: PermissionStatus.granted,
       location: PermissionStatus.granted,
+      microphone: PermissionStatus.granted,
     ),
   }) {
     state = mockStatus;
@@ -117,6 +118,12 @@ class _TestPermissionService extends PermissionService {
     checkCameraPermissionCallCount++;
     state = mockStatus;
     return mockStatus.camera;
+  }
+
+  @override
+  Future<PermissionStatus> checkMicrophonePermission() async {
+    state = mockStatus;
+    return mockStatus.microphone;
   }
 
   @override
@@ -162,7 +169,8 @@ class _MockSiteRepo implements SiteRepository {
   @override
   Future<SiteModel?> getSiteById(String id, {String? creatorId}) async => null;
   @override
-  Future<void> saveSite(SiteModel site) async {}
+  Future<void> saveSite(SiteModel site, {String? creatorId}) async {}
+
   @override
   Future<void> deleteSite(String id, {String? creatorId}) async {}
   @override

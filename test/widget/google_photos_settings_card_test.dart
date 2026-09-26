@@ -22,24 +22,25 @@ class MockGooglePhotosRepository implements GooglePhotosRepository {
   MockGooglePhotosRepository([this.entries = const []]);
 
   @override
-  Future<int> countByStatus(GooglePhotosSyncStatus status) async =>
+  Future<int> countByStatus(GooglePhotosSyncStatus status, {required String? creatorId}) async =>
       entries.where((e) => e.status == status).length;
 
   @override
-  Future<void> deleteEntry(String mediaId) async {}
+  Future<void> deleteEntry(String mediaId, {required String? creatorId}) async {}
 
   @override
-  Future<GooglePhotosSyncEntry?> getEntryForMedia(String mediaId) async => null;
+  Future<GooglePhotosSyncEntry?> getEntryForMedia(String mediaId, {required String? creatorId}) async => null;
 
   @override
-  Future<List<GooglePhotosSyncEntry>> getPendingOrFailedEntries() async => entries;
+  Future<List<GooglePhotosSyncEntry>> getPendingOrFailedEntries({required String? creatorId}) async => entries;
 
   @override
-  Future<void> queueMedia(String mediaId) async {}
+  Future<void> queueMedia(String mediaId, {required String? creatorId}) async {}
 
   @override
   Future<void> updateStatus({
     required String mediaId,
+    required String? creatorId,
     required GooglePhotosSyncStatus status,
     String? googlePhotosMediaId,
     DateTime? uploadedAt,
@@ -48,7 +49,10 @@ class MockGooglePhotosRepository implements GooglePhotosRepository {
   }) async {}
 
   @override
-  Stream<List<GooglePhotosSyncEntry>> watchAllEntries() => Stream.value(entries);
+  Stream<List<GooglePhotosSyncEntry>> watchAllEntries({required String? creatorId}) => Stream.value(entries);
+
+  @override
+  Future<void> clearQueueForCreator(String creatorId) async {}
 }
 
 void main() {

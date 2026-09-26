@@ -212,6 +212,31 @@ class StorageSettingsModal extends ConsumerWidget {
             ),
             const SizedBox(height: 16),
 
+            // Cache Size Overview
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceContainerHigh,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Storage Cache Size',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+                  ),
+                  Text(
+                    summary.formattedCacheSize,
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.primary),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+
             // Action Button
             SizedBox(
               width: double.infinity,
@@ -248,6 +273,48 @@ class StorageSettingsModal extends ConsumerWidget {
                           ? 'Clear Synced Photo Originals (${summary.formattedReclaimableSize})'
                           : 'No Synced Originals to Clear'),
                   style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+
+            // Thumbnail Regeneration Button
+            SizedBox(
+              width: double.infinity,
+              height: 44,
+              child: OutlinedButton.icon(
+                onPressed: state.isRegenerating
+                    ? null
+                    : () async {
+                        final count = await ref
+                            .read(storageSettingsProvider.notifier)
+                            .regenerateThumbnails();
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Regenerated $count thumbnails.'),
+                              backgroundColor: AppColors.statusGreen,
+                            ),
+                          );
+                        }
+                      },
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.textPrimary,
+                  side: const BorderSide(color: AppColors.border),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppRadii.pill),
+                  ),
+                ),
+                icon: state.isRegenerating
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh_rounded, size: 18),
+                label: Text(
+                  state.isRegenerating ? 'Regenerating…' : 'Regenerate Thumbnails',
+                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
                 ),
               ),
             ),

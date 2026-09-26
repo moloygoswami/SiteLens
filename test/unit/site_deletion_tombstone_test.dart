@@ -251,7 +251,7 @@ void main() {
       );
 
       // 2. User deletes photo (soft delete / tombstone)
-      await mediaRepo.softDeleteMedia('photo-lifecycle');
+      await mediaRepo.softDeleteMedia('photo-lifecycle', creatorId: testUserId);
 
       // Tombstone is published (synced=1) and not reconciled (tombstoneReconciled=0) -> BLOCKS deletion
       expect(await siteRepo.hasMediaForSite(testSiteId, creatorId: testUserId), isTrue);
@@ -261,7 +261,7 @@ void main() {
       );
 
       // 3. Cloud tombstone sync completes successfully
-      await mediaRepo.markTombstoneReconciled('photo-lifecycle');
+      await mediaRepo.markTombstoneReconciled('photo-lifecycle', creatorId: testUserId);
 
       // Now reconciled -> ALLOWS deletion
       expect(await siteRepo.hasMediaForSite(testSiteId, creatorId: testUserId), isFalse);
@@ -384,7 +384,7 @@ void main() {
       );
 
       // The existing never-published verification no-op settles it locally.
-      await mediaRepo.markTombstoneReconciled('r24-never-published');
+      await mediaRepo.markTombstoneReconciled('r24-never-published', creatorId: testUserId);
 
       expect(await siteRepo.hasMediaForSite(testSiteId, creatorId: testUserId), isFalse);
       await siteRepo.deleteSite(testSiteId, creatorId: testUserId);

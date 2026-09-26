@@ -1732,6 +1732,12 @@ class $GooglePhotosSyncEntriesTable extends GooglePhotosSyncEntries
       type: DriftSqlType.string,
       requiredDuringInsert: false,
       defaultValue: const Constant('pending'));
+  static const VerificationMeta _creatorIdMeta =
+      const VerificationMeta('creatorId');
+  @override
+  late final GeneratedColumn<String> creatorId = GeneratedColumn<String>(
+      'creator_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
   static const VerificationMeta _googlePhotosMediaIdMeta =
       const VerificationMeta('googlePhotosMediaId');
   @override
@@ -1768,6 +1774,7 @@ class $GooglePhotosSyncEntriesTable extends GooglePhotosSyncEntries
   List<GeneratedColumn> get $columns => [
         mediaId,
         status,
+        creatorId,
         googlePhotosMediaId,
         uploadedAt,
         errorMessage,
@@ -1794,6 +1801,10 @@ class $GooglePhotosSyncEntriesTable extends GooglePhotosSyncEntries
     if (data.containsKey('status')) {
       context.handle(_statusMeta,
           status.isAcceptableOrUnknown(data['status']!, _statusMeta));
+    }
+    if (data.containsKey('creator_id')) {
+      context.handle(_creatorIdMeta,
+          creatorId.isAcceptableOrUnknown(data['creator_id']!, _creatorIdMeta));
     }
     if (data.containsKey('google_photos_media_id')) {
       context.handle(
@@ -1839,6 +1850,8 @@ class $GooglePhotosSyncEntriesTable extends GooglePhotosSyncEntries
           .read(DriftSqlType.string, data['${effectivePrefix}media_id'])!,
       status: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}status'])!,
+      creatorId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}creator_id']),
       googlePhotosMediaId: attachedDatabase.typeMapping.read(
           DriftSqlType.string,
           data['${effectivePrefix}google_photos_media_id']),
@@ -1863,6 +1876,7 @@ class GooglePhotosSyncTableData extends DataClass
     implements Insertable<GooglePhotosSyncTableData> {
   final String mediaId;
   final String status;
+  final String? creatorId;
   final String? googlePhotosMediaId;
   final String? uploadedAt;
   final String? errorMessage;
@@ -1871,6 +1885,7 @@ class GooglePhotosSyncTableData extends DataClass
   const GooglePhotosSyncTableData(
       {required this.mediaId,
       required this.status,
+      this.creatorId,
       this.googlePhotosMediaId,
       this.uploadedAt,
       this.errorMessage,
@@ -1881,6 +1896,9 @@ class GooglePhotosSyncTableData extends DataClass
     final map = <String, Expression>{};
     map['media_id'] = Variable<String>(mediaId);
     map['status'] = Variable<String>(status);
+    if (!nullToAbsent || creatorId != null) {
+      map['creator_id'] = Variable<String>(creatorId);
+    }
     if (!nullToAbsent || googlePhotosMediaId != null) {
       map['google_photos_media_id'] = Variable<String>(googlePhotosMediaId);
     }
@@ -1901,6 +1919,9 @@ class GooglePhotosSyncTableData extends DataClass
     return GooglePhotosSyncEntriesCompanion(
       mediaId: Value(mediaId),
       status: Value(status),
+      creatorId: creatorId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(creatorId),
       googlePhotosMediaId: googlePhotosMediaId == null && nullToAbsent
           ? const Value.absent()
           : Value(googlePhotosMediaId),
@@ -1923,6 +1944,7 @@ class GooglePhotosSyncTableData extends DataClass
     return GooglePhotosSyncTableData(
       mediaId: serializer.fromJson<String>(json['mediaId']),
       status: serializer.fromJson<String>(json['status']),
+      creatorId: serializer.fromJson<String?>(json['creatorId']),
       googlePhotosMediaId:
           serializer.fromJson<String?>(json['googlePhotosMediaId']),
       uploadedAt: serializer.fromJson<String?>(json['uploadedAt']),
@@ -1937,6 +1959,7 @@ class GooglePhotosSyncTableData extends DataClass
     return <String, dynamic>{
       'mediaId': serializer.toJson<String>(mediaId),
       'status': serializer.toJson<String>(status),
+      'creatorId': serializer.toJson<String?>(creatorId),
       'googlePhotosMediaId': serializer.toJson<String?>(googlePhotosMediaId),
       'uploadedAt': serializer.toJson<String?>(uploadedAt),
       'errorMessage': serializer.toJson<String?>(errorMessage),
@@ -1948,6 +1971,7 @@ class GooglePhotosSyncTableData extends DataClass
   GooglePhotosSyncTableData copyWith(
           {String? mediaId,
           String? status,
+          Value<String?> creatorId = const Value.absent(),
           Value<String?> googlePhotosMediaId = const Value.absent(),
           Value<String?> uploadedAt = const Value.absent(),
           Value<String?> errorMessage = const Value.absent(),
@@ -1956,6 +1980,7 @@ class GooglePhotosSyncTableData extends DataClass
       GooglePhotosSyncTableData(
         mediaId: mediaId ?? this.mediaId,
         status: status ?? this.status,
+        creatorId: creatorId.present ? creatorId.value : this.creatorId,
         googlePhotosMediaId: googlePhotosMediaId.present
             ? googlePhotosMediaId.value
             : this.googlePhotosMediaId,
@@ -1971,6 +1996,7 @@ class GooglePhotosSyncTableData extends DataClass
     return GooglePhotosSyncTableData(
       mediaId: data.mediaId.present ? data.mediaId.value : this.mediaId,
       status: data.status.present ? data.status.value : this.status,
+      creatorId: data.creatorId.present ? data.creatorId.value : this.creatorId,
       googlePhotosMediaId: data.googlePhotosMediaId.present
           ? data.googlePhotosMediaId.value
           : this.googlePhotosMediaId,
@@ -1992,6 +2018,7 @@ class GooglePhotosSyncTableData extends DataClass
     return (StringBuffer('GooglePhotosSyncTableData(')
           ..write('mediaId: $mediaId, ')
           ..write('status: $status, ')
+          ..write('creatorId: $creatorId, ')
           ..write('googlePhotosMediaId: $googlePhotosMediaId, ')
           ..write('uploadedAt: $uploadedAt, ')
           ..write('errorMessage: $errorMessage, ')
@@ -2002,14 +2029,15 @@ class GooglePhotosSyncTableData extends DataClass
   }
 
   @override
-  int get hashCode => Object.hash(mediaId, status, googlePhotosMediaId,
-      uploadedAt, errorMessage, retryCount, lastAttemptAt);
+  int get hashCode => Object.hash(mediaId, status, creatorId,
+      googlePhotosMediaId, uploadedAt, errorMessage, retryCount, lastAttemptAt);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is GooglePhotosSyncTableData &&
           other.mediaId == this.mediaId &&
           other.status == this.status &&
+          other.creatorId == this.creatorId &&
           other.googlePhotosMediaId == this.googlePhotosMediaId &&
           other.uploadedAt == this.uploadedAt &&
           other.errorMessage == this.errorMessage &&
@@ -2021,6 +2049,7 @@ class GooglePhotosSyncEntriesCompanion
     extends UpdateCompanion<GooglePhotosSyncTableData> {
   final Value<String> mediaId;
   final Value<String> status;
+  final Value<String?> creatorId;
   final Value<String?> googlePhotosMediaId;
   final Value<String?> uploadedAt;
   final Value<String?> errorMessage;
@@ -2030,6 +2059,7 @@ class GooglePhotosSyncEntriesCompanion
   const GooglePhotosSyncEntriesCompanion({
     this.mediaId = const Value.absent(),
     this.status = const Value.absent(),
+    this.creatorId = const Value.absent(),
     this.googlePhotosMediaId = const Value.absent(),
     this.uploadedAt = const Value.absent(),
     this.errorMessage = const Value.absent(),
@@ -2040,6 +2070,7 @@ class GooglePhotosSyncEntriesCompanion
   GooglePhotosSyncEntriesCompanion.insert({
     required String mediaId,
     this.status = const Value.absent(),
+    this.creatorId = const Value.absent(),
     this.googlePhotosMediaId = const Value.absent(),
     this.uploadedAt = const Value.absent(),
     this.errorMessage = const Value.absent(),
@@ -2050,6 +2081,7 @@ class GooglePhotosSyncEntriesCompanion
   static Insertable<GooglePhotosSyncTableData> custom({
     Expression<String>? mediaId,
     Expression<String>? status,
+    Expression<String>? creatorId,
     Expression<String>? googlePhotosMediaId,
     Expression<String>? uploadedAt,
     Expression<String>? errorMessage,
@@ -2060,6 +2092,7 @@ class GooglePhotosSyncEntriesCompanion
     return RawValuesInsertable({
       if (mediaId != null) 'media_id': mediaId,
       if (status != null) 'status': status,
+      if (creatorId != null) 'creator_id': creatorId,
       if (googlePhotosMediaId != null)
         'google_photos_media_id': googlePhotosMediaId,
       if (uploadedAt != null) 'uploaded_at': uploadedAt,
@@ -2073,6 +2106,7 @@ class GooglePhotosSyncEntriesCompanion
   GooglePhotosSyncEntriesCompanion copyWith(
       {Value<String>? mediaId,
       Value<String>? status,
+      Value<String?>? creatorId,
       Value<String?>? googlePhotosMediaId,
       Value<String?>? uploadedAt,
       Value<String?>? errorMessage,
@@ -2082,6 +2116,7 @@ class GooglePhotosSyncEntriesCompanion
     return GooglePhotosSyncEntriesCompanion(
       mediaId: mediaId ?? this.mediaId,
       status: status ?? this.status,
+      creatorId: creatorId ?? this.creatorId,
       googlePhotosMediaId: googlePhotosMediaId ?? this.googlePhotosMediaId,
       uploadedAt: uploadedAt ?? this.uploadedAt,
       errorMessage: errorMessage ?? this.errorMessage,
@@ -2099,6 +2134,9 @@ class GooglePhotosSyncEntriesCompanion
     }
     if (status.present) {
       map['status'] = Variable<String>(status.value);
+    }
+    if (creatorId.present) {
+      map['creator_id'] = Variable<String>(creatorId.value);
     }
     if (googlePhotosMediaId.present) {
       map['google_photos_media_id'] =
@@ -2127,6 +2165,7 @@ class GooglePhotosSyncEntriesCompanion
     return (StringBuffer('GooglePhotosSyncEntriesCompanion(')
           ..write('mediaId: $mediaId, ')
           ..write('status: $status, ')
+          ..write('creatorId: $creatorId, ')
           ..write('googlePhotosMediaId: $googlePhotosMediaId, ')
           ..write('uploadedAt: $uploadedAt, ')
           ..write('errorMessage: $errorMessage, ')
@@ -3229,6 +3268,7 @@ typedef $$GooglePhotosSyncEntriesTableCreateCompanionBuilder
     = GooglePhotosSyncEntriesCompanion Function({
   required String mediaId,
   Value<String> status,
+  Value<String?> creatorId,
   Value<String?> googlePhotosMediaId,
   Value<String?> uploadedAt,
   Value<String?> errorMessage,
@@ -3240,6 +3280,7 @@ typedef $$GooglePhotosSyncEntriesTableUpdateCompanionBuilder
     = GooglePhotosSyncEntriesCompanion Function({
   Value<String> mediaId,
   Value<String> status,
+  Value<String?> creatorId,
   Value<String?> googlePhotosMediaId,
   Value<String?> uploadedAt,
   Value<String?> errorMessage,
@@ -3279,6 +3320,9 @@ class $$GooglePhotosSyncEntriesTableFilterComposer
   });
   ColumnFilters<String> get status => $composableBuilder(
       column: $table.status, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get creatorId => $composableBuilder(
+      column: $table.creatorId, builder: (column) => ColumnFilters(column));
 
   ColumnFilters<String> get googlePhotosMediaId => $composableBuilder(
       column: $table.googlePhotosMediaId,
@@ -3328,6 +3372,9 @@ class $$GooglePhotosSyncEntriesTableOrderingComposer
   });
   ColumnOrderings<String> get status => $composableBuilder(
       column: $table.status, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get creatorId => $composableBuilder(
+      column: $table.creatorId, builder: (column) => ColumnOrderings(column));
 
   ColumnOrderings<String> get googlePhotosMediaId => $composableBuilder(
       column: $table.googlePhotosMediaId,
@@ -3379,6 +3426,9 @@ class $$GooglePhotosSyncEntriesTableAnnotationComposer
   });
   GeneratedColumn<String> get status =>
       $composableBuilder(column: $table.status, builder: (column) => column);
+
+  GeneratedColumn<String> get creatorId =>
+      $composableBuilder(column: $table.creatorId, builder: (column) => column);
 
   GeneratedColumn<String> get googlePhotosMediaId => $composableBuilder(
       column: $table.googlePhotosMediaId, builder: (column) => column);
@@ -3445,6 +3495,7 @@ class $$GooglePhotosSyncEntriesTableTableManager extends RootTableManager<
           updateCompanionCallback: ({
             Value<String> mediaId = const Value.absent(),
             Value<String> status = const Value.absent(),
+            Value<String?> creatorId = const Value.absent(),
             Value<String?> googlePhotosMediaId = const Value.absent(),
             Value<String?> uploadedAt = const Value.absent(),
             Value<String?> errorMessage = const Value.absent(),
@@ -3455,6 +3506,7 @@ class $$GooglePhotosSyncEntriesTableTableManager extends RootTableManager<
               GooglePhotosSyncEntriesCompanion(
             mediaId: mediaId,
             status: status,
+            creatorId: creatorId,
             googlePhotosMediaId: googlePhotosMediaId,
             uploadedAt: uploadedAt,
             errorMessage: errorMessage,
@@ -3465,6 +3517,7 @@ class $$GooglePhotosSyncEntriesTableTableManager extends RootTableManager<
           createCompanionCallback: ({
             required String mediaId,
             Value<String> status = const Value.absent(),
+            Value<String?> creatorId = const Value.absent(),
             Value<String?> googlePhotosMediaId = const Value.absent(),
             Value<String?> uploadedAt = const Value.absent(),
             Value<String?> errorMessage = const Value.absent(),
@@ -3475,6 +3528,7 @@ class $$GooglePhotosSyncEntriesTableTableManager extends RootTableManager<
               GooglePhotosSyncEntriesCompanion.insert(
             mediaId: mediaId,
             status: status,
+            creatorId: creatorId,
             googlePhotosMediaId: googlePhotosMediaId,
             uploadedAt: uploadedAt,
             errorMessage: errorMessage,

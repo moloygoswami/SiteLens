@@ -45,7 +45,10 @@ class MockLocationService extends LocationHardwareService {
   Future<Position?> getLastKnownPosition() async => lastKnown;
 
   @override
-  Stream<Position> getPositionStream({LocationSettings? locationSettings}) =>
+  Stream<Position> getPositionStream({
+    LocationSettings? locationSettings,
+    bool highAccuracy = true,
+  }) =>
       _streamController.stream;
 
   @override
@@ -96,9 +99,15 @@ class _CountingLocationService extends MockLocationService {
   int positionStreamRequests = 0;
 
   @override
-  Stream<Position> getPositionStream({LocationSettings? locationSettings}) {
+  Stream<Position> getPositionStream({
+    LocationSettings? locationSettings,
+    bool highAccuracy = true,
+  }) {
     positionStreamRequests++;
-    return super.getPositionStream(locationSettings: locationSettings);
+    return super.getPositionStream(
+      locationSettings: locationSettings,
+      highAccuracy: highAccuracy,
+    );
   }
 }
 
@@ -116,7 +125,10 @@ class _StreamDiesOnPauseLocationService extends MockLocationService {
   bool _nativeStreamDead = false;
 
   @override
-  Stream<Position> getPositionStream({LocationSettings? locationSettings}) {
+  Stream<Position> getPositionStream({
+    LocationSettings? locationSettings,
+    bool highAccuracy = true,
+  }) {
     positionStreamRequests++;
     _nativeStreamDead = false; // a brand-new stream is alive
     final controller = StreamController<Position>.broadcast();

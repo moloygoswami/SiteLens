@@ -642,7 +642,11 @@ void main() {
         hasValidFix: true,
       );
 
-      await notifier.startVideoRecording(recordingGpsState: recordingGps);
+      await notifier.startVideoRecording(
+        recordingGpsState: recordingGps,
+        recordingCreatorId: 'test-creator',
+        recordingSiteId: 'test-site',
+      );
       expect(notifier.state.isRecordingVideo, isTrue);
       expect(notifier.state.recordingGpsState, equals(recordingGps));
 
@@ -672,12 +676,14 @@ void main() {
       const t0SiteCode = 'ORIG';
       const t0SiteName = 'Original Site Name';
       const t0CreatorId = 'creator-original-42';
+      const t0Gps = GpsHardwareState(hasValidFix: true);
 
       await notifier.startVideoRecording(
         recordingSiteId: t0SiteId,
         recordingSiteCode: t0SiteCode,
         recordingSiteName: t0SiteName,
         recordingCreatorId: t0CreatorId,
+        recordingGpsState: t0Gps,
       );
       expect(notifier.state.isRecordingVideo, isTrue);
       expect(notifier.state.recordingSiteId, equals(t0SiteId));

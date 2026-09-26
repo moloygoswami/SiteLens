@@ -80,9 +80,23 @@ void main() {
     notifier.dispose();
   });
 
+  const testGps = GpsHardwareState(
+    hasValidFix: true,
+    latitude: 22.5001,
+    longitude: 88.3001,
+    accuracyMeters: 3.0,
+    isLastKnownSeed: false,
+  );
+  const testSiteId = 'site-test-01';
+  const testCreatorId = 'creator-test-01';
+
   group('Video Recording Controller Tests', () {
     test('startVideoRecording transitions to recordingVideo state and tracks timestamp', () async {
-      final success = await notifier.startVideoRecording();
+      final success = await notifier.startVideoRecording(
+        recordingCreatorId: testCreatorId,
+        recordingSiteId: testSiteId,
+        recordingGpsState: testGps,
+      );
 
       expect(success, isTrue);
       expect(notifier.state.status, CameraStatus.recordingVideo);
@@ -92,7 +106,11 @@ void main() {
     });
 
     test('stopVideoRecording finalizes recording and calculates duration', () async {
-      await notifier.startVideoRecording();
+      await notifier.startVideoRecording(
+        recordingCreatorId: testCreatorId,
+        recordingSiteId: testSiteId,
+        recordingGpsState: testGps,
+      );
       final startTime = notifier.state.recordingStartedAtUtc;
 
       await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -108,14 +126,26 @@ void main() {
     });
 
     test('Double startVideoRecording does not trigger secondary recording', () async {
-      await notifier.startVideoRecording();
-      final secondStart = await notifier.startVideoRecording();
+      await notifier.startVideoRecording(
+        recordingCreatorId: testCreatorId,
+        recordingSiteId: testSiteId,
+        recordingGpsState: testGps,
+      );
+      final secondStart = await notifier.startVideoRecording(
+        recordingCreatorId: testCreatorId,
+        recordingSiteId: testSiteId,
+        recordingGpsState: testGps,
+      );
 
       expect(secondStart, isFalse);
     });
 
     test('Double stopVideoRecording does not fail or duplicate finalization', () async {
-      await notifier.startVideoRecording();
+      await notifier.startVideoRecording(
+        recordingCreatorId: testCreatorId,
+        recordingSiteId: testSiteId,
+        recordingGpsState: testGps,
+      );
       await notifier.stopVideoRecording();
 
       final secondStop = await notifier.stopVideoRecording();
@@ -123,7 +153,11 @@ void main() {
     });
 
     test('pauseCamera safely stops active video recording to prevent data loss', () async {
-      await notifier.startVideoRecording();
+      await notifier.startVideoRecording(
+        recordingCreatorId: testCreatorId,
+        recordingSiteId: testSiteId,
+        recordingGpsState: testGps,
+      );
       expect(notifier.state.isRecordingVideo, isTrue);
 
       await notifier.pauseCamera();
@@ -143,7 +177,11 @@ void main() {
     );
 
     test('R07: the T0 timestamp and the T0 GPS snapshot survive the stop unchanged', () async {
-      await notifier.startVideoRecording(recordingGpsState: t0Gps);
+      await notifier.startVideoRecording(
+        recordingGpsState: t0Gps,
+        recordingCreatorId: testCreatorId,
+        recordingSiteId: testSiteId,
+      );
       final t0 = notifier.state.recordingStartedAtUtc;
       expect(t0, isNotNull);
 
@@ -164,7 +202,11 @@ void main() {
       expect(notifier.state.lensZoom, CameraLensZoom.tele);
       expect(notifier.state.currentZoomLevel, 2.0);
 
-      await notifier.startVideoRecording();
+      await notifier.startVideoRecording(
+        recordingCreatorId: testCreatorId,
+        recordingSiteId: testSiteId,
+        recordingGpsState: testGps,
+      );
       expect(notifier.state.isRecordingVideo, isTrue);
 
       // Recording: lens switching and digital zoom are inert.
@@ -178,7 +220,11 @@ void main() {
       // The initializing preset (max, audio enabled) established audio.
       expect(notifier.state.isAudioEnabled, isTrue);
 
-      await notifier.startVideoRecording(recordingGpsState: t0Gps);
+      await notifier.startVideoRecording(
+        recordingGpsState: t0Gps,
+        recordingCreatorId: testCreatorId,
+        recordingSiteId: testSiteId,
+      );
       expect(notifier.state.recordingHasAudioTrack, isTrue);
 
       await notifier.stopVideoRecording();

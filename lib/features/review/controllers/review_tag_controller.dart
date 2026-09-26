@@ -86,6 +86,30 @@ class ReviewTagNotifier extends StateNotifier<ReviewTagState> {
     }
   }
 
+  Future<void> initializeSiteCandidates(PendingCapturePayload payload) async {
+    try {
+      final snapshot = payload.metadataSnapshot;
+      final siteCandidates = await _mediaRepo.findSiteWideCandidates(
+        centerLat: snapshot.latitude,
+        centerLon: snapshot.longitude,
+        siteId: snapshot.siteId,
+        capturedBefore: snapshot.capturedAtUtc,
+        currentMediaId: payload.mediaId,
+        creatorId: snapshot.creatorId,
+      );
+      final hasOpen = siteCandidates.isNotEmpty;
+      state = state.copyWith(
+        hasSiteOpenNonConformities: hasOpen,
+        siteWideCandidates: siteCandidates,
+      );
+      if (state.observationType == ObservationType.closed) {
+        await searchSmartLink(payload);
+      }
+    } catch (_) {
+      // Fail closed / gracefully
+    }
+  }
+
   Future<void> searchSmartLink(PendingCapturePayload payload) async {
     final currentId = ++_searchRequestId;
     state = state.copyWith(isSearchingSmartLink: true);
@@ -102,8 +126,19 @@ class ReviewTagNotifier extends StateNotifier<ReviewTagState> {
         creatorId: snapshot.creatorId,
       );
 
+      final siteCandidates = await _mediaRepo.findSiteWideCandidates(
+        centerLat: snapshot.latitude,
+        centerLon: snapshot.longitude,
+        siteId: snapshot.siteId,
+        capturedBefore: snapshot.capturedAtUtc,
+        currentMediaId: payload.mediaId,
+        creatorId: snapshot.creatorId,
+      );
+
       // Discard result if a newer search request was initiated
       if (currentId != _searchRequestId) return;
+
+      final hasOpen = siteCandidates.isNotEmpty;
 
       if (match != null) {
         final dist = SpatialMathUtils.haversineDistanceMeters(
@@ -119,11 +154,16 @@ class ReviewTagNotifier extends StateNotifier<ReviewTagState> {
           isSearchingSmartLink: false,
           suggestedBeforeMatch: match,
           suggestedDistanceMeters: dist,
+          hasSiteOpenNonConformities: true,
+          siteWideCandidates: siteCandidates,
         );
       } else {
         state = state.copyWith(
           isSearchingSmartLink: false,
           clearSuggestedBeforeMatch: true,
+          hasSiteOpenNonConformities: hasOpen,
+          siteWideCandidates: siteCandidates,
+          isSiteWideSearchExpanded: siteCandidates.isNotEmpty,
         );
       }
     } catch (_) {
@@ -133,6 +173,14 @@ class ReviewTagNotifier extends StateNotifier<ReviewTagState> {
         clearSuggestedBeforeMatch: true,
       );
     }
+  }
+
+  void toggleSiteWideSearchExpanded() {
+    state = state.copyWith(isSiteWideSearchExpanded: !state.isSiteWideSearchExpanded);
+  }
+
+  void dismissSiteWideSearch() {
+    state = state.copyWith(isSiteWideSearchExpanded: false);
   }
 
   static String formatEvidId(String id) => ClosedEvidenceIntegrity.formatEvidId(id);

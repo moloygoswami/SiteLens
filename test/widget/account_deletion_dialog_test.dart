@@ -52,7 +52,8 @@ class FakeMediaRepo implements MediaRepository {
   @override
   Future<List<MediaItem>> getPendingOrFailedMedia({String? creatorId}) async => [];
   @override
-  Future<void> resetStuckSyncingMedia() async {}
+  Future<void> resetStuckSyncingMedia({String? creatorId}) async {}
+
 }
 
 class FakeCloudSync implements CloudSyncService {
@@ -283,5 +284,6 @@ class MockSiteRepository implements SiteRepository {
   Future<SiteModel?> getSiteById(String id, {String? creatorId}) async => site;
 
   @override
-  Future<void> saveSite(SiteModel s) async {}
+  Future<void> saveSite(SiteModel s, {String? creatorId}) async {}
 }
+

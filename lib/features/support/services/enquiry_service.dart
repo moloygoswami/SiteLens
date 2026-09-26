@@ -56,16 +56,19 @@ abstract class IEnquiryService {
 class FirebaseEnquiryService implements IEnquiryService {
   final http.Client _httpClient;
   final FirebaseAuth? _firebaseAuth;
+  final Future<String?> Function()? _appCheckTokenProvider;
   final String _projectId;
   final String _region;
 
   FirebaseEnquiryService({
     http.Client? httpClient,
     FirebaseAuth? firebaseAuth,
+    Future<String?> Function()? appCheckTokenProvider,
     String projectId = 'sitelens-prod-80e7b',
     String region = 'us-central1',
   })  : _httpClient = httpClient ?? http.Client(),
         _firebaseAuth = firebaseAuth,
+        _appCheckTokenProvider = appCheckTokenProvider,
         _projectId = projectId,
         _region = region;
 
@@ -80,15 +83,26 @@ class FirebaseEnquiryService implements IEnquiryService {
         'Content-Type': 'application/json',
       };
 
-      // Attach Firebase App Check token (submitUserEnquiry enforces App Check server-side)
+      // Attach Firebase App Check token (submitUserEnquiry enforces App Check server-side).
+      // An unavailable App Check token is an explicit failure: the request
+      // must not be sent without attestation.
+      String? appCheckToken;
       try {
-        final appCheckToken = await FirebaseAppCheck.instance.getToken();
-        if (appCheckToken != null && appCheckToken.isNotEmpty) {
-          headers['X-Firebase-AppCheck'] = appCheckToken;
-        }
+        final provider = _appCheckTokenProvider;
+        appCheckToken = provider != null
+            ? await provider()
+            : await FirebaseAppCheck.instance.getToken();
       } catch (_) {
-        // Continue; in testing/unsupported environments, callable may reject if enforceAppCheck is active
+        appCheckToken = null;
       }
+      if (appCheckToken == null || appCheckToken.isEmpty) {
+        return EnquirySubmissionResult.failure(
+          submissionId: enquiry.submissionId,
+          errorMessage:
+              'App integrity check unavailable. Please update Google Play Services and try again.',
+        );
+      }
+      headers['X-Firebase-AppCheck'] = appCheckToken;
 
       // Attach Firebase Auth ID token if user is signed in
       if (_firebaseAuth != null) {
@@ -171,5 +185,8 @@ class FirebaseEnquiryService implements IEnquiryService {
 
 /// Global Riverpod Provider for EnquiryService
 final enquiryServiceProvider = Provider<IEnquiryService>((ref) {
-  return FirebaseEnquiryService();
+  return FirebaseEnquiryService(
+    firebaseAuth: FirebaseAuth.instance,
+    appCheckTokenProvider: FirebaseAppCheck.instance.getToken,
+  );
 });

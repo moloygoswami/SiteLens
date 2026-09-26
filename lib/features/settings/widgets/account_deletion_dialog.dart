@@ -131,6 +131,8 @@ class _AccountDeletionDialogState extends State<AccountDeletionDialog> {
   }
 
   Future<void> _executeBackendDeletion() async {
+    final deletedUid = widget.authService.currentUser?.uid;
+
     setState(() {
       _isLoading = true;
       _statusMessage = 'Purging account & cloud data...';
@@ -164,6 +166,9 @@ class _AccountDeletionDialogState extends State<AccountDeletionDialog> {
       try {
         final prefs = await SharedPreferences.getInstance();
         await prefs.remove('sitelens_active_site_id');
+        if (deletedUid != null && deletedUid.isNotEmpty) {
+          await prefs.remove('sitelens_active_site_id_$deletedUid');
+        }
       } catch (_) {}
 
       try {
@@ -201,15 +206,18 @@ class _AccountDeletionDialogState extends State<AccountDeletionDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: const Color(0xFFF2EFEB),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 420),
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: _isLoading ? _buildLoadingView() : _buildConfirmationView(),
+    return PopScope(
+      canPop: !_isLoading,
+      child: Dialog(
+        backgroundColor: const Color(0xFFF2EFEB),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: _isLoading ? _buildLoadingView() : _buildConfirmationView(),
+          ),
         ),
       ),
     );

@@ -21,7 +21,10 @@ class GooglePhotosSettingsCard extends ConsumerWidget {
       icon: Icons.photo_library_rounded,
       children: [
         Text(
-          'Automatically archive watermarked evidence artifacts to your Google Photos library.',
+          'Automatically archive canonical evidence artifacts to your Google Photos library. '
+          'Backs up canonical evidence artifacts only (never raw originals). '
+          'Requests minimal append-only OAuth scope to create and manage an application album, '
+          'with no access to your existing photo library.',
           style: AppTypography.bodyMedium.copyWith(fontSize: 12),
         ),
         const SizedBox(height: 14),

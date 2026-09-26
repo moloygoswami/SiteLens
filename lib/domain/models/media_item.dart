@@ -141,4 +141,35 @@ class MediaItem {
 
   @override
   int get hashCode => id.hashCode;
+
+  /// Returns the authoritative SHA-256 hash matching the specified [artifactType].
+  /// Never falls back from one artifact's hash to another (AC-EVID-06, AC-EVID-07).
+  String? getArtifactHash(ArtifactType artifactType) {
+    switch (artifactType) {
+      case ArtifactType.original:
+        return sha256Hash;
+      case ArtifactType.evidence:
+        return evidenceSha256Hash;
+      case ArtifactType.thumbnail:
+        return null;
+    }
+  }
+
+  /// Returns the display string for the specified [artifactType]'s SHA-256 hash.
+  /// If the hash is not established or unavailable, returns an explicit "UNAVAILABLE" string,
+  /// strictly preserving the no-hash-field-fallback invariant (AC-EVID-07, TM-U-11).
+  String getDisplayHash(ArtifactType artifactType) {
+    final hash = getArtifactHash(artifactType);
+    if (hash == null || hash.trim().isEmpty) {
+      return 'UNAVAILABLE';
+    }
+    return hash;
+  }
+}
+
+/// The three distinct artifacts produced by the capture pipeline (AC-EVID-01).
+enum ArtifactType {
+  original,
+  evidence,
+  thumbnail,
 }

@@ -22,10 +22,14 @@ class LocationHardwareService {
     }
   }
 
-  LocationSettings _buildHighAccuracySettings({Duration? timeLimit}) {
+  LocationSettings _buildLocationSettings({
+    Duration? timeLimit,
+    bool highAccuracy = true,
+  }) {
+    final accuracy = highAccuracy ? LocationAccuracy.high : LocationAccuracy.medium;
     if (defaultTargetPlatform == TargetPlatform.android) {
       return AndroidSettings(
-        accuracy: LocationAccuracy.high,
+        accuracy: accuracy,
         distanceFilter: 0,
         forceLocationManager: false,
         intervalDuration: const Duration(milliseconds: 500),
@@ -35,7 +39,7 @@ class LocationHardwareService {
     } else if (defaultTargetPlatform == TargetPlatform.iOS ||
         defaultTargetPlatform == TargetPlatform.macOS) {
       return AppleSettings(
-        accuracy: LocationAccuracy.high,
+        accuracy: accuracy,
         activityType: ActivityType.other,
         distanceFilter: 0,
         pauseLocationUpdatesAutomatically: false,
@@ -43,25 +47,31 @@ class LocationHardwareService {
       );
     }
     return LocationSettings(
-      accuracy: LocationAccuracy.high,
+      accuracy: accuracy,
       distanceFilter: 0,
       timeLimit: timeLimit,
     );
   }
 
-  Future<Position?> getCurrentPosition() async {
+  Future<Position?> getCurrentPosition({bool highAccuracy = true}) async {
     try {
       return await Geolocator.getCurrentPosition(
-        locationSettings: _buildHighAccuracySettings(timeLimit: const Duration(seconds: 5)),
+        locationSettings: _buildLocationSettings(
+          timeLimit: const Duration(seconds: 5),
+          highAccuracy: highAccuracy,
+        ),
       );
     } catch (_) {
       return null;
     }
   }
 
-  Stream<Position> getPositionStream({LocationSettings? locationSettings}) {
+  Stream<Position> getPositionStream({
+    LocationSettings? locationSettings,
+    bool highAccuracy = true,
+  }) {
     return Geolocator.getPositionStream(
-      locationSettings: locationSettings ?? _buildHighAccuracySettings(),
+      locationSettings: locationSettings ?? _buildLocationSettings(highAccuracy: highAccuracy),
     );
   }
 

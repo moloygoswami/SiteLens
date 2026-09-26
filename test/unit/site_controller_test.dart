@@ -25,7 +25,7 @@ class FailingSiteRepository implements SiteRepository {
   Future<SiteModel?> getSiteById(String id, {String? creatorId}) async => null;
 
   @override
-  Future<void> saveSite(SiteModel site) async {
+  Future<void> saveSite(SiteModel site, {String? creatorId}) async {
     if (shouldFailSave) {
       throw Exception('Disk full error');
     }
@@ -57,7 +57,7 @@ class HydratableMockSiteRepository implements SiteRepository {
   Future<SiteModel?> getSiteById(String id, {String? creatorId}) => _inner.getSiteById(id, creatorId: creatorId);
 
   @override
-  Future<void> saveSite(SiteModel site) => _inner.saveSite(site);
+  Future<void> saveSite(SiteModel site, {String? creatorId}) => _inner.saveSite(site, creatorId: creatorId);
 
   @override
   Future<void> deleteSite(String id, {String? creatorId}) => _inner.deleteSite(id, creatorId: creatorId);
@@ -71,8 +71,9 @@ class HydratableMockSiteRepository implements SiteRepository {
   @override
   Future<List<SiteModel>> hydrateRemoteSites(String userId) async {
     for (final s in remoteSitesToHydrate) {
-      await _inner.saveSite(s);
+      await _inner.saveSite(s, creatorId: userId);
     }
+
     return remoteSitesToHydrate;
   }
 }

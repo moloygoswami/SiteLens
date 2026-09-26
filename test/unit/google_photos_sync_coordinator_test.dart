@@ -43,13 +43,13 @@ class MockGooglePhotosApiService extends GooglePhotosApiService {
   }
 
   @override
-  Future<String?> getOrCreateAlbum(String albumTitle) async {
+  Future<String?> getOrCreateAlbum(String albumTitle, {String? ownerUid}) async {
     getOrCreateAlbumCalls++;
     return currentAlbumId;
   }
 
   @override
-  Future<void> invalidateAlbumId() async {
+  Future<void> invalidateAlbumId({String? ownerUid}) async {
     invalidateAlbumCalls++;
     currentAlbumId = 'mock_album_new';
   }
@@ -81,40 +81,62 @@ class MockGooglePhotosRepository implements GooglePhotosRepository {
   final Map<String, GooglePhotosSyncEntry> store = {};
 
   @override
-  Future<int> countByStatus(GooglePhotosSyncStatus status) async {
-    return store.values.where((e) => e.status == status).length;
+  Future<int> countByStatus(GooglePhotosSyncStatus status, {required String? creatorId}) async {
+    if (creatorId == null || creatorId.isEmpty) return 0;
+    return store.values.where((e) => e.creatorId == creatorId && e.status == status).length;
   }
 
   @override
-  Future<void> deleteEntry(String mediaId) async {
-    store.remove(mediaId);
+  Future<void> deleteEntry(String mediaId, {required String? creatorId}) async {
+    if (creatorId == null || creatorId.isEmpty) return;
+    final existing = store[mediaId];
+    if (existing?.creatorId == creatorId) {
+      store.remove(mediaId);
+    }
   }
 
   @override
-  Future<GooglePhotosSyncEntry?> getEntryForMedia(String mediaId) async {
-    return store[mediaId];
+  Future<GooglePhotosSyncEntry?> getEntryForMedia(String mediaId, {required String? creatorId}) async {
+    if (creatorId == null || creatorId.isEmpty) return null;
+    final entry = store[mediaId];
+    return entry?.creatorId == creatorId ? entry : null;
   }
 
   @override
-  Future<List<GooglePhotosSyncEntry>> getPendingOrFailedEntries() async {
-    return store.values.where((e) => e.status == GooglePhotosSyncStatus.pending || e.status == GooglePhotosSyncStatus.failed).toList();
+  Future<List<GooglePhotosSyncEntry>> getPendingOrFailedEntries({required String? creatorId}) async {
+    if (creatorId == null || creatorId.isEmpty) return [];
+    return store.values
+        .where((e) => e.creatorId == creatorId && (e.status == GooglePhotosSyncStatus.pending || e.status == GooglePhotosSyncStatus.failed))
+        .toList();
   }
 
   @override
-  Future<void> queueMedia(String mediaId) async {
-    store[mediaId] = GooglePhotosSyncEntry(mediaId: mediaId, status: GooglePhotosSyncStatus.pending);
+  Future<void> queueMedia(String mediaId, {required String? creatorId}) async {
+    if (creatorId == null || creatorId.isEmpty) {
+      throw GooglePhotosIsolationException('creatorId is required');
+    }
+    store[mediaId] = GooglePhotosSyncEntry(
+      mediaId: mediaId,
+      creatorId: creatorId,
+      status: GooglePhotosSyncStatus.pending,
+    );
   }
 
   @override
   Future<void> updateStatus({
     required String mediaId,
+    required String? creatorId,
     required GooglePhotosSyncStatus status,
     String? googlePhotosMediaId,
     DateTime? uploadedAt,
     String? errorMessage,
     bool incrementRetry = false,
   }) async {
-    final existing = store[mediaId] ?? GooglePhotosSyncEntry(mediaId: mediaId, status: status);
+    if (creatorId == null || creatorId.isEmpty) {
+      throw GooglePhotosIsolationException('creatorId is required');
+    }
+    final existing = store[mediaId];
+    if (existing == null || existing.creatorId != creatorId) return;
     store[mediaId] = existing.copyWith(
       status: status,
       googlePhotosMediaId: googlePhotosMediaId,
@@ -125,8 +147,14 @@ class MockGooglePhotosRepository implements GooglePhotosRepository {
   }
 
   @override
-  Stream<List<GooglePhotosSyncEntry>> watchAllEntries() {
-    return Stream.value(store.values.toList());
+  Stream<List<GooglePhotosSyncEntry>> watchAllEntries({required String? creatorId}) {
+    if (creatorId == null || creatorId.isEmpty) return Stream.value(const []);
+    return Stream.value(store.values.where((e) => e.creatorId == creatorId).toList());
+  }
+
+  @override
+  Future<void> clearQueueForCreator(String creatorId) async {
+    store.removeWhere((_, e) => e.creatorId == creatorId);
   }
 }
 
@@ -134,7 +162,14 @@ class MockMediaRepository implements MediaRepository {
   final Map<String, MediaItem> mediaMap = {};
 
   @override
-  Future<MediaItem?> getMediaById(String id) async => mediaMap[id];
+  Future<MediaItem?> getMediaById(String id, {String? creatorId}) async {
+    final m = mediaMap[id];
+    if (creatorId != null && creatorId.isNotEmpty) {
+      return m?.creatorId == creatorId ? m : null;
+    }
+    return m;
+  }
+
 
   @override
   Future<List<MediaItem>> getAllMediaEntriesIncludingDeleted({String? creatorId}) async {

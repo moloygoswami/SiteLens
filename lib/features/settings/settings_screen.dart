@@ -53,7 +53,7 @@ class SettingsScreen extends ConsumerWidget {
 
               final leftColumn = [
                 // SECTION 1: GPS ACCURACY
-                _buildGpsSection(context, ref, gpsThreshold.lowAccuracyThresholdMeters),
+                _buildGpsSection(context, ref, gpsThreshold.lowAccuracyThresholdMeters, gpsThreshold.highAccuracyMode),
                 const SizedBox(height: 16),
 
                 // SECTION 2: WATERMARK & STAMP
@@ -131,7 +131,7 @@ class SettingsScreen extends ConsumerWidget {
   // ==========================================
   // SECTION 2: GPS ACCURACY
   // ==========================================
-  Widget _buildGpsSection(BuildContext context, WidgetRef ref, double threshold) {
+  Widget _buildGpsSection(BuildContext context, WidgetRef ref, double threshold, bool highAccuracyMode) {
     return SettingsSectionCard(
       icon: Icons.gps_fixed_rounded,
       title: 'GPS & GEOLOCATION',
@@ -150,7 +150,7 @@ class SettingsScreen extends ConsumerWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    'Captures with precision > ${threshold.toInt()}m are tagged Weak',
+                    'Captures with precision >${threshold.toInt()}m are tagged Weak',
                     style:  TextStyle(fontSize: 11, color: AppColors.textSecondary),
                   ),
                 ],
@@ -167,6 +167,47 @@ class SettingsScreen extends ConsumerWidget {
               child: Text(
                 '±${threshold.toInt()}m',
                 style:  TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.w800, fontSize: 12, color: AppColors.primary),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        // High accuracy mode status
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'High Accuracy Mode',
+                    style: TextStyle(fontWeight: FontWeight.w700, color: AppColors.textPrimary, fontSize: 13),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    highAccuracyMode ? 'GPS + sensors (best precision)' : 'Cell/Wi-Fi (faster, coarser)',
+                    style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: highAccuracyMode ? AppColors.primaryContainer : AppColors.surfaceContainerHigh,
+                borderRadius: BorderRadius.circular(AppRadii.pill),
+                border: Border.all(color: highAccuracyMode ? AppColors.primary : AppColors.border),
+              ),
+              child: Text(
+                highAccuracyMode ? 'ON' : 'OFF',
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12,
+                  color: highAccuracyMode ? AppColors.primaryDark : AppColors.textMuted,
+                ),
               ),
             ),
           ],

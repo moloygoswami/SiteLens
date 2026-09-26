@@ -8,15 +8,23 @@ class FakeSiteRepository implements SiteRepository {
       : _sites = initialSites != null ? List.from(initialSites) : [];
 
   @override
-  Future<List<SiteModel>> getAllSites({String? creatorId}) async => List.unmodifiable(_sites);
-
-  @override
-  Future<SiteModel?> getSiteById(String id, {String? creatorId}) async {
-    return _sites.where((s) => s.id == id).firstOrNull;
+  Future<List<SiteModel>> getAllSites({String? creatorId}) async {
+    // Fail closed: an unresolved creator identity returns zero rows, matching
+    // the production repository's creator-scoped query semantics.
+    if (creatorId == null || creatorId.isEmpty) return const [];
+    return List.unmodifiable(_sites.where((s) => s.creatorId == creatorId));
   }
 
   @override
-  Future<void> saveSite(SiteModel site) async {
+  Future<SiteModel?> getSiteById(String id, {String? creatorId}) async {
+    if (creatorId == null || creatorId.isEmpty) return null;
+    return _sites
+        .where((s) => s.id == id && s.creatorId == creatorId)
+        .firstOrNull;
+  }
+
+  @override
+  Future<void> saveSite(SiteModel site, {String? creatorId}) async {
     final idx = _sites.indexWhere((s) => s.id == site.id);
     if (idx >= 0) {
       _sites[idx] = site;
@@ -27,7 +35,8 @@ class FakeSiteRepository implements SiteRepository {
 
   @override
   Future<void> deleteSite(String id, {String? creatorId}) async {
-    _sites.removeWhere((s) => s.id == id);
+    if (creatorId == null || creatorId.isEmpty) return;
+    _sites.removeWhere((s) => s.id == id && s.creatorId == creatorId);
   }
 
   @override

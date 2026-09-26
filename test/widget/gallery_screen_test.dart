@@ -10,6 +10,7 @@ import 'package:sqlite3/open.dart';
 import 'package:sitelens/data/local/database/app_database.dart';
 import 'package:sitelens/data/repositories/media_repository.dart';
 import 'package:sitelens/data/repositories/site_repository.dart';
+import 'package:sitelens/domain/models/enums.dart';
 import 'package:sitelens/domain/models/site_model.dart';
 import 'package:sitelens/features/gallery/gallery_screen.dart';
 import 'package:sitelens/features/gallery/media_detail_screen.dart';
@@ -88,6 +89,13 @@ class TestEvidenceStorageService implements EvidenceStorageService {
     String? thumbUri,
     String? type,
   }) async {}
+
+  @override
+  Future<IntegrityVerificationResult> verifyArtifactIntegrity({
+    required String relativePath,
+    required String? expectedSha256,
+  }) async =>
+      IntegrityVerificationResult.verified;
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
@@ -565,7 +573,8 @@ class MockSiteRepository implements SiteRepository {
       site.id == id ? site : null;
 
   @override
-  Future<void> saveSite(SiteModel site) async {}
+  Future<void> saveSite(SiteModel site, {String? creatorId}) async {}
+
 
   @override
   Future<void> deleteSite(String id, {String? creatorId}) async {}

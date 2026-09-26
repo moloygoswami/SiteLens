@@ -102,6 +102,7 @@ void main() {
               lon: 88.3,
               observationType: const drift.Value('issue'),
               synced: const drift.Value(0),
+              creatorId: const drift.Value('user-1'),
             ),
           );
 
@@ -118,6 +119,7 @@ void main() {
               linkedMediaId: const drift.Value('before_photo_1'),
               note: const drift.Value('Evid_ID: before_photo_1\nDefect resolved'),
               synced: const drift.Value(0),
+              creatorId: const drift.Value('user-1'),
             ),
           );
     });
@@ -128,7 +130,7 @@ void main() {
 
     test('4. Reload preserves the corrected state: changing Closed -> General in DB clears link and Evid_ID', () async {
       // Pre-check: closed_photo_1 has linkedMediaId and Evid_ID note
-      final preCheck = await mediaRepo.getMediaById('closed_photo_1');
+      final preCheck = await mediaRepo.getMediaById('closed_photo_1', creatorId: 'user-1');
       expect(preCheck, isNotNull);
       expect(preCheck!.observationType, equals(ObservationType.closed));
       expect(preCheck.linkedMediaId, equals('before_photo_1'));
@@ -140,10 +142,11 @@ void main() {
         activityTag: 'General Inspection',
         observationType: ObservationType.general,
         note: 'Evid_ID: before_photo_1\nDefect resolved',
+        creatorId: 'user-1',
       );
 
       // Reload from DB
-      final reloaded = await mediaRepo.getMediaById('closed_photo_1');
+      final reloaded = await mediaRepo.getMediaById('closed_photo_1', creatorId: 'user-1');
       expect(reloaded, isNotNull);
       expect(reloaded!.observationType, equals(ObservationType.general));
       // linkedMediaId MUST be cleared (null) in database
@@ -161,9 +164,10 @@ void main() {
         observationType: ObservationType.material,
         note: 'Some note with Evid_ID: before_photo_1',
         linkedMediaId: 'before_photo_1',
+        creatorId: 'user-1',
       );
 
-      final reloaded = await mediaRepo.getMediaById('closed_photo_1');
+      final reloaded = await mediaRepo.getMediaById('closed_photo_1', creatorId: 'user-1');
       expect(reloaded!.observationType, equals(ObservationType.material));
       expect(reloaded.linkedMediaId, isNull);
       expect(reloaded.note, equals('Some note with'));
@@ -176,15 +180,17 @@ void main() {
         activityTag: 'General',
         observationType: ObservationType.general,
         note: 'Note',
+        creatorId: 'user-1',
       );
 
       // Attempt to link
       await mediaRepo.linkMedia(
         mediaId: 'closed_photo_1',
         linkedMediaId: 'before_photo_1',
+        creatorId: 'user-1',
       );
 
-      final reloaded = await mediaRepo.getMediaById('closed_photo_1');
+      final reloaded = await mediaRepo.getMediaById('closed_photo_1', creatorId: 'user-1');
       expect(reloaded!.linkedMediaId, isNull);
     });
 
@@ -195,9 +201,10 @@ void main() {
         observationType: ObservationType.closed,
         note: 'Re-inspection passed',
         linkedMediaId: 'before_photo_1',
+        creatorId: 'user-1',
       );
 
-      final reloaded = await mediaRepo.getMediaById('closed_photo_1');
+      final reloaded = await mediaRepo.getMediaById('closed_photo_1', creatorId: 'user-1');
       expect(reloaded!.observationType, equals(ObservationType.closed));
       expect(reloaded.linkedMediaId, equals('before_photo_1'));
       expect(reloaded.note, equals('Evid_ID: before_photo_1\nRe-inspection passed'));

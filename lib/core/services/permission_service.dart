@@ -57,6 +57,17 @@ class PermissionService extends StateNotifier<SiteLensPermissionStatus> {
     }
   }
 
+  Future<PermissionStatus> checkMicrophonePermission() async {
+    try {
+      final status = await Permission.microphone.status;
+      state = state.copyWith(microphone: status);
+      return status;
+    } catch (e) {
+      debugPrint('Error checking microphone permission: $e');
+      return state.microphone;
+    }
+  }
+
   Future<SiteLensPermissionStatus> checkAllPermissions() async {
     try {
       final cameraStatus = await Permission.camera.status;

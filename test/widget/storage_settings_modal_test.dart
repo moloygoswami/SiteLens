@@ -53,6 +53,9 @@ class FakeStorageCleanupService implements StorageCleanupService {
           bytesReclaimed: 15 * 1024 * 1024,
         );
   }
+
+  @override
+  Future<int> regenerateThumbnails({String? creatorId}) async => 0;
 }
 
 void main() {

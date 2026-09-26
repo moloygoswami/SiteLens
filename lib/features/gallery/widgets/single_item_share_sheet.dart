@@ -235,7 +235,7 @@ class SingleItemShareSheet extends ConsumerWidget {
                   'Copy the shared evidence file\'s full 64-character SHA-256',
               onTap: () async {
                 Navigator.of(context).pop();
-                final hash = item.evidenceSha256Hash ?? 'UNKNOWN';
+                final hash = item.getDisplayHash(ArtifactType.evidence);
                 await Clipboard.setData(ClipboardData(text: hash));
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).removeCurrentSnackBar();

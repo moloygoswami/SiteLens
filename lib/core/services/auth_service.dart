@@ -10,7 +10,9 @@ enum SessionTerminationReason {
   userDisabled('Your account has been disabled by an administrator.'),
   userNotFound('Your account was not found or has been deleted.'),
   sessionRevoked('Your session has expired or was revoked. Please sign in again.'),
-  unauthenticated('Your session is no longer authenticated. Please sign in again.');
+  unauthenticated('Your session is no longer authenticated. Please sign in again.'),
+  emailNotVerified(
+      'Your email address has not been verified yet. Please check your inbox for the verification link.');
 
   final String defaultMessage;
   const SessionTerminationReason(this.defaultMessage);
@@ -66,6 +68,12 @@ class EmailNotVerifiedException implements Exception {
   @override
   String toString() => message;
 }
+
+/// The single verification-required message used by every authentication path,
+/// so email/password and Google sign-in surface identical UX
+/// (`01_PRD.MD` §9.1, `04_SECURITY.MD` §2, `05_ACCEPTANCE.MD` AC-AUTH-04).
+const String kEmailNotVerifiedExceptionMessage =
+    'Your email address has not been verified yet. Please check your inbox for the verification link.';
 
 class AuthService {
   final FirebaseAuth _firebaseAuth;
@@ -152,7 +160,7 @@ class AuthService {
         await _firebaseAuth.signOut();
         throw EmailNotVerifiedException(
           email: email.trim(),
-          message: 'Your email address has not been verified yet. Please check your inbox for the verification link.',
+          message: kEmailNotVerifiedExceptionMessage,
         );
       }
 
@@ -214,11 +222,29 @@ class AuthService {
       final user = userCredential.user;
       if (user == null) return null;
 
+      // A Google account is not assumed to be verified: reload and gate on the
+      // authoritative `emailVerified` claim before an application session is
+      // accepted (`04_SECURITY.MD` §2, AC-AUTH-04).
+      await user.reload();
+      final freshUser = _firebaseAuth.currentUser ?? user;
+
+      if (!freshUser.emailVerified) {
+        // Tear down both identities so no partial authenticated state survives.
+        await _firebaseAuth.signOut();
+        try {
+          await _googleSignIn.signOut();
+        } catch (_) {}
+        throw EmailNotVerifiedException(
+          email: freshUser.email ?? '',
+          message: kEmailNotVerifiedExceptionMessage,
+        );
+      }
+
       return AuthUser(
-        uid: user.uid,
-        email: user.email,
-        displayName: user.displayName ?? (user.email?.split('@').first ?? 'Site Inspector'),
-        isEmailVerified: user.emailVerified,
+        uid: freshUser.uid,
+        email: freshUser.email,
+        displayName: freshUser.displayName ?? (freshUser.email?.split('@').first ?? 'Site Inspector'),
+        isEmailVerified: freshUser.emailVerified,
       );
     } on FirebaseAuthException catch (e) {
       debugPrint('Firebase Google Auth Error: ${e.code} - ${e.message}');
@@ -240,6 +266,15 @@ class AuthService {
       final fresh = _firebaseAuth.currentUser;
       if (fresh == null) {
         return const SessionVerificationResult.invalid(SessionTerminationReason.userNotFound);
+      }
+      // A persisted session must satisfy the same `email_verified` requirement
+      // as a fresh sign-in (`04_SECURITY.MD` §2, AC-AUTH-05): an unverified
+      // restored identity is never an accepted authenticated session.
+      if (!fresh.emailVerified) {
+        return const SessionVerificationResult.invalid(
+          SessionTerminationReason.emailNotVerified,
+          message: kEmailNotVerifiedExceptionMessage,
+        );
       }
       return const SessionVerificationResult.valid();
     } on FirebaseAuthException catch (e) {

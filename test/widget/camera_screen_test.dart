@@ -94,7 +94,7 @@ class TestLocationService extends LocationHardwareService {
       const AltitudeTelemetry(hasMslAltitude: true, mslAltitudeMeters: 18.4);
 
   @override
-  Stream<Position> getPositionStream({LocationSettings? locationSettings}) {
+  Stream<Position> getPositionStream({LocationSettings? locationSettings, bool highAccuracy = true}) {
     if (initialPosition != null) {
       Timer.run(() => streamController.add(initialPosition!));
     }
@@ -237,6 +237,7 @@ class _CameraTestPermissionService extends PermissionService {
     state = const SiteLensPermissionStatus(
       camera: PermissionStatus.granted,
       location: PermissionStatus.granted,
+      microphone: PermissionStatus.granted,
     );
   }
 
@@ -248,6 +249,11 @@ class _CameraTestPermissionService extends PermissionService {
   @override
   Future<PermissionStatus> checkCameraPermission() async {
     return state.camera;
+  }
+
+  @override
+  Future<PermissionStatus> checkMicrophonePermission() async {
+    return state.microphone;
   }
 
   @override
@@ -267,7 +273,8 @@ class MockSiteRepository implements SiteRepository {
   Future<SiteModel?> getSiteById(String id, {String? creatorId}) async => site.id == id ? site : null;
 
   @override
-  Future<void> saveSite(SiteModel site) async {}
+  Future<void> saveSite(SiteModel site, {String? creatorId}) async {}
+
 
   @override
   Future<void> deleteSite(String id, {String? creatorId}) async {}
@@ -460,6 +467,13 @@ Widget createCameraTestWidget({
   List<NavigatorObserver> navigatorObservers = const [],
 }) {
   final db = AppDatabase(NativeDatabase.memory());
+  const defaultSite = SiteModel(
+    id: 'test-site-id',
+    siteCode: 'SITE-A-01',
+    name: 'SITE ALPHA',
+    address: '123 Site Road',
+    creatorId: 'test-user',
+  );
   return ProviderScope(
     overrides: [
       authServiceProvider.overrideWithValue(_CameraTestAuthService()),
@@ -468,6 +482,15 @@ Widget createCameraTestWidget({
       locationHardwareServiceProvider.overrideWithValue(TestLocationService()),
       activeSiteMediaStreamProvider.overrideWith((ref) => Stream.value([])),
       appDatabaseProvider.overrideWithValue(db),
+      siteRepositoryProvider.overrideWithValue(MockSiteRepository(defaultSite)),
+      siteControllerProvider.overrideWith((ref) {
+        final controller = SiteController(MockSiteRepository(defaultSite));
+        controller.state = const SiteState(
+          activeSite: defaultSite,
+          availableSites: [defaultSite],
+        );
+        return controller;
+      }),
       syncCoordinatorProvider.overrideWith(
         (ref) => SyncCoordinator(
           mediaRepo: LocalMediaRepository(db),
@@ -957,7 +980,17 @@ void main() {
       // start/pause involve real file IO (the video bytes), which only
       // completes on the real event loop inside runAsync.
       await tester.runAsync(() async {
-        final started = await notifier.startVideoRecording();
+        final started = await notifier.startVideoRecording(
+          recordingCreatorId: 'user-t0-original',
+          recordingSiteId: 'site-t0-original',
+          recordingSiteCode: 'T0-CODE',
+          recordingSiteName: 'T0 Original Site',
+          recordingGpsState: const GpsHardwareState(
+            hasValidFix: true,
+            latitude: 22.5726,
+            longitude: 88.3639,
+          ),
+        );
         expect(started, isTrue, reason: 'video recording must start');
         await notifier.pauseCamera();
       });
@@ -1108,6 +1141,11 @@ void main() {
           recordingSiteCode: 'T0-CODE',
           recordingSiteName: 'T0 Original Site',
           recordingCreatorId: 'user-t0-original',
+          recordingGpsState: const GpsHardwareState(
+            hasValidFix: true,
+            latitude: 22.5726,
+            longitude: 88.3639,
+          ),
         );
         expect(started, isTrue);
         await notifier.pauseCamera();
@@ -1250,7 +1288,17 @@ void main() {
       // Start recording, then stop through the screen's normal handoff path
       // (shutter tap while recording).
       await tester.runAsync(() async {
-        final started = await notifier.startVideoRecording();
+        final started = await notifier.startVideoRecording(
+          recordingCreatorId: 'user-t0-original',
+          recordingSiteId: 'site-t0-original',
+          recordingSiteCode: 'T0-CODE',
+          recordingSiteName: 'T0 Original Site',
+          recordingGpsState: const GpsHardwareState(
+            hasValidFix: true,
+            latitude: 22.5726,
+            longitude: 88.3639,
+          ),
+        );
         expect(started, isTrue, reason: 'video recording must start');
       });
       await tester.pumpAndSettle();
@@ -1994,6 +2042,6 @@ class _LastKnownOnlyLocationService extends LocationHardwareService {
       const AltitudeTelemetry(hasMslAltitude: true, mslAltitudeMeters: 2.7);
 
   @override
-  Stream<Position> getPositionStream({LocationSettings? locationSettings}) =>
+  Stream<Position> getPositionStream({LocationSettings? locationSettings, bool highAccuracy = true}) =>
       const Stream<Position>.empty();
 }

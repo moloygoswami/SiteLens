@@ -137,10 +137,11 @@ void main() {
         lowAccuracy: false,
         verificationStatus: HudStatus.verified, // Saved as verified because threshold was 30m at capture
         capturedAt: DateTime.utc(2026, 8, 28, 12, 0, 0),
+        creatorId: 'user-overlay',
       );
 
       await mediaRepo.insertMedia(item);
-      final retrieved = await mediaRepo.getMediaById('media-v8-01');
+      final retrieved = await mediaRepo.getMediaById('media-v8-01', creatorId: 'user-overlay');
 
       expect(retrieved, isNotNull);
       expect(retrieved!.verificationStatus, equals(HudStatus.verified));
@@ -160,9 +161,10 @@ void main() {
               lowAccuracy: const drift.Value(0),
               capturedAt: '2026-08-01T00:00:00Z',
               type: const drift.Value('photo'),
+              creatorId: const drift.Value('user-overlay'),
             ),
           );
-      final itemZero = await mediaRepo.getMediaById('legacy-zero-coords');
+      final itemZero = await mediaRepo.getMediaById('legacy-zero-coords', creatorId: 'user-overlay');
       expect(itemZero!.verificationStatus, equals(HudStatus.pending));
 
       // 2. null accuracy -> must be PENDING
@@ -177,9 +179,10 @@ void main() {
               lowAccuracy: const drift.Value(0),
               capturedAt: '2026-08-01T00:00:00Z',
               type: const drift.Value('photo'),
+              creatorId: const drift.Value('user-overlay'),
             ),
           );
-      final itemNullAcc = await mediaRepo.getMediaById('legacy-null-acc');
+      final itemNullAcc = await mediaRepo.getMediaById('legacy-null-acc', creatorId: 'user-overlay');
       expect(itemNullAcc!.verificationStatus, equals(HudStatus.pending));
 
       // 3. lowAccuracy == 1 -> DEGRADED
@@ -194,9 +197,10 @@ void main() {
               lowAccuracy: const drift.Value(1),
               capturedAt: '2026-08-01T00:00:00Z',
               type: const drift.Value('photo'),
+              creatorId: const drift.Value('user-overlay'),
             ),
           );
-      final itemLow = await mediaRepo.getMediaById('legacy-flagged-low');
+      final itemLow = await mediaRepo.getMediaById('legacy-flagged-low', creatorId: 'user-overlay');
       expect(itemLow!.verificationStatus, equals(HudStatus.degraded));
 
       // 4. accuracy > 20.0 -> DEGRADED
@@ -211,9 +215,10 @@ void main() {
               lowAccuracy: const drift.Value(0),
               capturedAt: '2026-08-01T00:00:00Z',
               type: const drift.Value('photo'),
+              creatorId: const drift.Value('user-overlay'),
             ),
           );
-      final itemHighM = await mediaRepo.getMediaById('legacy-high-m');
+      final itemHighM = await mediaRepo.getMediaById('legacy-high-m', creatorId: 'user-overlay');
       expect(itemHighM!.verificationStatus, equals(HudStatus.degraded));
 
       // 5. Valid coordinates, lowAccuracy == 0, accuracy <= 20.0 -> VERIFIED
@@ -228,9 +233,10 @@ void main() {
               lowAccuracy: const drift.Value(0),
               capturedAt: '2026-08-01T00:00:00Z',
               type: const drift.Value('photo'),
+              creatorId: const drift.Value('user-overlay'),
             ),
           );
-      final itemVer = await mediaRepo.getMediaById('legacy-verified');
+      final itemVer = await mediaRepo.getMediaById('legacy-verified', creatorId: 'user-overlay');
       expect(itemVer!.verificationStatus, equals(HudStatus.verified));
     });
   });
@@ -253,10 +259,11 @@ void main() {
         gnssSatellitesUsedInFix: 11,
         gnssFixTimestampUtc: fixTime,
         capturedAt: DateTime.utc(2026, 8, 28, 14, 25, 31),
+        creatorId: 'user-overlay',
       );
 
       await mediaRepo.insertMedia(item);
-      final retrieved = await mediaRepo.getMediaById('gnss-telemetry-01');
+      final retrieved = await mediaRepo.getMediaById('gnss-telemetry-01', creatorId: 'user-overlay');
 
       expect(retrieved, isNotNull);
       expect(retrieved!.gnssSatelliteCount, equals(16));
@@ -287,10 +294,11 @@ void main() {
         gnssFixTimestampUtc: fixTime,
         sha256Hash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
         capturedAt: DateTime.utc(2026, 8, 28, 15, 0, 0),
+        creatorId: 'user-overlay',
       );
 
       await mediaRepo.insertMedia(videoItem);
-      final retrieved = await mediaRepo.getMediaById('video-meta-01');
+      final retrieved = await mediaRepo.getMediaById('video-meta-01', creatorId: 'user-overlay');
 
       expect(retrieved, isNotNull);
       expect(retrieved!.type, equals(MediaItemType.video));
@@ -358,9 +366,10 @@ void main() {
         altitude: 10.5,
         isAltitudeMsl: true,
         capturedAt: DateTime.now().toUtc(),
+        creatorId: 'user-overlay',
       );
       await mediaRepo.insertMedia(itemMsl);
-      final rMsl = await mediaRepo.getMediaById('alt-msl');
+      final rMsl = await mediaRepo.getMediaById('alt-msl', creatorId: 'user-overlay');
       expect(rMsl!.isAltitudeMsl, isTrue);
 
       // 2. isAltitudeMsl = false
@@ -375,9 +384,10 @@ void main() {
         altitude: -15.2,
         isAltitudeMsl: false,
         capturedAt: DateTime.now().toUtc(),
+        creatorId: 'user-overlay',
       );
       await mediaRepo.insertMedia(itemWgs);
-      final rWgs = await mediaRepo.getMediaById('alt-wgs');
+      final rWgs = await mediaRepo.getMediaById('alt-wgs', creatorId: 'user-overlay');
       expect(rWgs!.isAltitudeMsl, isFalse);
 
       // 3. isAltitudeMsl = null
@@ -392,9 +402,10 @@ void main() {
         altitude: 30.0,
         isAltitudeMsl: null,
         capturedAt: DateTime.now().toUtc(),
+        creatorId: 'user-overlay',
       );
       await mediaRepo.insertMedia(itemUnknown);
-      final rUnknown = await mediaRepo.getMediaById('alt-unknown');
+      final rUnknown = await mediaRepo.getMediaById('alt-unknown', creatorId: 'user-overlay');
       expect(rUnknown!.isAltitudeMsl, isNull);
     });
   });

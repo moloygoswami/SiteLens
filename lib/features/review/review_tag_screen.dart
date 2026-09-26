@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/theme.dart';
+import '../../core/utils/gps_utils.dart';
 import '../../domain/models/enums.dart';
 import '../../shared/utils/responsive_layout.dart';
 import '../camera/services/evidence_storage_service.dart';
@@ -53,6 +54,13 @@ class _ReviewTagScreenState extends ConsumerState<ReviewTagScreen> {
 
     _listenToProcessingFuture();
     _resolvePath();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref
+          .read(reviewTagControllerProvider.notifier)
+          .initializeSiteCandidates(_currentPayload);
+    });
   }
 
   void _listenToProcessingFuture() {
@@ -148,7 +156,7 @@ class _ReviewTagScreenState extends ConsumerState<ReviewTagScreen> {
                 fontWeight: FontWeight.w600,
                 fontSize: 18)),
         content: const Text(
-          'This will delete the uncommitted capture files and return to the camera.',
+          'Discard this capture? Unsaved evidence will be permanently lost.',
           style: TextStyle(color: AppColors.textSecondary),
         ),
         actionsPadding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
@@ -492,6 +500,7 @@ class _ReviewTagScreenState extends ConsumerState<ReviewTagScreen> {
         const SizedBox(height: 18),
         ObservationSelector(
           selectedType: reviewState.observationType,
+          isClosedDisabled: !reviewState.hasSiteOpenNonConformities,
           onSelected: (type) {
             ref
                 .read(reviewTagControllerProvider.notifier)
@@ -682,6 +691,37 @@ class _ReviewTagScreenState extends ConsumerState<ReviewTagScreen> {
                       height: 1.3,
                     ),
                   ),
+                  if (reviewState.siteWideCandidates.isNotEmpty) ...[
+                    if (reviewState.isSiteWideSearchExpanded)
+                      _buildSiteWideCandidatesSection(reviewState)
+                    else
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            ref
+                                .read(reviewTagControllerProvider.notifier)
+                                .toggleSiteWideSearchExpanded();
+                          },
+                          icon: const Icon(Icons.travel_explore_rounded,
+                              size: 14),
+                          label: const Text(
+                            'Search all open Non-Conformities on this site',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.primary,
+                            side: const BorderSide(
+                                color: AppColors.primary, width: 1.2),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 8),
+                          ),
+                        ),
+                      ),
+                  ],
                 ],
               ],
             ),
@@ -827,6 +867,153 @@ class _ReviewTagScreenState extends ConsumerState<ReviewTagScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildSiteWideCandidatesSection(ReviewTagState reviewState) {
+    final siteLabel = _currentPayload.metadataSnapshot.siteCode;
+    final candidates = reviewState.siteWideCandidates;
+
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceContainerHigh.withAlpha(120),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.travel_explore_rounded,
+                  size: 15, color: AppColors.primary),
+              const SizedBox(width: 6),
+              const Expanded(
+                child: Text(
+                  'Search all open Non-Conformities on this site',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
+              if (siteLabel.isNotEmpty)
+                Text(
+                  siteLabel,
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.primary,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'No 10m match. Select an open defect from this site to link as BEFORE reference:',
+            style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: 10),
+          for (final candidate in candidates) ...[
+            Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceContainer,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceContainerHigh,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Icon(
+                      Icons.warning_amber_rounded,
+                      size: 20,
+                      color: AppColors.statusRed,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          candidate.item.activityTag != null &&
+                                  candidate.item.activityTag!.isNotEmpty
+                              ? candidate.item.activityTag!
+                              : 'Non-Conformity',
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${GPSUtils.formatDistanceWithUncertainty(candidate.distanceMeters, accuracyMeters: candidate.item.accuracyM)} • ${candidate.item.capturedAt.toIso8601String().substring(0, 10)}',
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 10,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: () {
+                      ref
+                          .read(reviewTagControllerProvider.notifier)
+                          .linkBeforeItem(candidate.item);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    child: const Text('Link', style: TextStyle(fontSize: 11)),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 4),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: () {
+                ref
+                    .read(reviewTagControllerProvider.notifier)
+                    .dismissSiteWideSearch();
+              },
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                foregroundColor: AppColors.textSecondary,
+              ),
+              child: const Text(
+                'None of these',
+                style: TextStyle(fontSize: 11),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
